@@ -256,6 +256,15 @@ export function withTravellerName(Component): ComponentType {
     }
 }
 
+// withTravellerLabel: Displays "TRAVELLER 1", "TRAVELLER 2", etc.
+export function withTravellerLabel(Component): ComponentType {
+    return (props: any) => {
+        const index = useContext(TravellerContext)
+        if (index === null) return <Component {...props} />
+        return <Component {...props} text={`TRAVELLER ${index + 1}`} />
+    }
+}
+
 // withTravellerSharingKey: Binds a select dropdown to the traveller's sharing variant.
 export function withTravellerSharingKey(Component): ComponentType {
     return (props: any) => {
