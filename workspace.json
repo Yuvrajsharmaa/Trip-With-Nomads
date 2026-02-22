@@ -1,0 +1,17 @@
+{
+    "name": "Trip With Nomads",
+    "description": "Unified workspace for TWN Framer Website and Admin Dashboard",
+    "recommendedConfig": {
+        "scripts": "scripts/",
+        "context": "MASTER_HANDOFF.md"
+    },
+    "agentRules": {
+        "preferredStack": [
+            "React",
+            "Vite",
+            "Supabase",
+            "Framer"
+        ],
+        "designSystem": "TWN Premium (Manrope + DM Sans)"
+    }
+}
