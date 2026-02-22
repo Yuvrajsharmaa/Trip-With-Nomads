@@ -1,0 +1,416 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Full Booking Flow Prototype - Trip With Nomads</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link
+        href="https://fonts.googleapis.com/css2?family=DM+Sans:opsz,wght@9..40,400;500;700&family=Manrope:wght@400;500;700;800&display=swap"
+        rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: { primary: { DEFAULT: "#1B91C9" } },
+                    fontFamily: { sans: ['DM Sans', 'sans-serif'], heading: ['Manrope', 'sans-serif'] }
+                }
+            }
+        }
+    </script>
+    <style>
+        .fade-in {
+            animation: fadeIn 0.3s ease-out forwards;
+        }
+
+        @keyframes fadeIn {
+            from {
+                opacity: 0;
+                transform: translateY(5px);
+            }
+
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+    </style>
+</head>
+
+<body class="bg-gray-50 text-gray-900 font-sans min-h-screen flex flex-col">
+
+    <!-- Navbar -->
+    <nav class="bg-white border-b border-gray-100 py-4 px-6 sticky top-0 z-50 shadow-sm">
+        <div class="max-w-6xl mx-auto flex justify-between items-center">
+            <a href="#" class="font-heading font-bold text-2xl text-primary tracking-tight">TWN</a>
+            <div class="text-sm text-gray-500 font-medium"><i class="fa-solid fa-lock text-primary"></i> Secure Booking
+            </div>
+        </div>
+    </nav>
+
+    <main class="flex-grow max-w-6xl mx-auto px-4 sm:px-6 pt-8 pb-12 w-full grid grid-cols-1 lg:grid-cols-3 gap-8">
+
+        <!-- LEFT COLUMN: Booking Config & Travellers -->
+        <div class="lg:col-span-2 space-y-8">
+
+            <!-- Header -->
+            <div>
+                <h1 class="text-3xl font-heading font-bold text-gray-900">Configure Your Trip</h1>
+                <p class="text-gray-500 mt-1">Select your preferences for <span class="font-bold text-primary">Kashmir:
+                        Heaven on Earth</span>.</p>
+            </div>
+
+            <!-- STEP 1: CASCADING DROPDOWNS (The "Old" Flow) -->
+            <div class="bg-white rounded-xl shadow-sm border border-gray-100 p-6 relative overflow-hidden">
+                <div class="absolute top-0 left-0 w-1 h-full bg-primary"></div>
+                <h2 class="text-lg font-heading font-bold mb-4 flex items-center gap-2">
+                    <span
+                        class="bg-blue-100 text-primary w-6 h-6 rounded-full flex items-center justify-center text-xs">1</span>
+                    Trip Options
+                </h2>
+
+                <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+                    <!-- Date Selection -->
+                    <div class="space-y-1">
+                        <label class="text-sm font-semibold text-gray-700">Departure Date</label>
+                        <select id="date-select"
+                            class="w-full p-3 bg-gray-50 border border-gray-200 rounded-lg outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary transition-all cursor-pointer">
+                            <option value="">Select Date</option>
+                            <!-- Populated by JS -->
+                        </select>
+                    </div>
+
+                    <!-- Transport Selection -->
+                    <div class="space-y-1">
+                        <label class="text-sm font-semibold text-gray-700">Transport</label>
+                        <select id="transport-select" disabled
+                            class="w-full p-3 bg-gray-50 border border-gray-200 rounded-lg outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary transition-all disabled:opacity-50 disabled:cursor-not-allowed">
+                            <option value="">Select Transport</option>
+                        </select>
+                    </div>
+
+                    <!-- Sharing Selection -->
+                    <div class="space-y-1">
+                        <label class="text-sm font-semibold text-gray-700">Sharing</label>
+                        <select id="sharing-select" disabled
+                            class="w-full p-3 bg-gray-50 border border-gray-200 rounded-lg outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary transition-all disabled:opacity-50 disabled:cursor-not-allowed">
+                            <option value="">Select Sharing</option>
+                        </select>
+                    </div>
+                </div>
+
+                <!-- Selected Option Price Preview -->
+                <div id="price-preview"
+                    class="mt-4 p-3 bg-blue-50 text-blue-800 text-sm rounded-lg flex justify-between items-center hidden">
+                    <span><i class="fa-solid fa-check-circle mr-2"></i> Selected Configuration</span>
+                    <span class="font-bold text-lg" id="base-price-display">$0</span>
+                </div>
+            </div>
+
+            <!-- STEP 2: TRAVELLER DETAILS (The "New" Flow) -->
+            <div id="travellers-section"
+                class="space-y-6 opacity-50 pointer-events-none transition-opacity duration-300">
+                <div class="flex justify-between items-center">
+                    <h2 class="text-lg font-heading font-bold flex items-center gap-2">
+                        <span
+                            class="bg-blue-100 text-primary w-6 h-6 rounded-full flex items-center justify-center text-xs">2</span>
+                        Traveller Details
+                    </h2>
+                </div>
+
+                <div id="travellers-container" class="space-y-4">
+                    <!-- Forms injected here -->
+                </div>
+
+                <button onclick="addTraveller()"
+                    class="w-full py-3 border-2 border-dashed border-gray-300 rounded-xl text-gray-500 font-medium hover:border-primary hover:text-primary hover:bg-white transition-all flex items-center justify-center gap-2 group">
+                    <i
+                        class="fa-solid fa-plus bg-gray-200 group-hover:bg-primary group-hover:text-white rounded-full p-1 text-xs transition-colors"></i>
+                    Add Another Traveller
+                </button>
+            </div>
+
+        </div>
+
+        <!-- RIGHT COLUMN: Sticky Summary -->
+        <div class="lg:col-span-1">
+            <div class="bg-white rounded-xl shadow-lg border border-gray-100 p-6 sticky top-24">
+                <h3 class="font-heading font-bold text-lg mb-4 text-gray-800 border-b border-gray-100 pb-2">Booking
+                    Summary</h3>
+
+                <div class="flex gap-3 mb-4">
+                    <img src="https://images.unsplash.com/photo-1566837945700-30057527ade0?w=150"
+                        class="w-16 h-16 rounded-md object-cover" />
+                    <div>
+                        <div class="font-bold text-sm text-gray-900 line-clamp-1">Kashmir: Heaven on Earth</div>
+                        <div class="text-xs text-gray-500 mt-1" id="summary-date">Select a date</div>
+                        <div class="text-xs text-gray-500" id="summary-config">-</div>
+                    </div>
+                </div>
+
+                <div class="space-y-2 text-sm border-t border-gray-100 pt-4">
+                    <div class="flex justify-between text-gray-600">
+                        <span id="quantity-label">1 Traveller x $0</span>
+                        <span id="subtotal-label">$0.00</span>
+                    </div>
+                    <div class="flex justify-between text-gray-600">
+                        <span class="flex items-center gap-1">Service Tax (2%) <i
+                                class="fa-solid fa-circle-info text-gray-300 text-xs"></i></span>
+                        <span id="tax-label">$0.00</span>
+                    </div>
+                    <div
+                        class="flex justify-between text-gray-900 font-bold text-lg pt-2 border-t border-gray-100 mt-2">
+                        <span>Total</span>
+                        <span class="text-primary" id="total-label">$0.00</span>
+                    </div>
+                </div>
+
+                <button id="checkout-btn" disabled onclick="alert('Proceeding to Payment...')"
+                    class="w-full mt-6 bg-primary hover:bg-[#157da3] text-white font-bold py-3.5 rounded-xl shadow-lg shadow-blue-500/20 transition-all disabled:opacity-50 disabled:cursor-not-allowed">
+                    Complete Booking
+                </button>
+
+                <p class="text-xs text-center text-gray-400 mt-3"><i class="fa-solid fa-lock"></i> SSL Secured Payment
+                </p>
+            </div>
+        </div>
+    </main>
+
+    <!-- JS LOGIC -->
+    <script>
+        // --- 1. MOCK DATA (Simulating Supabase 'trip_pricing') ---
+        const PRICING_DATA = [
+            { date: "2026-12-15", transport: "Tempo Traveller", sharing: "Triple Sharing", price: 499 },
+            { date: "2026-12-15", transport: "Tempo Traveller", sharing: "Double Sharing", price: 599 },
+            { date: "2026-12-15", transport: "Innova", sharing: "Triple Sharing", price: 699 },
+            { date: "2026-12-15", transport: "Innova", sharing: "Double Sharing", price: 799 },
+
+            { date: "2027-01-10", transport: "Tempo Traveller", sharing: "Triple Sharing", price: 549 },
+            { date: "2027-01-10", transport: "Tempo Traveller", sharing: "Double Sharing", price: 649 },
+        ];
+
+        // --- 2. STATE ---
+        let state = {
+            selectedDate: "",
+            selectedTransport: "",
+            selectedSharing: "",
+            basePrice: 0,
+            travellers: [{ id: 1, isSelf: true, name: "Yuvraj Sharma", age: 26 }]
+        };
+
+        // --- 3. DOM ELEMENTS ---
+        const els = {
+            date: document.getElementById('date-select'),
+            transport: document.getElementById('transport-select'),
+            sharing: document.getElementById('sharing-select'),
+            preview: document.getElementById('price-preview'),
+            previewPrice: document.getElementById('base-price-display'),
+            travellersSection: document.getElementById('travellers-section'),
+            travellersContainer: document.getElementById('travellers-container'),
+            summary: {
+                date: document.getElementById('summary-date'),
+                config: document.getElementById('summary-config'),
+                qty: document.getElementById('quantity-label'),
+                sub: document.getElementById('subtotal-label'),
+                tax: document.getElementById('tax-label'),
+                total: document.getElementById('total-label')
+            },
+            btn: document.getElementById('checkout-btn')
+        };
+
+        // --- 4. INITIALIZATION ---
+        function init() {
+            // Populate Dates
+            const uniqueDates = [...new Set(PRICING_DATA.map(d => d.date))].sort();
+            populateSelect(els.date, uniqueDates);
+
+            // Listeners
+            els.date.addEventListener('change', onDateChange);
+            els.transport.addEventListener('change', onTransportChange);
+            els.sharing.addEventListener('change', onSharingChange);
+
+            renderTravellers();
+        }
+
+        // --- 5. CASCADING LOGIC ---
+        function onDateChange(e) {
+            state.selectedDate = e.target.value;
+            state.selectedTransport = "";
+            state.selectedSharing = "";
+            state.basePrice = 0;
+
+            els.transport.innerHTML = '<option value="">Select Transport</option>';
+            els.sharing.innerHTML = '<option value="">Select Sharing</option>';
+            els.transport.disabled = true;
+            els.sharing.disabled = true;
+            els.preview.classList.add('hidden');
+            lockTravellers(true);
+
+            if (state.selectedDate) {
+                const opts = PRICING_DATA.filter(d => d.date === state.selectedDate);
+                const uniqueTrans = [...new Set(opts.map(d => d.transport))].sort();
+                populateSelect(els.transport, uniqueTrans);
+                els.transport.disabled = false;
+            }
+            updateSummary();
+        }
+
+        function onTransportChange(e) {
+            state.selectedTransport = e.target.value;
+            state.selectedSharing = "";
+            state.basePrice = 0;
+
+            els.sharing.innerHTML = '<option value="">Select Sharing</option>';
+            els.sharing.disabled = true;
+            els.preview.classList.add('hidden');
+            lockTravellers(true);
+
+            if (state.selectedTransport) {
+                const opts = PRICING_DATA.filter(d => d.date === state.selectedDate && d.transport === state.selectedTransport);
+                const uniqueShare = [...new Set(opts.map(d => d.sharing))].sort();
+                populateSelect(els.sharing, uniqueShare);
+                els.sharing.disabled = false;
+            }
+            updateSummary();
+        }
+
+        function onSharingChange(e) {
+            state.selectedSharing = e.target.value;
+
+            if (state.selectedSharing) {
+                const match = PRICING_DATA.find(d =>
+                    d.date === state.selectedDate &&
+                    d.transport === state.selectedTransport &&
+                    d.sharing === state.selectedSharing
+                );
+
+                if (match) {
+                    state.basePrice = match.price;
+                    els.previewPrice.textContent = `$${match.price}`;
+                    els.preview.classList.remove('hidden');
+                    lockTravellers(false);
+                }
+            } else {
+                state.basePrice = 0;
+                lockTravellers(true);
+            }
+            updateSummary();
+        }
+
+        function populateSelect(select, options) {
+            options.forEach(opt => {
+                const el = document.createElement('option');
+                el.value = opt;
+                el.textContent = opt;
+                select.appendChild(el);
+            });
+        }
+
+        // --- 6. TRAVELLER LOGIC ---
+        function lockTravellers(locked) {
+            if (locked) {
+                els.travellersSection.classList.add('opacity-50', 'pointer-events-none');
+                els.btn.disabled = true;
+            } else {
+                els.travellersSection.classList.remove('opacity-50', 'pointer-events-none');
+                // btn enabled in updateSummary
+            }
+        }
+
+        function renderTravellers() {
+            els.travellersContainer.innerHTML = "";
+            state.travellers.forEach((t, i) => {
+                const div = document.createElement('div');
+                div.className = "bg-white p-4 rounded-lg border border-gray-200 shadow-sm fade-in relative";
+                div.innerHTML = `
+                    <div class="flex justify-between mb-3">
+                        <h4 class="font-bold text-sm text-gray-700">Traveller ${i + 1}</h4>
+                        ${i > 0 ? `<button onclick="removeTraveller(${t.id})" class="text-xs text-red-500 hover:text-red-700 font-medium">Remove</button>` : ''}
+                    </div>
+                    ${i === 0 ? `
+                    <label class="flex items-center gap-2 mb-3 text-xs text-gray-600 bg-blue-50/50 p-2 rounded border border-blue-100 cursor-pointer">
+                        <input type="checkbox" ${t.isSelf ? 'checked' : ''} onchange="toggleSelf(${t.id}, this.checked)" class="text-primary rounded focus:ring-primary">
+                        I am this traveller (Auto-fill: <b>Yuvraj Sharma</b>)
+                    </label>` : ''}
+                    <div class="grid grid-cols-2 gap-3">
+                        <div>
+                            <label class="text-xs font-semibold text-gray-500">Name</label>
+                            <input type="text" value="${t.name}" oninput="updateTraveller(${t.id}, 'name', this.value)" class="w-full p-2 border border-gray-200 rounded text-sm focus:border-primary focus:ring-1 focus:ring-primary outline-none" placeholder="Name" required>
+                        </div>
+                        <div>
+                            <label class="text-xs font-semibold text-gray-500">Age</label>
+                            <input type="number" value="${t.age}" oninput="updateTraveller(${t.id}, 'age', this.value)" class="w-full p-2 border border-gray-200 rounded text-sm focus:border-primary focus:ring-1 focus:ring-primary outline-none" placeholder="Age" required>
+                        </div>
+                    </div>
+                `;
+                els.travellersContainer.appendChild(div);
+            });
+            updateSummary();
+        }
+
+        window.addTraveller = () => {
+            const newId = Math.max(...state.travellers.map(t => t.id)) + 1;
+            state.travellers.push({ id: newId, isSelf: false, name: "", age: "" });
+            renderTravellers();
+        };
+
+        window.removeTraveller = (id) => {
+            state.travellers = state.travellers.filter(t => t.id !== id);
+            renderTravellers();
+        };
+
+        window.toggleSelf = (id, checked) => {
+            const t = state.travellers.find(x => x.id === id);
+            if (t) {
+                t.isSelf = checked;
+                t.name = checked ? "Yuvraj Sharma" : "";
+                t.age = checked ? 26 : "";
+                renderTravellers();
+            }
+        };
+
+        window.updateTraveller = (id, key, val) => {
+            const t = state.travellers.find(x => x.id === id);
+            if (t) t[key] = val;
+        };
+
+        // --- 7. SUMMARY LOGIC ---
+        function updateSummary() {
+            // Update Summary Text
+            els.summary.date.textContent = state.selectedDate ? new Date(state.selectedDate).toDateString() : 'Select a date';
+            const configText = (state.selectedTransport && state.selectedSharing)
+                ? `${state.selectedTransport} • ${state.selectedSharing}`
+                : 'Select options';
+            els.summary.config.textContent = configText;
+
+            // Math
+            const count = state.travellers.length;
+            const subtotal = state.basePrice * count;
+            const tax = subtotal * 0.02;
+            const total = subtotal + tax;
+
+            els.summary.qty.textContent = `${count} Traveller${count > 1 ? 's' : ''} x $${state.basePrice}`;
+            els.summary.sub.textContent = `$${subtotal.toFixed(2)}`;
+            els.summary.tax.textContent = `$${tax.toFixed(2)}`;
+            els.summary.total.textContent = `$${total.toFixed(2)}`;
+
+            // Button State
+            if (state.basePrice > 0) {
+                els.btn.disabled = false;
+                els.btn.innerHTML = `Pay $${total.toFixed(2)} <i class="fa-solid fa-arrow-right ml-2"></i>`;
+            } else {
+                els.btn.disabled = true;
+                els.btn.textContent = "Complete Booking";
+            }
+        }
+
+        // Run
+        init();
+
+    </script>
+</body>
+
+</html>

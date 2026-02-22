@@ -1,0 +1,577 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Booking Overrides Test Canvas</title>
+    <!-- React & ReactDOM -->
+    <script crossorigin src="https://unpkg.com/react@18/umd/react.development.js"></script>
+    <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+    <!-- Babel for JSX -->
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <!-- Tailwind for quick styling to match user's layout -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        body {
+            background-color: #f5f5f5;
+            padding: 40px;
+            font-family: 'Inter', sans-serif;
+        }
+
+        .framer-input {
+            width: 100%;
+            padding: 12px;
+            border-radius: 8px;
+            border: 1px solid #ddd;
+            background: #f3f4f6;
+        }
+
+        .framer-card {
+            background: white;
+            padding: 20px;
+            border-radius: 16px;
+            margin-bottom: 20px;
+            box-shadow: 0 2px 10px rgba(0, 0, 0, 0.05);
+        }
+    </style>
+</head>
+
+<body>
+    <div id="root"></div>
+
+    <script type="text/babel">
+        const { useState, useEffect, useContext, createContext, useMemo, Component } = React;
+
+        // --- ERROR BOUNDARY ---
+        class ErrorBoundary extends Component {
+            constructor(props) {
+                super(props);
+                this.state = { hasError: false, error: null };
+            }
+            static getDerivedStateFromError(error) {
+                return { hasError: true, error };
+            }
+            componentDidCatch(error, errorInfo) {
+                console.error("Uncaught error:", error, errorInfo);
+            }
+            render() {
+                if (this.state.hasError) {
+                    return <div className="p-4 bg-red-100 border border-red-400 text-red-700 rounded">
+                        <h2 className="font-bold">Something went wrong.</h2>
+                        <pre className="text-xs mt-2 overflow-auto">{this.state.error && this.state.error.toString()}</pre>
+                    </div>;
+                }
+                return this.props.children;
+            }
+        }
+
+        // --- MOCK FRAMER CREATE_STORE (Improved) ---
+        function createStore(initialState) {
+            let state = { ...initialState };
+            const listeners = new Set();
+            const notify = () => listeners.forEach(l => l({ ...state }));
+
+            const useStoreHook = () => {
+                const [local, setLocal] = useState(state);
+                useEffect(() => {
+                    const listener = (s) => setLocal(s);
+                    listeners.add(listener);
+                    return () => listeners.delete(listener);
+                }, []);
+                return [local, (newState) => { Object.assign(state, newState); notify(); }];
+            };
+
+            // Proxy for direct access
+            return new Proxy(useStoreHook, {
+                get: (target, prop) => state[prop],
+                set: (target, prop, value) => { state[prop] = value; notify(); return true; }
+            });
+        }
+
+        // --- COPY-PASTED LOGIC FROM BookingOverrides.tsx (With Minor Adjustments for Browser) ---
+
+        // --- CONFIGURATION ---
+        const SUPABASE_URL = "https://jxozzvwvprmnhvafmpsa.supabase.co"
+        const SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imp4b3p6dnd2cHJtbmh2YWZtcHNhIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjgwNTg2NjIsImV4cCI6MjA4MzYzNDY2Mn0.KpVa9dWlJEguL1TA00Tf4QDpziJ1mgA2I0f4_l-vlOk"
+        const TAX_RATE = 0.02
+
+        const TravellerContext = createContext(0)
+
+        const useStore = createStore({
+            tripId: "66d08175-8a57-4d7c-ab08-b888aa771693",
+            pricingData: [],
+            date: "",
+            transport: "",
+            travellers: [{ id: 1, name: "", age: "", sharing: "" }],
+            loading: false,
+            errors: {}
+        })
+
+        const actions = {
+            setTripId: (id) => {
+                if (id && id !== useStore.tripId) {
+                    useStore.tripId = id;
+                }
+            },
+            fetchData: async (id) => {
+                if (!id) return;
+                useStore.loading = true;
+                try {
+                    const res = await fetch(`${SUPABASE_URL}/rest/v1/trip_pricing?trip_id=eq.${id}&select=*`, {
+                        headers: { "apikey": SUPABASE_KEY, "Authorization": `Bearer ${SUPABASE_KEY}` }
+                    });
+                    const data = await res.json();
+                    useStore.pricingData = Array.isArray(data) ? data : [];
+                    console.log("Data loaded:", useStore.pricingData.length);
+                } catch (e) {
+                    console.error("Fetch Error", e);
+                } finally {
+                    useStore.loading = false;
+                }
+            },
+            setDate: (val) => {
+                console.log("Setting date:", val);
+                const newState = {};
+                newState.date = val;
+                newState.transport = ""; // Reset transport
+                // Don't nuke error object, just update keys
+                const errs = { ...useStore.errors };
+                errs.date = val ? null : "Required";
+                newState.errors = errs;
+
+                // Bulk update to minimize renders
+                Object.assign(useStore, newState);
+            },
+            setTransport: (val) => {
+                const errs = { ...useStore.errors };
+                errs.transport = val ? null : "Required";
+                useStore.transport = val;
+                useStore.errors = errs;
+            },
+            addTraveller: () => {
+                const list = [...useStore.travellers];
+                list.push({ id: Date.now(), name: "", age: "", sharing: "" });
+                useStore.travellers = list;
+            },
+            removeTraveller: (index) => {
+                if (useStore.travellers.length <= 1) return;
+                const list = [...useStore.travellers];
+                list.splice(index, 1);
+                useStore.travellers = list;
+            },
+            updateTraveller: (index, field, value) => {
+                const list = [...useStore.travellers];
+                if (list[index]) {
+                    list[index][field] = value;
+                    useStore.travellers = list;
+                }
+            },
+            getTotals: () => {
+                let subtotal = 0;
+                // Group by sharing variant
+                const groups = {}; // { "Quad Sharing": { count: 0, price: 0 } }
+
+                const { pricingData, date, transport, travellers } = useStore;
+
+                travellers.forEach((t) => {
+                    if (t.sharing && date && transport) {
+                        // Find price for this specific traveller's sharing option
+                        const match = pricingData.find(d =>
+                            d.departure_date === date &&
+                            d.transport === transport &&
+                            d.sharing === t.sharing
+                        );
+
+                        if (match) {
+                            if (!groups[t.sharing]) {
+                                groups[t.sharing] = { count: 0, price: match.price };
+                            }
+                            groups[t.sharing].count += 1;
+                            subtotal += match.price;
+                        }
+                    }
+                });
+
+                // Convert groups to array for breakdown
+                const breakdown = Object.entries(groups).map(([variant, data]) => ({
+                    label: `${data.count}x Guest (${variant})`,
+                    price: data.price * data.count,
+                    unit_price: data.price,
+                    count: data.count,
+                    variant: variant
+                }));
+
+                const tax = subtotal * TAX_RATE;
+                return { subtotal, tax, total: subtotal + tax, breakdown };
+            }
+        }
+
+        // --- OVERRIDES (Converted to HOCs) ---
+
+        function withPayButton(Component) {
+            return (props) => {
+                const [store] = useStore();
+                const { total, breakdown, tax } = actions.getTotals();
+
+                // Validate: Needs Date, Transport, Total > 0, and all visible travellers must have Name + Sharing + Age
+                // (Slice by travellerCount if we were properly tracking count, but here we just check all in array)
+                const isValid = store.date && store.transport && total > 0 &&
+                    store.travellers.every(t => t.name && t.sharing && t.age);
+
+                const handlePay = () => {
+                    if (!isValid) {
+                        alert("Please fill in all details for all travellers.");
+                        return;
+                    }
+
+                    // Construct Payload
+                    const payload = {
+                        trip_id: store.tripId,
+                        departure_date: store.date,
+                        transport_option: store.transport,
+                        travellers: store.travellers.map(t => ({
+                            name: t.name,
+                            age: parseInt(t.age),
+                            sharing_variant: t.sharing
+                        })),
+                        payment_breakdown: breakdown,
+                        tax_amount: tax,
+                        total_amount: total,
+                        currency: "INR",
+                        created_at: new Date().toISOString()
+                    };
+
+                    console.log("%c PAYLOAD READY ", "background: #222; color: #bada55; font-size: 14px;", payload);
+                    alert(`Payload generated for ₹${total.toLocaleString('en-IN')}! Check Console.`);
+
+                    // In Framer, you would likely call your backend here:
+                    // fetch('https://your-project.supabase.co/functions/v1/create-booking', { ... })
+                };
+
+                return <Component
+                    {...props}
+                    onClick={handlePay}
+                    style={{
+                        ...props.style,
+                        opacity: isValid ? 1 : 0.5,
+                        cursor: isValid ? 'pointer' : 'not-allowed'
+                    }}
+                />;
+            }
+        }
+
+        function withBookingValues(Component) {
+            return (props) => {
+                // Hardcode ID for testing or read from URL
+                useEffect(() => {
+                    actions.setTripId("66d08175-8a57-4d7c-ab08-b888aa771693");
+                    actions.fetchData(useStore.tripId);
+                }, []);
+                return <Component {...props} />;
+            }
+        }
+
+        function withDateSelect(Component) {
+            return (props) => {
+                const [store] = useStore();
+                const dates = useMemo(() => {
+                    const now = new Date();
+                    now.setHours(0, 0, 0, 0);
+                    return [...new Set(store.pricingData
+                        .filter(d => new Date(d.departure_date) >= now)
+                        .map(d => d.departure_date)
+                    )].sort();
+                }, [store.pricingData]);
+
+                return <Component
+                    {...props}
+                    options={["Select Date", ...dates]}
+                    value={store.date}
+                    onChange={(e) => actions.setDate(e.target.value)}
+                />;
+            }
+        }
+
+        function withTransportSelect(Component) {
+            return (props) => {
+                const [store] = useStore();
+
+                // Move hook BEFORE conditional return
+                const options = useMemo(() => {
+                    if (!store.date) return [];
+                    return [...new Set(store.pricingData
+                        .filter(d => d.departure_date === store.date)
+                        .map(d => d.transport)
+                    )].sort()
+                }, [store.date, store.pricingData]);
+
+                // Safe guard: if date not selected
+                if (!store.date) return <div className="text-gray-400 text-sm p-3 bg-gray-100 rounded">Select a date first</div>;
+
+                return <Component
+                    {...props}
+                    options={["Select Transport", ...options]}
+                    value={store.transport}
+                    onChange={(e) => actions.setTransport(e.target.value)}
+                />;
+            }
+        }
+
+        // The Repeater Logic
+        function withTravellerList(Component) {
+            return (props) => {
+                const [store] = useStore();
+                const childrenArray = React.Children.toArray(props.children);
+                const template = childrenArray.length > 0 ? childrenArray[0] : null;
+
+                if (!store.transport) return <div className="text-gray-400 p-4 font-mono text-xs border rounded border-dashed text-center">Travellers section hidden (Select Transport)</div>;
+                if (!template) return <div className="text-red-500">Error: No template card found</div>;
+
+                return (
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+                        {store.travellers.map((_, index) => (
+                            <TravellerContext.Provider key={_.id} value={index}>
+                                {/* cloneElement is safer than reusing the instance directly */}
+                                {React.cloneElement(template)}
+                            </TravellerContext.Provider>
+                        ))}
+                        <button onClick={actions.addTraveller} className="w-full py-3 border-2 border-dashed border-gray-300 rounded-lg text-gray-500 font-medium hover:border-blue-500 hover:text-blue-500 transition-colors">
+                            + Add Another Traveller
+                        </button>
+                    </div>
+                );
+            }
+        }
+
+        function withTravellerLabel(Component) {
+            return (props) => {
+                const index = useContext(TravellerContext);
+                return <Component {...props}>{`TRAVELLER ${index + 1}`}</Component>;
+            }
+        }
+
+        function withRemoveTraveller(Component) {
+            return (props) => {
+                const index = useContext(TravellerContext);
+                if (index === 0) return null;
+                return <Component {...props} onClick={() => actions.removeTraveller(index)} style={{ cursor: 'pointer', color: 'red' }}>Remove</Component>;
+            }
+        }
+
+        function withTravellerName(Component) {
+            return (props) => {
+                const index = useContext(TravellerContext);
+                const [store] = useStore();
+                // Ensure array index exists
+                if (!store.travellers[index]) return null;
+
+                return <Component {...props}
+                    value={store.travellers[index].name}
+                    onChange={(e) => actions.updateTraveller(index, 'name', e.target.value)}
+                    placeholder="Full Name"
+                />;
+            }
+        }
+
+        function withTravellerAge(Component) {
+            return (props) => {
+                const index = useContext(TravellerContext);
+                const [store] = useStore();
+                if (!store.travellers[index]) return null;
+
+                return <Component {...props}
+                    value={store.travellers[index].age}
+                    onChange={(e) => actions.updateTraveller(index, 'age', e.target.value)}
+                    placeholder="Age"
+                />;
+            }
+        }
+
+        function withTravellerSharing(Component) {
+            return (props) => {
+                const index = useContext(TravellerContext);
+                const [store] = useStore();
+
+                // Move hook BEFORE conditional return
+                const options = useMemo(() => {
+                    if (!store.date || !store.transport) return [];
+                    return [...new Set(store.pricingData
+                        .filter(d => d.departure_date === store.date && d.transport === store.transport)
+                        .map(d => d.sharing)
+                    )].sort()
+                }, [store.date, store.transport, store.pricingData]);
+
+                if (!store.travellers[index]) return null;
+
+                return <Component {...props}
+                    options={["Select Sharing", ...options]}
+                    value={store.travellers[index].sharing}
+                    onChange={(e) => actions.updateTraveller(index, 'sharing', e.target.value)}
+                />;
+            }
+        }
+
+        function withPricingBreakdown(Component) {
+            return (props) => {
+                const [store] = useStore();
+                const { breakdown } = actions.getTotals();
+                if (breakdown.length === 0) return <div className="text-gray-400 text-xs italic">Select options to see pricing</div>;
+
+                return (
+                    <div className="space-y-1">
+                        {breakdown.map((item, i) => (
+                            <div key={i} className="flex justify-between text-sm text-gray-600">
+                                <span>1x {item.label}</span>
+                                <span>₹{item.price.toLocaleString()}</span>
+                            </div>
+                        ))}
+                    </div>
+                );
+            }
+        }
+
+        function withTotalDisplay(Component) {
+            return (props) => {
+                const [store] = useStore();
+                const { total } = actions.getTotals();
+                return <Component {...props}>₹{total.toLocaleString()}</Component>;
+            }
+        }
+
+        function withTaxDisplay(Component) {
+            return (props) => {
+                const [store] = useStore();
+                const { tax } = actions.getTotals();
+                // If Component is a Text layer, we might override children or text prop
+                return <Component {...props}>Tax: ₹{tax.toLocaleString()}</Component>;
+            }
+        }
+
+        function withSelectedDateText(Component) {
+            return (props) => {
+                const [store] = useStore();
+                const txt = store.date ? new Date(store.date).toDateString() : "-";
+                return <Component {...props}>Selected Date: {txt}</Component>;
+            }
+        }
+
+        // --- MOCK COMPONENTS (Simulating Framer Inputs/Layers) ---
+        const Frame = ({ children, style, className }) => <div style={style} className={className}>{children}</div>;
+        const Text = ({ children, style, className, onClick }) => <div style={style} className={className} onClick={onClick}>{children}</div>;
+
+        // Simulating a Framer Input or Select
+        const Input = ({ value, onChange, placeholder, options }) => {
+            if (options) {
+                return (
+                    <select className="framer-input" value={value || ""} onChange={onChange}>
+                        {options.map(o => <option key={o} value={o}>{o}</option>)}
+                    </select>
+                )
+            }
+            return <input className="framer-input" value={value || ""} onChange={onChange} placeholder={placeholder} />;
+        };
+
+        // --- APPLY OVERRIDES ---
+        const MainContainer = withBookingValues(Frame);
+        const DateSelect = withDateSelect(Input);
+        const TransportSelect = withTransportSelect(Input);
+
+        const TravellerListContainer = withTravellerList(Frame);
+
+        // Inner Traveller Card Components
+        const TravellerLabel = withTravellerLabel(Text);
+        const RemoveBtn = withRemoveTraveller(Text);
+        const NameInput = withTravellerName(Input);
+        const AgeInput = withTravellerAge(Input);
+        const SharingSelect = withTravellerSharing(Input);
+
+        const PricingList = withPricingBreakdown(Frame);
+        const TotalText = withTotalDisplay(Text);
+        const TaxText = withTaxDisplay(Text);
+        const DateText = withSelectedDateText(Text);
+
+        const SubmitButton = withPayButton(({ onClick, style, className, children }) => (
+            <button onClick={onClick} style={style} className={className}>{children}</button>
+        ));
+
+        // --- MAIN APP RENDER ---
+        function App() {
+            return (
+                <ErrorBoundary>
+                    <MainContainer className="max-w-md mx-auto relative">
+                        <h1 className="text-xl font-bold mb-4">Book your spot</h1>
+
+                        {/* Payment Details Card */}
+                        <div className="framer-card">
+                            <h2 className="font-bold text-lg mb-4">Payment details</h2>
+                            <div className="bg-gray-50 p-4 rounded-lg space-y-4">
+                                <DateText className="text-sm text-gray-500 font-medium" />
+                                <hr className="border-gray-200" />
+
+                                <PricingList />
+                                <TaxText className="text-sm text-gray-400" />
+
+                                <div className="flex justify-between font-bold text-lg pt-2 border-t border-gray-200 mt-2">
+                                    <span>Total Price</span>
+                                    <TotalText />
+                                </div>
+                            </div>
+                        </div>
+
+                        {/* Variant Details Card */}
+                        <div className="framer-card">
+                            <h2 className="font-bold text-lg mb-4">Variant details</h2>
+
+                            <label className="block text-sm font-medium text-gray-700 mb-1">Departure Date</label>
+                            <DateSelect />
+
+                            <label className="block text-sm font-medium text-gray-700 mt-4 mb-1">Transport option</label>
+                            <TransportSelect />
+                        </div>
+
+                        {/* Traveller Details Section */}
+                        <div className="framer-card">
+                            <h2 className="font-bold text-lg mb-4">Traveller details</h2>
+
+                            {/* THE TEMPLATE CARD inside the List Container */}
+                            <TravellerListContainer>
+                                <div className="bg-gray-50 p-4 rounded-lg border border-gray-100 mb-2">
+                                    <div className="flex justify-between mb-2">
+                                        <TravellerLabel className="text-xs font-bold uppercase text-gray-500" />
+                                        <RemoveBtn className="text-xs font-bold text-red-500 cursor-pointer" />
+                                    </div>
+
+                                    <label className="block text-xs font-bold text-gray-400 mb-1">Select sharing</label>
+                                    <SharingSelect />
+
+                                    <div className="mt-3 space-y-2">
+                                        <div className="space-y-1">
+                                            <label className="text-xs font-bold text-gray-400">Name</label>
+                                            <NameInput />
+                                        </div>
+                                        <div className="space-y-1">
+                                            <label className="text-xs font-bold text-gray-400">Age</label>
+                                            <AgeInput />
+                                        </div>
+                                    </div>
+                                </div>
+                            </TravellerListContainer>
+                        </div>
+
+                        {/* PAY BUTTON */}
+                        <SubmitButton className="w-full bg-[#1B91C9] text-white font-bold py-4 rounded-xl shadow-lg hover:bg-blue-600 transition-all mt-8 cursor-pointer text-center">
+                            Pay Now
+                        </SubmitButton>
+
+                    </MainContainer>
+                </ErrorBoundary>
+            );
+        }
+
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<App />);
+    </script>
+</body>
+
+</html>

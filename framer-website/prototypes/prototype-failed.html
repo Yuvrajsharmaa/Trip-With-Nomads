@@ -1,0 +1,742 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Payment Failed — Trip With Nomads</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link
+        href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap"
+        rel="stylesheet">
+    <style>
+        *,
+        *::before,
+        *::after {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+
+        :root {
+            --bg-primary: #0a0a0f;
+            --bg-secondary: #111118;
+            --bg-card: rgba(255, 255, 255, 0.04);
+            --border: rgba(255, 255, 255, 0.08);
+            --border-bright: rgba(255, 255, 255, 0.12);
+            --text-primary: #f0f0f5;
+            --text-secondary: #8b8b9e;
+            --text-muted: #5a5a6e;
+            --accent-red: #ef4444;
+            --accent-red-dim: rgba(239, 68, 68, 0.12);
+            --accent-amber: #f59e0b;
+            --accent-amber-dim: rgba(245, 158, 11, 0.15);
+            --accent-blue: #6366f1;
+            --accent-green: #22c55e;
+            --accent-green-dim: rgba(34, 197, 94, 0.10);
+            --accent-gradient-danger: linear-gradient(135deg, #ef4444, #f97316);
+            --accent-gradient: linear-gradient(135deg, #6366f1, #8b5cf6, #a855f7);
+            --radius: 16px;
+            --radius-sm: 10px;
+        }
+
+        body {
+            font-family: 'Inter', -apple-system, sans-serif;
+            background: var(--bg-primary);
+            color: var(--text-primary);
+            min-height: 100vh;
+            line-height: 1.6;
+            -webkit-font-smoothing: antialiased;
+        }
+
+        /* Background glow — red tone */
+        body::before {
+            content: '';
+            position: fixed;
+            top: -200px;
+            left: 50%;
+            transform: translateX(-50%);
+            width: 600px;
+            height: 600px;
+            border-radius: 50%;
+            background: radial-gradient(circle, rgba(239, 68, 68, 0.06) 0%, transparent 70%);
+            pointer-events: none;
+            z-index: 0;
+        }
+
+        .page-wrapper {
+            max-width: 720px;
+            margin: 0 auto;
+            padding: 32px 20px 60px;
+            position: relative;
+            z-index: 1;
+        }
+
+        /* --- NAV BAR --- */
+        .nav {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 16px 0;
+            margin-bottom: 40px;
+            border-bottom: 1px solid var(--border);
+        }
+
+        .nav-logo {
+            font-weight: 800;
+            font-size: 22px;
+            letter-spacing: -0.5px;
+            background: var(--accent-gradient);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+
+        .nav-badge-failed {
+            font-size: 11px;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            color: var(--accent-red);
+            background: var(--accent-red-dim);
+            padding: 6px 14px;
+            border-radius: 20px;
+        }
+
+        /* --- HERO SECTION --- */
+        .hero {
+            text-align: center;
+            margin-bottom: 40px;
+        }
+
+        .hero-icon {
+            width: 80px;
+            height: 80px;
+            margin: 0 auto 24px;
+            border-radius: 50%;
+            background: var(--accent-red-dim);
+            border: 2px solid rgba(239, 68, 68, 0.3);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            animation: shake 0.6s ease-in-out;
+        }
+
+        .hero-icon svg {
+            width: 36px;
+            height: 36px;
+            color: var(--accent-red);
+        }
+
+        @keyframes shake {
+
+            0%,
+            100% {
+                transform: translateX(0);
+            }
+
+            15% {
+                transform: translateX(-8px);
+            }
+
+            30% {
+                transform: translateX(8px);
+            }
+
+            45% {
+                transform: translateX(-5px);
+            }
+
+            60% {
+                transform: translateX(5px);
+            }
+
+            75% {
+                transform: translateX(-2px);
+            }
+
+            90% {
+                transform: translateX(2px);
+            }
+        }
+
+        .hero h1 {
+            font-size: 32px;
+            font-weight: 800;
+            letter-spacing: -0.5px;
+            margin-bottom: 8px;
+        }
+
+        .hero p {
+            font-size: 15px;
+            color: var(--text-secondary);
+            max-width: 440px;
+            margin: 0 auto;
+        }
+
+        /* --- REASSURANCE BANNER --- */
+        .reassurance {
+            background: var(--accent-green-dim);
+            border: 1px solid rgba(34, 197, 94, 0.2);
+            border-radius: var(--radius-sm);
+            padding: 14px 20px;
+            margin-bottom: 24px;
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            font-size: 13px;
+            color: var(--accent-green);
+            font-weight: 500;
+        }
+
+        .reassurance svg {
+            flex-shrink: 0;
+        }
+
+        /* --- CARDS --- */
+        .card {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            padding: 24px;
+            margin-bottom: 16px;
+            backdrop-filter: blur(20px);
+            -webkit-backdrop-filter: blur(20px);
+            transition: border-color 0.3s ease;
+        }
+
+        .card:hover {
+            border-color: var(--border-bright);
+        }
+
+        .card-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            margin-bottom: 20px;
+        }
+
+        .card-title {
+            font-size: 13px;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 1.2px;
+            color: var(--text-muted);
+        }
+
+        .badge {
+            font-size: 11px;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 0.8px;
+            padding: 5px 12px;
+            border-radius: 20px;
+        }
+
+        .badge-red {
+            color: var(--accent-red);
+            background: var(--accent-red-dim);
+        }
+
+        .badge-amber {
+            color: var(--accent-amber);
+            background: var(--accent-amber-dim);
+        }
+
+        /* --- INFO ROWS --- */
+        .info-grid {
+            display: grid;
+            gap: 16px;
+        }
+
+        .info-row {
+            display: flex;
+            justify-content: space-between;
+            align-items: flex-start;
+        }
+
+        .info-label {
+            font-size: 13px;
+            color: var(--text-secondary);
+            flex-shrink: 0;
+        }
+
+        .info-value {
+            font-size: 14px;
+            font-weight: 500;
+            text-align: right;
+            color: var(--text-primary);
+        }
+
+        .info-value.mono {
+            font-family: 'JetBrains Mono', monospace;
+            color: var(--accent-amber);
+            font-size: 13px;
+        }
+
+        .info-value.error-text {
+            color: var(--accent-red);
+            font-weight: 600;
+        }
+
+        .info-value.large {
+            font-size: 20px;
+            font-weight: 700;
+        }
+
+        .divider {
+            height: 1px;
+            background: var(--border);
+            margin: 16px 0;
+        }
+
+        /* --- ACTION OPTIONS --- */
+        .action-options {
+            display: grid;
+            gap: 12px;
+        }
+
+        .action-option {
+            display: flex;
+            align-items: center;
+            gap: 16px;
+            padding: 16px;
+            background: rgba(255, 255, 255, 0.02);
+            border: 1px solid var(--border);
+            border-radius: var(--radius-sm);
+            cursor: pointer;
+            transition: all 0.25s ease;
+        }
+
+        .action-option:hover {
+            border-color: var(--border-bright);
+            background: rgba(255, 255, 255, 0.04);
+            transform: translateX(4px);
+        }
+
+        .action-icon {
+            width: 40px;
+            height: 40px;
+            border-radius: 10px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 20px;
+            flex-shrink: 0;
+        }
+
+        .action-icon.retry {
+            background: rgba(99, 102, 241, 0.15);
+        }
+
+        .action-icon.card-opt {
+            background: var(--accent-amber-dim);
+        }
+
+        .action-icon.support {
+            background: var(--accent-green-dim);
+        }
+
+        .action-text {
+            flex: 1;
+        }
+
+        .action-title {
+            font-size: 14px;
+            font-weight: 600;
+            margin-bottom: 2px;
+        }
+
+        .action-desc {
+            font-size: 12px;
+            color: var(--text-secondary);
+        }
+
+        .action-arrow {
+            color: var(--text-muted);
+            font-size: 16px;
+        }
+
+        /* --- WARNING BOX --- */
+        .warning-box {
+            background: var(--accent-amber-dim);
+            border: 1px solid rgba(245, 158, 11, 0.2);
+            border-radius: var(--radius-sm);
+            padding: 16px 20px;
+            margin-bottom: 16px;
+        }
+
+        .warning-box .warning-title {
+            font-size: 13px;
+            font-weight: 700;
+            color: var(--accent-amber);
+            margin-bottom: 8px;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+
+        .warning-box ul {
+            list-style: none;
+            padding: 0;
+        }
+
+        .warning-box li {
+            font-size: 13px;
+            color: var(--text-secondary);
+            padding: 4px 0;
+            padding-left: 16px;
+            position: relative;
+        }
+
+        .warning-box li::before {
+            content: '•';
+            position: absolute;
+            left: 0;
+            color: var(--accent-amber);
+        }
+
+        /* --- COUNTDOWN TIMER --- */
+        .countdown {
+            text-align: center;
+            margin: 20px 0;
+            padding: 16px;
+            background: rgba(239, 68, 68, 0.06);
+            border: 1px solid rgba(239, 68, 68, 0.15);
+            border-radius: var(--radius-sm);
+        }
+
+        .countdown-label {
+            font-size: 12px;
+            color: var(--text-muted);
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            margin-bottom: 6px;
+        }
+
+        .countdown-timer {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 28px;
+            font-weight: 700;
+            color: var(--accent-red);
+        }
+
+        .countdown-note {
+            font-size: 12px;
+            color: var(--text-secondary);
+            margin-top: 4px;
+        }
+
+        /* --- BUTTONS --- */
+        .btn-group {
+            display: flex;
+            gap: 12px;
+            margin-top: 32px;
+        }
+
+        .btn {
+            flex: 1;
+            padding: 14px 24px;
+            border-radius: var(--radius-sm);
+            font-size: 14px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.25s ease;
+            text-align: center;
+            text-decoration: none;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 8px;
+        }
+
+        .btn-outline {
+            background: transparent;
+            border: 1px solid var(--border-bright);
+            color: var(--text-primary);
+        }
+
+        .btn-outline:hover {
+            background: rgba(255, 255, 255, 0.05);
+            border-color: rgba(255, 255, 255, 0.2);
+        }
+
+        .btn-danger {
+            background: var(--accent-gradient-danger);
+            border: none;
+            color: #fff;
+        }
+
+        .btn-danger:hover {
+            transform: translateY(-1px);
+            box-shadow: 0 8px 30px rgba(239, 68, 68, 0.3);
+        }
+
+        /* --- FOOTER --- */
+        .footer {
+            text-align: center;
+            margin-top: 40px;
+            padding-top: 24px;
+            border-top: 1px solid var(--border);
+            font-size: 13px;
+            color: var(--text-muted);
+        }
+
+        .footer a {
+            color: var(--text-secondary);
+            text-decoration: none;
+        }
+
+        .footer a:hover {
+            color: var(--text-primary);
+        }
+
+        /* --- ANIMATIONS --- */
+        @keyframes fadeInUp {
+            from {
+                opacity: 0;
+                transform: translateY(20px);
+            }
+
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+
+        .animate-in {
+            animation: fadeInUp 0.6s ease forwards;
+            opacity: 0;
+        }
+
+        .delay-1 {
+            animation-delay: 0.1s;
+        }
+
+        .delay-2 {
+            animation-delay: 0.2s;
+        }
+
+        .delay-3 {
+            animation-delay: 0.3s;
+        }
+
+        .delay-4 {
+            animation-delay: 0.4s;
+        }
+
+        .delay-5 {
+            animation-delay: 0.5s;
+        }
+
+        .delay-6 {
+            animation-delay: 0.6s;
+        }
+
+        @media (max-width: 480px) {
+            .page-wrapper {
+                padding: 20px 16px 40px;
+            }
+
+            .hero h1 {
+                font-size: 26px;
+            }
+
+            .btn-group {
+                flex-direction: column;
+            }
+
+            .info-row {
+                flex-direction: column;
+                gap: 4px;
+            }
+
+            .info-value {
+                text-align: left;
+            }
+        }
+    </style>
+</head>
+
+<body>
+    <div class="page-wrapper">
+        <!-- NAV -->
+        <nav class="nav animate-in">
+            <div class="nav-logo">Trip With Nomads</div>
+            <div class="nav-badge-failed">⚠ Payment Failed</div>
+        </nav>
+
+        <!-- HERO -->
+        <div class="hero animate-in delay-1">
+            <div class="hero-icon">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"
+                    stroke-linejoin="round">
+                    <line x1="18" y1="6" x2="6" y2="18"></line>
+                    <line x1="6" y1="6" x2="18" y2="18"></line>
+                </svg>
+            </div>
+            <h1>Payment Failed</h1>
+            <p>Don't worry — your booking is saved. You can retry the payment to confirm your spot.</p>
+        </div>
+
+        <!-- REASSURANCE -->
+        <div class="reassurance animate-in delay-2">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+                stroke-linecap="round" stroke-linejoin="round">
+                <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
+            </svg>
+            No amount has been deducted from your account.
+        </div>
+
+        <!-- BOOKING DETAILS -->
+        <div class="card animate-in delay-2">
+            <div class="card-header">
+                <span class="card-title">Booking Details</span>
+                <span class="badge badge-amber">Payment Pending</span>
+            </div>
+            <div class="info-grid">
+                <div class="info-row">
+                    <span class="info-label">Booking Ref</span>
+                    <span class="info-value mono" id="booking-id">#TWN-2026-0847</span>
+                </div>
+                <div class="info-row">
+                    <span class="info-label">Trip</span>
+                    <span class="info-value" id="trip-name">Kashmir: Heaven on Earth</span>
+                </div>
+                <div class="info-row">
+                    <span class="info-label">Departure</span>
+                    <span class="info-value" id="departure-date">Mar 15 – Mar 22, 2026</span>
+                </div>
+                <div class="info-row">
+                    <span class="info-label">Travellers</span>
+                    <span class="info-value" id="traveller-count">2 Travellers</span>
+                </div>
+            </div>
+        </div>
+
+        <!-- PAYMENT ATTEMPT -->
+        <div class="card animate-in delay-3">
+            <div class="card-header">
+                <span class="card-title">Payment Attempt</span>
+                <span class="badge badge-red">Failed</span>
+            </div>
+            <div class="info-grid">
+                <div class="info-row">
+                    <span class="info-label">Amount</span>
+                    <span class="info-value large" id="amount">₹17,338</span>
+                </div>
+                <div class="info-row">
+                    <span class="info-label">Payment Via</span>
+                    <span class="info-value">PayU</span>
+                </div>
+                <div class="info-row">
+                    <span class="info-label">Transaction ID</span>
+                    <span class="info-value mono" id="txn-id">PAY-9f3a-c7b2</span>
+                </div>
+                <div class="info-row">
+                    <span class="info-label">Error</span>
+                    <span class="info-value error-text" id="error-reason">Transaction declined by bank</span>
+                </div>
+                <div class="info-row">
+                    <span class="info-label">Attempted At</span>
+                    <span class="info-value" id="attempt-time">Feb 16, 2026, 6:30 PM IST</span>
+                </div>
+            </div>
+        </div>
+
+        <!-- RESERVATION TIMER -->
+        <div class="countdown animate-in delay-3">
+            <div class="countdown-label">Booking Reserved For</div>
+            <div class="countdown-timer" id="timer">29:42</div>
+            <div class="countdown-note">Complete payment before time runs out to keep your spot.</div>
+        </div>
+
+        <!-- WHAT YOU CAN DO -->
+        <div class="card animate-in delay-4">
+            <div class="card-header">
+                <span class="card-title">What You Can Do</span>
+            </div>
+            <div class="action-options">
+                <div class="action-option" onclick="alert('Redirecting to PayU...')">
+                    <div class="action-icon retry">🔄</div>
+                    <div class="action-text">
+                        <div class="action-title">Retry Payment</div>
+                        <div class="action-desc">Try again with the same or a different payment method.</div>
+                    </div>
+                    <div class="action-arrow">→</div>
+                </div>
+                <div class="action-option">
+                    <div class="action-icon card-opt">💳</div>
+                    <div class="action-text">
+                        <div class="action-title">Try a Different Card / UPI</div>
+                        <div class="action-desc">Sometimes switching methods helps. UPI, net banking, or another card.
+                        </div>
+                    </div>
+                    <div class="action-arrow">→</div>
+                </div>
+                <div class="action-option">
+                    <div class="action-icon support">💬</div>
+                    <div class="action-text">
+                        <div class="action-title">Contact Support</div>
+                        <div class="action-desc">We can help process your booking manually via WhatsApp or call.</div>
+                    </div>
+                    <div class="action-arrow">→</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- WARNING BOX -->
+        <div class="warning-box animate-in delay-5">
+            <div class="warning-title">⚠️ Important</div>
+            <ul>
+                <li>Your booking is reserved for 30 minutes. After that, spots may be released.</li>
+                <li>If money was deducted but you see this page, it will be refunded within 5–7 business days.</li>
+                <li>Have your Booking Ref ready when contacting support.</li>
+            </ul>
+        </div>
+
+        <!-- BUTTONS -->
+        <div class="btn-group animate-in delay-6">
+            <a class="btn btn-outline"
+                href="https://wa.me/919876543210?text=Hi,%20my%20booking%20ref%20is%20TWN-2026-0847%20and%20my%20payment%20failed.%20Can%20you%20help?">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 012-2h14a2 2 0 012 2z" />
+                </svg>
+                Contact Support
+            </a>
+            <a class="btn btn-danger" href="#">
+                🔄 Retry Payment
+            </a>
+        </div>
+
+        <!-- FOOTER -->
+        <div class="footer animate-in delay-6">
+            Need help? Reach us at <a href="mailto:hello@tripwithnomads.com">hello@tripwithnomads.com</a>
+            <br>or call <a href="tel:+919876543210">+91 98765 43210</a>
+        </div>
+    </div>
+
+    <script>
+        // ─────────────────────────────────────────
+        // COUNTDOWN TIMER
+        // Reservation countdown — shows urgency
+        // ─────────────────────────────────────────
+        (function () {
+            let totalSeconds = 29 * 60 + 42; // 29:42
+            const timerEl = document.getElementById('timer');
+
+            setInterval(() => {
+                if (totalSeconds <= 0) {
+                    timerEl.textContent = '00:00';
+                    timerEl.style.color = '#666';
+                    return;
+                }
+                totalSeconds--;
+                const m = Math.floor(totalSeconds / 60).toString().padStart(2, '0');
+                const s = (totalSeconds % 60).toString().padStart(2, '0');
+                timerEl.textContent = `${m}:${s}`;
+            }, 1000);
+        })();
+    </script>
+</body>
+
+</html>

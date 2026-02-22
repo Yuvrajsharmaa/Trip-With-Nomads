@@ -1,0 +1,182 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <title>Test UX Defaults</title>
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+    <style>
+        body {
+            font-family: sans-serif;
+            padding: 20px;
+        }
+
+        .form-group {
+            margin-bottom: 20px;
+        }
+
+        select {
+            padding: 8px;
+            width: 300px;
+            display: block;
+            margin-top: 5px;
+        }
+
+        #logs {
+            background: #f0f0f0;
+            padding: 10px;
+            height: 300px;
+            overflow-y: auto;
+            font-family: monospace;
+        }
+
+        .success {
+            color: green;
+            font-weight: bold;
+        }
+
+        .error {
+            color: red;
+            font-weight: bold;
+        }
+    </style>
+</head>
+
+<body>
+    <h1>UX Defaults Test</h1>
+    <input type="hidden" name="trip_id" value="66d08175-8a57-4d7c-ab08-b888aa771693">
+
+    <div class="form-group">
+        <label>1. Departure Date</label>
+        <select name="departure_date">
+            <option value="">Select Date</option>
+        </select>
+    </div>
+    <div class="form-group">
+        <label>2. Transport</label>
+        <select name="transport">
+            <option value="">Select Transport</option>
+        </select>
+    </div>
+    <div class="form-group">
+        <label>3. Sharing</label>
+        <select name="sharing">
+            <option value="">Select Sharing</option>
+        </select>
+    </div>
+
+    <h3>Logs</h3>
+    <div id="logs"></div>
+
+    <script>
+        function log(msg, type = 'info') {
+            const d = document.getElementById('logs');
+            const color = type === 'error' ? 'red' : (type === 'success' ? 'green' : 'black');
+            d.innerHTML += `<div style="color:${color}">[${new Date().toLocaleTimeString()}] ${msg}</div>`;
+            console.log(msg);
+        }
+
+        // --- MOCK COMPONENT LOGIC (Mirroring DynamicDropdowns UX Refactor) ---
+
+        async function initLogic() {
+            log("🚀 Initializing Logic...");
+
+            const SUPABASE_URL = "https://jxozzvwvprmnhvafmpsa.supabase.co";
+            const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imp4b3p6dnd2cHJtbmh2YWZtcHNhIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjgwNTg2NjIsImV4cCI6MjA4MzYzNDY2Mn0.KpVa9dWlJEguL1TA00Tf4QDpziJ1mgA2I0f4_l-vlOk";
+            const supabase = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+
+            const tripId = document.querySelector('input[name="trip_id"]').value;
+
+            // FETCH
+            const { data, error } = await supabase
+                .from("trip_pricing")
+                .select("departure_date, transport, sharing")
+                .eq("trip_id", tripId);
+
+            if (data) {
+                // TEST OVERRIDE: Pretend we have valid dates
+                const today = new Date("2026-01-01");
+                const validRows = data.filter(row => new Date(row.departure_date) >= today);
+                const allPricingData = validRows;
+                log(`✅ Loaded ${validRows.length} valid rows.`);
+
+                const initializeDropdowns = () => {
+                    const uniqueDates = Array.from(new Set(allPricingData.map(d => d.departure_date))).sort();
+                    populate('departure_date', uniqueDates);
+
+                    // AUTO-SELECT LOGIC
+                    if (uniqueDates.length > 0) {
+                        const firstDate = uniqueDates[0];
+                        const dateSelect = document.querySelector('select[name="departure_date"]');
+                        dateSelect.value = firstDate;
+                        log(`⚡ Auto-selected Date: ${firstDate}`, 'success');
+
+                        updateDownstream('date', allPricingData);
+                    }
+                };
+
+                const updateDownstream = (trigger, dataSet) => {
+                    const dateSelect = document.querySelector('select[name="departure_date"]');
+                    const transSelect = document.querySelector('select[name="transport"]');
+                    const shareSelect = document.querySelector('select[name="sharing"]');
+
+                    const selectedDate = dateSelect.value;
+
+                    if (trigger === 'date') {
+                        const currentTrans = transSelect.value;
+                        transSelect.innerHTML = '<option value="">Select Transport</option>';
+
+                        const rows = dataSet.filter(d => d.departure_date === selectedDate);
+                        const transports = Array.from(new Set(rows.map(d => d.transport))).sort();
+                        populate('transport', transports);
+
+                        // CASADING PRESERVATION
+                        if (transports.includes(currentTrans)) {
+                            transSelect.value = currentTrans;
+                            log(`Preseved Transport: ${currentTrans}`);
+                        } else if (transports.length > 0) {
+                            transSelect.value = transports[0];
+                            log(`⚡ Auto-selected Transport: ${transports[0]}`, 'success');
+                        }
+                        updateDownstream('transport', dataSet);
+                    }
+
+                    if (trigger === 'transport') {
+                        const selectedTrans = transSelect.value;
+                        const currentShare = shareSelect.value;
+                        shareSelect.innerHTML = '<option value="">Select Sharing</option>';
+
+                        const rows = dataSet.filter(d => d.departure_date === selectedDate && d.transport === selectedTrans);
+                        const sharings = Array.from(new Set(rows.map(d => d.sharing))).sort();
+                        populate('sharing', sharings);
+
+                        if (sharings.includes(currentShare)) {
+                            shareSelect.value = currentShare;
+                        } else if (sharings.length > 0) {
+                            shareSelect.value = sharings[0];
+                            log(`⚡ Auto-selected Sharing: ${sharings[0]}`, 'success');
+                        }
+                    }
+                };
+
+                // Attach listeners
+                document.querySelector('select[name="departure_date"]').addEventListener('change', () => updateDownstream('date', allPricingData));
+                document.querySelector('select[name="transport"]').addEventListener('change', () => updateDownstream('transport', allPricingData));
+
+                initializeDropdowns();
+            }
+        }
+
+        function populate(name, options) {
+            const s = document.querySelector(`select[name="${name}"]`);
+            options.forEach(o => {
+                const opt = document.createElement("option");
+                opt.value = o; opt.text = o; s.add(opt);
+            });
+        }
+
+        initLogic();
+    </script>
+</body>
+
+</html>

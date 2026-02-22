@@ -1,0 +1,111 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <title>Simulate Framer Logic</title>
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+</head>
+
+<body>
+    <h1>Simulating Framer Logic...</h1>
+    <div id="logs"></div>
+    <script>
+        // MOCK STORE
+        const store = {
+            _price: "Calculating...",
+            get price() { return this._price; },
+            set price(val) {
+                this._price = val;
+                log(`Store updated: ${val}`);
+            }
+        };
+
+        function log(msg) {
+            const div = document.getElementById('logs');
+            div.innerHTML += `<div>${msg}</div>`;
+            console.log(msg);
+        }
+
+        // SUPABASE CLIENT
+        const SUPABASE_URL = "https://jxozzvwvprmnhvafmpsa.supabase.co";
+        const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imp4b3p6dnd2cHJtbmh2YWZtcHNhIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjgwNTg2NjIsImV4cCI6MjA4MzYzNDY2Mn0.KpVa9dWlJEguL1TA00Tf4QDpziJ1mgA2I0f4_l-vlOk";
+        const supabase = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+
+        // MOCK FETCH LOGIC (Copied from PriceCalculator)
+        const DEFAULT_TRIP = {
+            sharing: "triple",
+            transport: "traveller",
+        }
+
+        async function runSimulation() {
+            log("Starting Simulation...");
+
+            // MOCK PROPS (What we expect Framer to give)
+            const props = {
+                formData: {
+                    trip_id: "66d08175-8a57-4d7c-ab08-b888aa771693",
+                    departure_date: "2026-01-22",
+                    transport: "traveller", // Should be filled by default or user
+                    sharing: "triple"       // Should be filled by default or user
+                },
+                setFormData: (newData) => {
+                    log("setFormData called with: " + JSON.stringify(newData));
+                }
+            };
+
+            // THE LOGIC
+            const fetchPrice = async (formData) => {
+                const { trip_id, departure_date, transport, sharing } = formData || {}
+
+                log(`Checking params: ${JSON.stringify({ trip_id, departure_date, transport, sharing })}`);
+
+                if (!trip_id || !departure_date || !transport || !sharing) {
+                    log("❌ Missing params, aborting fetch.");
+                    return;
+                }
+
+                log("🔄 Fetching Price...");
+
+                const { data, error } = await supabase
+                    .from("trip_pricing")
+                    .select("price")
+                    .eq("trip_id", trip_id)
+                    .eq("departure_date", departure_date)
+                    .eq("transport", transport)
+                    .eq("sharing", sharing)
+                    .single()
+
+                if (data) {
+                    log("💰 Price Updated: " + data.price)
+                    store.price = "₹" + data.price.toLocaleString("en-IN")
+
+                    if (props.setFormData) {
+                        props.setFormData({
+                            ...formData,
+                            amount: data.price,
+                        })
+                    }
+                } else if (error) {
+                    log("❌ Error fetching: " + error.message);
+                }
+            }
+
+            // SIMULATE USE EFFECT
+            if (!props.formData) {
+                log("❌ props.formData is missing!");
+                return;
+            }
+
+            const currentData = { ...props.formData };
+            // Simulate defaults NOT having set (if applicable)
+            // But let's assume they are set for this test or we simulate the update
+
+            fetchPrice(props.formData);
+        }
+
+        runSimulation();
+    </script>
+</body>
+
+</html>

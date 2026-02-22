@@ -1,0 +1,61 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Supabase Connection Test</title>
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+</head>
+
+<body>
+    <h1>Supabase Connection Test</h1>
+    <div id="output">Running test...</div>
+    <script>
+        const SUPABASE_URL = "https://jxozzvwvprmnhvafmpsa.supabase.co";
+        const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imp4b3p6dnd2cHJtbmh2YWZtcHNhIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjgwNTg2NjIsImV4cCI6MjA4MzYzNDY2Mn0.KpVa9dWlJEguL1TA00Tf4QDpziJ1mgA2I0f4_l-vlOk";
+
+        async function testConnection() {
+            const supabase = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+            const output = document.getElementById('output');
+
+            try {
+                console.log("Testing trip_pricing...");
+                const { data: pricingData, error: pricingError } = await supabase
+                    .from("trip_pricing")
+                    .select("*")
+                    .limit(5);
+
+                if (pricingError) {
+                    console.error("Pricing Error:", pricingError);
+                    output.innerText += "\n❌ Pricing Error: " + pricingError.message;
+                } else {
+                    console.log("Pricing Data:", pricingData);
+                    output.innerText += "\n✅ Pricing Data Found: " + JSON.stringify(pricingData);
+                }
+
+                console.log("Testing trips...");
+                const { data: tripsData, error: tripsError } = await supabase
+                    .from("trips")
+                    .select("*")
+                    .limit(1);
+
+                if (tripsError) {
+                    console.error("Trips Error:", tripsError);
+                    output.innerText += "\n❌ Trips Error: " + tripsError.message;
+                } else {
+                    console.log("Trips Data:", tripsData);
+                    output.innerText += "\n✅ Trips Data Found: " + JSON.stringify(tripsData);
+                }
+
+            } catch (err) {
+                console.error("Unexpected Error:", err);
+                output.innerText += "\n❌ Unexpected Error: " + err.message;
+            }
+        }
+
+        testConnection();
+    </script>
+</body>
+
+</html>

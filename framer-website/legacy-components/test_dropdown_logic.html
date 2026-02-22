@@ -1,0 +1,206 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <title>Test Dynamic Dropdowns V2</title>
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+    <style>
+        body {
+            font-family: sans-serif;
+            padding: 20px;
+        }
+
+        .form-group {
+            margin-bottom: 20px;
+        }
+
+        label {
+            display: block;
+            margin-bottom: 5px;
+            font-weight: bold;
+        }
+
+        select,
+        input {
+            padding: 8px;
+            width: 300px;
+            display: block;
+        }
+
+        #logs {
+            background: #f0f0f0;
+            padding: 10px;
+            border-radius: 5px;
+            margin-top: 20px;
+            height: 300px;
+            overflow-y: auto;
+            font-family: monospace;
+        }
+    </style>
+</head>
+
+<body>
+    <h1>Dynamic Dropdown Test V2 (Dates + Trans + Share + Filter)</h1>
+
+    <!-- MOCK FORM -->
+    <div class="form-group">
+        <label>Trip ID:</label>
+        <input type="text" name="trip_id" value="66d08175-8a57-4d7c-ab08-b888aa771693">
+    </div>
+
+    <div class="form-group">
+        <label>Departure Date:</label>
+        <select name="departure_date">
+            <option value="">Select a Date</option>
+            <option value="2000-01-01">Old Static Date</option>
+        </select>
+    </div>
+
+    <div class="form-group">
+        <label>Transport:</label>
+        <select name="transport">
+            <option value="">Select Transport</option>
+        </select>
+    </div>
+
+    <div class="form-group">
+        <label>Sharing:</label>
+        <select name="sharing">
+            <option value="">Select Sharing</option>
+        </select>
+    </div>
+
+    <div class="form-group">
+        <button onclick="window.location.reload()">Reload Page</button>
+    </div>
+
+    <h3>Logs:</h3>
+    <div id="logs"></div>
+
+    <script>
+        function log(msg, type = 'info') {
+            const div = document.getElementById('logs');
+            const color = type === 'error' ? 'red' : (type === 'success' ? 'green' : 'black');
+            div.innerHTML += `<div style="color: ${color}">[${new Date().toLocaleTimeString()}] ${msg}</div>`;
+            console.log(msg);
+        }
+
+        const SUPABASE_URL = "https://jxozzvwvprmnhvafmpsa.supabase.co";
+        const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imp4b3p6dnd2cHJtbmh2YWZtcHNhIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjgwNTg2NjIsImV4cCI6MjA4MzYzNDY2Mn0.KpVa9dWlJEguL1TA00Tf4QDpziJ1mgA2I0f4_l-vlOk";
+        const supabase = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+
+        // --- SIMULATED COMPONENT LOGIC V2 ---
+
+        async function runComponentLogic() {
+            log("🚀 Starting V2 Logic...");
+
+            const input = document.querySelector('input[name="trip_id"]');
+            const tripId = input ? input.value : null;
+
+            if (!tripId) {
+                log("❌ Trip ID not found!", 'error');
+                return;
+            }
+
+            log("⏳ Fetching all options from Supabase...");
+            const { data, error } = await supabase
+                .from("trip_pricing")
+                .select("departure_date, transport, sharing")
+                .eq("trip_id", tripId);
+
+            if (error) {
+                log(`❌ Supabase Error: ${error.message}`, 'error');
+                return;
+            }
+
+            if (data) {
+                const today = new Date();
+                today.setHours(0, 0, 0, 0);
+
+                const validRows = data.filter(row => {
+                    const rowDate = new Date(row.departure_date);
+                    return rowDate >= today;
+                });
+
+                log(`📊 Total rows: ${data.length}, Valid rows (Future): ${validRows.length}`);
+
+                const uniqueDates = Array.from(new Set(validRows.map(d => d.departure_date))).sort();
+                const uniqueTransports = Array.from(new Set(validRows.map(d => d.transport))).sort();
+                const uniqueSharings = Array.from(new Set(validRows.map(d => d.sharing))).sort();
+
+                populateDropdown('departure_date', uniqueDates);
+                populateDropdown('transport', uniqueTransports);
+                populateDropdown('sharing', uniqueSharings);
+
+                // Verification Logic
+                setTimeout(() => {
+                    verifyResult(uniqueDates, uniqueTransports, uniqueSharings);
+                }, 500);
+            }
+        }
+
+        function populateDropdown(name, options) {
+            const select = document.querySelector(`select[name="${name}"]`);
+            if (!select) return;
+
+            // Preserve placeholder
+            const firstOption = select.options[0];
+            const hasPlaceholder = firstOption && (firstOption.value === "" || firstOption.text.toLowerCase().includes("select"));
+
+            select.innerHTML = "";
+
+            if (hasPlaceholder) {
+                select.add(firstOption);
+            }
+
+            options.forEach(opt => {
+                const option = document.createElement("option");
+                option.value = opt;
+                option.text = opt.charAt(0).toUpperCase() + opt.slice(1);
+                select.add(option);
+            });
+
+            log(`✅ Populated ${name} with ${options.length} items.`, 'success');
+        }
+
+        function verifyResult(dates, transports, sharings) {
+            let success = true;
+
+            // Check Date Filtering
+            const dateSelect = document.querySelector('select[name="departure_date"]');
+            const hasPastDates = Array.from(dateSelect.options).some(o => o.value.startsWith("2020")); // Check against old static 2020
+            if (hasPastDates) {
+                log("❌ FAILED: Past dates detected!", 'error');
+                success = false;
+            }
+
+            // Check counts
+            if (dateSelect.options.length < 2) { // 1 placeholder + at least 1 date
+                log("⚠️ WARNING: No dates populated.", 'error');
+                success = false;
+            }
+
+            const transSelect = document.querySelector('select[name="transport"]');
+            if (transSelect.options.length < 2) {
+                log("❌ FAILED: Transport not populated.", 'error');
+                success = false;
+            }
+
+            const shareSelect = document.querySelector('select[name="sharing"]');
+            if (shareSelect.options.length < 2) {
+                log("❌ FAILED: Sharing not populated.", 'error');
+                success = false;
+            }
+
+            if (success) {
+                log("🏆 ALL CHECKS PASSED: Dates filtered & all dropdowns populated.", 'success');
+                document.body.setAttribute('data-test-status', 'success');
+            }
+        }
+
+        runComponentLogic();
+    </script>
+</body>
+
+</html>

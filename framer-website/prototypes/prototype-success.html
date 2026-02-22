@@ -1,0 +1,750 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Booking Confirmed — Trip With Nomads</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link
+        href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap"
+        rel="stylesheet">
+    <style>
+        *,
+        *::before,
+        *::after {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+
+        :root {
+            --bg-primary: #0a0a0f;
+            --bg-secondary: #111118;
+            --bg-card: rgba(255, 255, 255, 0.04);
+            --border: rgba(255, 255, 255, 0.08);
+            --border-bright: rgba(255, 255, 255, 0.12);
+            --text-primary: #f0f0f5;
+            --text-secondary: #8b8b9e;
+            --text-muted: #5a5a6e;
+            --accent-green: #22c55e;
+            --accent-green-dim: rgba(34, 197, 94, 0.15);
+            --accent-amber: #f59e0b;
+            --accent-amber-dim: rgba(245, 158, 11, 0.15);
+            --accent-blue: #6366f1;
+            --accent-gradient: linear-gradient(135deg, #6366f1, #8b5cf6, #a855f7);
+            --radius: 16px;
+            --radius-sm: 10px;
+        }
+
+        body {
+            font-family: 'Inter', -apple-system, sans-serif;
+            background: var(--bg-primary);
+            color: var(--text-primary);
+            min-height: 100vh;
+            line-height: 1.6;
+            -webkit-font-smoothing: antialiased;
+        }
+
+        /* Background glow */
+        body::before {
+            content: '';
+            position: fixed;
+            top: -200px;
+            left: 50%;
+            transform: translateX(-50%);
+            width: 600px;
+            height: 600px;
+            border-radius: 50%;
+            background: radial-gradient(circle, rgba(34, 197, 94, 0.08) 0%, transparent 70%);
+            pointer-events: none;
+            z-index: 0;
+        }
+
+        .page-wrapper {
+            max-width: 720px;
+            margin: 0 auto;
+            padding: 32px 20px 60px;
+            position: relative;
+            z-index: 1;
+        }
+
+        /* --- NAV BAR --- */
+        .nav {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 16px 0;
+            margin-bottom: 40px;
+            border-bottom: 1px solid var(--border);
+        }
+
+        .nav-logo {
+            font-weight: 800;
+            font-size: 22px;
+            letter-spacing: -0.5px;
+            background: var(--accent-gradient);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+
+        .nav-badge {
+            font-size: 11px;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            color: var(--accent-green);
+            background: var(--accent-green-dim);
+            padding: 6px 14px;
+            border-radius: 20px;
+        }
+
+        /* --- HERO SECTION --- */
+        .hero {
+            text-align: center;
+            margin-bottom: 40px;
+        }
+
+        .hero-icon {
+            width: 80px;
+            height: 80px;
+            margin: 0 auto 24px;
+            border-radius: 50%;
+            background: var(--accent-green-dim);
+            border: 2px solid rgba(34, 197, 94, 0.3);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            animation: pulse-ring 2s ease-in-out infinite;
+        }
+
+        .hero-icon svg {
+            width: 40px;
+            height: 40px;
+            color: var(--accent-green);
+        }
+
+        @keyframes pulse-ring {
+
+            0%,
+            100% {
+                box-shadow: 0 0 0 0 rgba(34, 197, 94, 0.2);
+            }
+
+            50% {
+                box-shadow: 0 0 0 16px rgba(34, 197, 94, 0);
+            }
+        }
+
+        .hero h1 {
+            font-size: 32px;
+            font-weight: 800;
+            letter-spacing: -0.5px;
+            margin-bottom: 8px;
+        }
+
+        .hero p {
+            font-size: 15px;
+            color: var(--text-secondary);
+            max-width: 400px;
+            margin: 0 auto;
+        }
+
+        /* --- CARDS --- */
+        .card {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            padding: 24px;
+            margin-bottom: 16px;
+            backdrop-filter: blur(20px);
+            -webkit-backdrop-filter: blur(20px);
+            transition: border-color 0.3s ease;
+        }
+
+        .card:hover {
+            border-color: var(--border-bright);
+        }
+
+        .card-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            margin-bottom: 20px;
+        }
+
+        .card-title {
+            font-size: 13px;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 1.2px;
+            color: var(--text-muted);
+        }
+
+        .badge {
+            font-size: 11px;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 0.8px;
+            padding: 5px 12px;
+            border-radius: 20px;
+        }
+
+        .badge-green {
+            color: var(--accent-green);
+            background: var(--accent-green-dim);
+        }
+
+        .badge-amber {
+            color: var(--accent-amber);
+            background: var(--accent-amber-dim);
+        }
+
+        /* --- INFO ROWS --- */
+        .info-grid {
+            display: grid;
+            gap: 16px;
+        }
+
+        .info-row {
+            display: flex;
+            justify-content: space-between;
+            align-items: flex-start;
+        }
+
+        .info-label {
+            font-size: 13px;
+            color: var(--text-secondary);
+            flex-shrink: 0;
+        }
+
+        .info-value {
+            font-size: 14px;
+            font-weight: 500;
+            text-align: right;
+            color: var(--text-primary);
+        }
+
+        .info-value.mono {
+            font-family: 'JetBrains Mono', monospace;
+            color: var(--accent-amber);
+            font-size: 13px;
+        }
+
+        .info-value.highlight {
+            font-size: 20px;
+            font-weight: 700;
+            color: var(--accent-green);
+        }
+
+        .divider {
+            height: 1px;
+            background: var(--border);
+            margin: 16px 0;
+        }
+
+        /* --- TRAVELLER LIST --- */
+        .traveller-item {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            padding: 12px 0;
+            border-bottom: 1px solid var(--border);
+        }
+
+        .traveller-item:last-child {
+            border-bottom: none;
+        }
+
+        .traveller-avatar {
+            width: 36px;
+            height: 36px;
+            border-radius: 50%;
+            background: var(--accent-gradient);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 14px;
+            font-weight: 700;
+            color: #fff;
+            flex-shrink: 0;
+        }
+
+        .traveller-info {
+            flex: 1;
+        }
+
+        .traveller-name {
+            font-size: 14px;
+            font-weight: 600;
+        }
+
+        .traveller-detail {
+            font-size: 12px;
+            color: var(--text-secondary);
+        }
+
+        /* --- TIMELINE --- */
+        .timeline {
+            padding-left: 0;
+            list-style: none;
+        }
+
+        .timeline-item {
+            display: flex;
+            gap: 16px;
+            padding-bottom: 20px;
+            position: relative;
+        }
+
+        .timeline-item:last-child {
+            padding-bottom: 0;
+        }
+
+        .timeline-number {
+            width: 32px;
+            height: 32px;
+            border-radius: 50%;
+            background: rgba(99, 102, 241, 0.15);
+            border: 1px solid rgba(99, 102, 241, 0.3);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 13px;
+            font-weight: 700;
+            color: var(--accent-blue);
+            flex-shrink: 0;
+            position: relative;
+            z-index: 1;
+        }
+
+        .timeline-item:not(:last-child) .timeline-number::after {
+            content: '';
+            position: absolute;
+            top: 100%;
+            left: 50%;
+            transform: translateX(-50%);
+            width: 1px;
+            height: 20px;
+            background: rgba(99, 102, 241, 0.2);
+        }
+
+        .timeline-content {
+            padding-top: 5px;
+        }
+
+        .timeline-title {
+            font-size: 14px;
+            font-weight: 600;
+            margin-bottom: 2px;
+        }
+
+        .timeline-desc {
+            font-size: 12px;
+            color: var(--text-secondary);
+        }
+
+        /* --- BUTTONS --- */
+        .btn-group {
+            display: flex;
+            gap: 12px;
+            margin-top: 32px;
+        }
+
+        .btn {
+            flex: 1;
+            padding: 14px 24px;
+            border-radius: var(--radius-sm);
+            font-size: 14px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.25s ease;
+            text-align: center;
+            text-decoration: none;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 8px;
+        }
+
+        .btn-outline {
+            background: transparent;
+            border: 1px solid var(--border-bright);
+            color: var(--text-primary);
+        }
+
+        .btn-outline:hover {
+            background: rgba(255, 255, 255, 0.05);
+            border-color: rgba(255, 255, 255, 0.2);
+        }
+
+        .btn-solid {
+            background: var(--accent-gradient);
+            border: none;
+            color: #fff;
+        }
+
+        .btn-solid:hover {
+            transform: translateY(-1px);
+            box-shadow: 0 8px 30px rgba(99, 102, 241, 0.3);
+        }
+
+        /* --- FOOTER --- */
+        .footer {
+            text-align: center;
+            margin-top: 40px;
+            padding-top: 24px;
+            border-top: 1px solid var(--border);
+            font-size: 13px;
+            color: var(--text-muted);
+        }
+
+        .footer a {
+            color: var(--text-secondary);
+            text-decoration: none;
+        }
+
+        .footer a:hover {
+            color: var(--text-primary);
+        }
+
+        /* --- ANIMATIONS --- */
+        @keyframes fadeInUp {
+            from {
+                opacity: 0;
+                transform: translateY(20px);
+            }
+
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+
+        .animate-in {
+            animation: fadeInUp 0.6s ease forwards;
+            opacity: 0;
+        }
+
+        .delay-1 {
+            animation-delay: 0.1s;
+        }
+
+        .delay-2 {
+            animation-delay: 0.2s;
+        }
+
+        .delay-3 {
+            animation-delay: 0.3s;
+        }
+
+        .delay-4 {
+            animation-delay: 0.4s;
+        }
+
+        .delay-5 {
+            animation-delay: 0.5s;
+        }
+
+        .delay-6 {
+            animation-delay: 0.6s;
+        }
+
+        /* --- RESPONSIVE --- */
+        @media (max-width: 480px) {
+            .page-wrapper {
+                padding: 20px 16px 40px;
+            }
+
+            .hero h1 {
+                font-size: 26px;
+            }
+
+            .btn-group {
+                flex-direction: column;
+            }
+
+            .info-row {
+                flex-direction: column;
+                gap: 4px;
+            }
+
+            .info-value {
+                text-align: left;
+            }
+        }
+
+        /* --- LOADING STATE --- */
+        .skeleton {
+            background: linear-gradient(90deg, var(--bg-card) 25%, rgba(255, 255, 255, 0.06) 50%, var(--bg-card) 75%);
+            background-size: 200% 100%;
+            animation: skeleton-shimmer 1.5s infinite;
+            border-radius: 6px;
+            height: 16px;
+        }
+
+        @keyframes skeleton-shimmer {
+            0% {
+                background-position: 200% 0;
+            }
+
+            100% {
+                background-position: -200% 0;
+            }
+        }
+
+        /* --- CONFETTI CANVAS --- */
+        #confetti-canvas {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            pointer-events: none;
+            z-index: 100;
+        }
+    </style>
+</head>
+
+<body>
+    <canvas id="confetti-canvas"></canvas>
+
+    <div class="page-wrapper">
+        <!-- NAV -->
+        <nav class="nav animate-in">
+            <div class="nav-logo">Trip With Nomads</div>
+            <div class="nav-badge">✓ Confirmed</div>
+        </nav>
+
+        <!-- HERO -->
+        <div class="hero animate-in delay-1">
+            <div class="hero-icon">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"
+                    stroke-linejoin="round">
+                    <polyline points="20 6 9 17 4 12"></polyline>
+                </svg>
+            </div>
+            <h1>Booking Confirmed!</h1>
+            <p>Your adventure awaits. Here's everything you need to know.</p>
+        </div>
+
+        <!-- BOOKING DETAILS -->
+        <div class="card animate-in delay-2">
+            <div class="card-header">
+                <span class="card-title">Booking Details</span>
+                <span class="badge badge-green">Confirmed</span>
+            </div>
+            <div class="info-grid">
+                <div class="info-row">
+                    <span class="info-label">Booking ID</span>
+                    <span class="info-value mono" id="booking-id">#TWN-2026-0847</span>
+                </div>
+                <div class="info-row">
+                    <span class="info-label">Trip</span>
+                    <span class="info-value" id="trip-name">Kashmir: Heaven on Earth</span>
+                </div>
+                <div class="info-row">
+                    <span class="info-label">Departure</span>
+                    <span class="info-value" id="departure-date">Mar 15 – Mar 22, 2026</span>
+                </div>
+                <div class="info-row">
+                    <span class="info-label">Transport</span>
+                    <span class="info-value" id="transport">Delhi → Srinagar (Included)</span>
+                </div>
+            </div>
+        </div>
+
+        <!-- TRAVELLERS -->
+        <div class="card animate-in delay-3">
+            <div class="card-header">
+                <span class="card-title">Travellers</span>
+                <span class="badge badge-amber" id="traveller-count">2 Travellers</span>
+            </div>
+            <div id="traveller-list">
+                <div class="traveller-item">
+                    <div class="traveller-avatar">YS</div>
+                    <div class="traveller-info">
+                        <div class="traveller-name">Yuvraj Sharma</div>
+                        <div class="traveller-detail">Triple Sharing · yuvraj@email.com</div>
+                    </div>
+                </div>
+                <div class="traveller-item">
+                    <div class="traveller-avatar">RV</div>
+                    <div class="traveller-info">
+                        <div class="traveller-name">Rahul Verma</div>
+                        <div class="traveller-detail">Double Sharing</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- PAYMENT SUMMARY -->
+        <div class="card animate-in delay-4">
+            <div class="card-header">
+                <span class="card-title">Payment Summary</span>
+                <span class="badge badge-green">Paid</span>
+            </div>
+            <div class="info-grid">
+                <div class="info-row">
+                    <span class="info-label">Base Price</span>
+                    <span class="info-value" id="base-price">₹8,499 × 2</span>
+                </div>
+                <div class="info-row">
+                    <span class="info-label">Subtotal</span>
+                    <span class="info-value" id="subtotal">₹16,998</span>
+                </div>
+                <div class="info-row">
+                    <span class="info-label">Tax (2%)</span>
+                    <span class="info-value" id="tax">₹340</span>
+                </div>
+                <div class="divider"></div>
+                <div class="info-row">
+                    <span class="info-label">Total Paid</span>
+                    <span class="info-value highlight" id="total-paid">₹17,338</span>
+                </div>
+                <div class="divider"></div>
+                <div class="info-row">
+                    <span class="info-label">Payment Via</span>
+                    <span class="info-value">PayU</span>
+                </div>
+                <div class="info-row">
+                    <span class="info-label">Transaction ID</span>
+                    <span class="info-value mono" id="txn-id">PAY-9f3a-c7b2</span>
+                </div>
+            </div>
+        </div>
+
+        <!-- NEXT STEPS -->
+        <div class="card animate-in delay-5">
+            <div class="card-header">
+                <span class="card-title">What Happens Next</span>
+            </div>
+            <div class="timeline">
+                <div class="timeline-item">
+                    <div class="timeline-number">1</div>
+                    <div class="timeline-content">
+                        <div class="timeline-title">📧 Confirmation Email Sent</div>
+                        <div class="timeline-desc">Check your inbox for the booking receipt and details.</div>
+                    </div>
+                </div>
+                <div class="timeline-item">
+                    <div class="timeline-number">2</div>
+                    <div class="timeline-content">
+                        <div class="timeline-title">💬 WhatsApp Group Invite</div>
+                        <div class="timeline-desc">You'll be added to the trip group within 24 hours.</div>
+                    </div>
+                </div>
+                <div class="timeline-item">
+                    <div class="timeline-number">3</div>
+                    <div class="timeline-content">
+                        <div class="timeline-title">🎒 Packing Checklist</div>
+                        <div class="timeline-desc">We'll send a detailed packing list 7 days before departure.</div>
+                    </div>
+                </div>
+                <div class="timeline-item">
+                    <div class="timeline-number">4</div>
+                    <div class="timeline-content">
+                        <div class="timeline-title">📍 Meeting Point Details</div>
+                        <div class="timeline-desc">Exact meeting location shared 3 days before departure.</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- BUTTONS -->
+        <div class="btn-group animate-in delay-6">
+            <a class="btn btn-outline" href="#">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4" />
+                    <polyline points="7 10 12 15 17 10" />
+                    <line x1="12" y1="15" x2="12" y2="3" />
+                </svg>
+                Download Receipt
+            </a>
+            <a class="btn btn-solid" href="https://tripwithnomads.com">
+                Explore More Trips →
+            </a>
+        </div>
+
+        <!-- FOOTER -->
+        <div class="footer animate-in delay-6">
+            Questions? Reach us at <a href="mailto:hello@tripwithnomads.com">hello@tripwithnomads.com</a>
+            <br>or call <a href="tel:+919876543210">+91 98765 43210</a>
+        </div>
+    </div>
+
+    <script>
+        // ─────────────────────────────────────────
+        // DYNAMIC DATA STRATEGY
+        //
+        // In Framer, this page receives booking data via URL params:
+        //   ?booking_id=TWN-2026-0847
+        //
+        // The Framer override reads this param, fetches full details
+        // from Supabase, and populates the page.
+        //
+        // For this prototype, data is hardcoded.
+        // The actual Framer override will fetch from:
+        //   GET /rest/v1/bookings?booking_id=eq.{id}
+        // ─────────────────────────────────────────
+
+        // Simple confetti effect
+        (function () {
+            const canvas = document.getElementById('confetti-canvas');
+            const ctx = canvas.getContext('2d');
+            canvas.width = window.innerWidth;
+            canvas.height = window.innerHeight;
+
+            const colors = ['#22c55e', '#6366f1', '#f59e0b', '#a855f7', '#ec4899'];
+            const particles = [];
+
+            for (let i = 0; i < 80; i++) {
+                particles.push({
+                    x: Math.random() * canvas.width,
+                    y: -10 - Math.random() * 200,
+                    w: 6 + Math.random() * 6,
+                    h: 4 + Math.random() * 4,
+                    color: colors[Math.floor(Math.random() * colors.length)],
+                    vx: (Math.random() - 0.5) * 3,
+                    vy: 2 + Math.random() * 3,
+                    rot: Math.random() * Math.PI * 2,
+                    rotSpeed: (Math.random() - 0.5) * 0.2,
+                    opacity: 1,
+                });
+            }
+
+            let frame = 0;
+            function animate() {
+                frame++;
+                ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+                particles.forEach(p => {
+                    p.x += p.vx;
+                    p.y += p.vy;
+                    p.rot += p.rotSpeed;
+                    p.vy += 0.05; // gravity
+
+                    if (frame > 60) p.opacity -= 0.008;
+
+                    ctx.save();
+                    ctx.translate(p.x, p.y);
+                    ctx.rotate(p.rot);
+                    ctx.globalAlpha = Math.max(0, p.opacity);
+                    ctx.fillStyle = p.color;
+                    ctx.fillRect(-p.w / 2, -p.h / 2, p.w, p.h);
+                    ctx.restore();
+                });
+
+                if (particles.some(p => p.opacity > 0)) {
+                    requestAnimationFrame(animate);
+                } else {
+                    canvas.remove();
+                }
+            }
+
+            animate();
+        })();
+    </script>
+</body>
+
+</html>

@@ -1,0 +1,52 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <title>Test Edge Function</title>
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+</head>
+
+<body>
+    <h1>Testing Edge Function...</h1>
+    <div id="result">Waiting...</div>
+    <script>
+        const SUPABASE_URL = "https://jxozzvwvprmnhvafmpsa.supabase.co";
+        const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imp4b3p6dnd2cHJtbmh2YWZtcHNhIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjgwNTg2NjIsImV4cCI6MjA4MzYzNDY2Mn0.KpVa9dWlJEguL1TA00Tf4QDpziJ1mgA2I0f4_l-vlOk";
+
+        async function runTest() {
+            const supabase = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+            const output = document.getElementById('result');
+
+            const payload = {
+                trip_id: "66d08175-8a57-4d7c-ab08-b888aa771693",
+                departure_date: "2026-01-22",
+                transport: "traveller",
+                sharing: "double",
+                name: "Edge Probe",
+                email: "probe@test.com",
+                amount: 23999,
+                phone: "9999999999"
+            };
+
+            try {
+                const { data, error } = await supabase.functions.invoke("create-booking", {
+                    body: payload,
+                });
+
+                if (error) {
+                    // Try to parse the error body if possible
+                    output.innerText = "❌ Error: " + JSON.stringify(error, null, 2);
+                    // Also check if data contains error message (Supabase sometimes returns 200 with error in body for some configs)
+                } else {
+                    output.innerText = "✅ Result: " + JSON.stringify(data, null, 2);
+                }
+            } catch (err) {
+                output.innerText = "❌ Exception: " + err.message;
+            }
+        }
+        runTest();
+    </script>
+</body>
+
+</html>

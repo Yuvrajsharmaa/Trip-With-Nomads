@@ -1,0 +1,46 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <title>Verify Recent Bookings</title>
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+</head>
+
+<body>
+    <h1>Checking Recent Bookings...</h1>
+    <div id="result">Waiting...</div>
+    <script>
+        // Using the credentials provided by the user
+        const SUPABASE_URL = "https://jxozzvwvprmnhvafmpsa.supabase.co";
+        const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imp4b3p6dnd2cHJtbmh2YWZtcHNhIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjgwNTg2NjIsImV4cCI6MjA4MzYzNDY2Mn0.KpVa9dWlJEguL1TA00Tf4QDpziJ1mgA2I0f4_l-vlOk";
+
+        async function checkBookings() {
+            const supabase = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+            const output = document.getElementById('result');
+
+            try {
+                const { data, error } = await supabase
+                    .from("bookings")
+                    .select("*")
+                    .order('created_at', { ascending: false })
+                    .limit(5);
+
+                if (error) {
+                    output.innerText = "❌ Error: " + error.message;
+                    console.error("Supabase Error:", error);
+                } else if (data && data.length > 0) {
+                    output.innerText = "✅ Recent Bookings:\n" + JSON.stringify(data, null, 2);
+                } else {
+                    output.innerText = "❌ No bookings found at all (Table is empty or RLS blocks read).";
+                }
+            } catch (err) {
+                output.innerText = "❌ Exception: " + err.message;
+                console.error("Exception:", err);
+            }
+        }
+        checkBookings();
+    </script>
+</body>
+
+</html>
