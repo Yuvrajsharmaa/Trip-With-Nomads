@@ -35,11 +35,29 @@ serve(async (req) => {
             : (Deno.env.get("PAYU_LIVE_SALT") || Deno.env.get("PAYU_SALT"))
 
         let bookingId = udf1
-        const { data: booking } = await supabase
-            .from("bookings")
-            .select("email, name, total_amount")
-            .eq("id", bookingId)
-            .single()
+        let booking: any = null
+
+        if (bookingId) {
+            const bookingById = await supabase
+                .from("bookings")
+                .select("id, email, name, total_amount")
+                .eq("id", bookingId)
+                .single()
+            booking = bookingById.data
+        }
+
+        // Fallback lookup by txnid when udf1 is missing in gateway callback.
+        if (!bookingId && txnid) {
+            const bookingByTxn = await supabase
+                .from("bookings")
+                .select("id, email, name, total_amount")
+                .eq("payu_txnid", txnid)
+                .order("created_at", { ascending: false })
+                .limit(1)
+                .maybeSingle()
+            booking = bookingByTxn.data
+            if (booking?.id) bookingId = booking.id
+        }
 
         const safeUdf1 = udf1 || ""
         const safeEmail = email || booking?.email || ""
@@ -72,9 +90,12 @@ serve(async (req) => {
                 .eq("id", bookingId)
         }
 
-        const framerBase = "https://twn2.framer.website"
+        const framerBase = (Deno.env.get("FRAMER_BASE_URL") || "https://twn2.framer.website").replace(/\/+$/, "")
         const targetPage = isSuccess ? "payment-success" : "payment-failed"
-        const redirectUrl = `${framerBase}/${targetPage}?booking_id=${bookingId}`
+        const query = new URLSearchParams()
+        if (bookingId) query.set("booking_id", bookingId)
+        if (txnid) query.set("txnid", txnid)
+        const redirectUrl = `${framerBase}/${targetPage}?${query.toString()}`
 
         console.log(`🚀 Redirecting to: ${redirectUrl}`)
         return Response.redirect(redirectUrl, 303)

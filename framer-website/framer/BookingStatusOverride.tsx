@@ -8,7 +8,9 @@ const { useEffect, useRef, useState } = React
 //
 // HOW IT WORKS:
 //   1. handle-payment Edge Function redirects BOTH success
-//      and failure to: /payment-success?booking_id=<UUID>
+//      and failure to:
+//         /payment-success?booking_id=<UUID> or
+//         /payment-failed?booking_id=<UUID>
 //   2. withBookingStatus reads `booking_id` from URL.
 //   3. Fetches the full booking row from Supabase.
 //   4. All overrides adapt based on `payment_status`.
@@ -368,6 +370,10 @@ export function withTripName(Component): ComponentType {
 
 export function withDepartureDate(Component): ComponentType {
     return textOverride((d) => d.departure_date || "—")(Component)
+}
+
+export function withTransportOption(Component): ComponentType {
+    return textOverride((d) => (d.transport ? d.transport : "Seat in Coach"))(Component)
 }
 
 // --- TRAVELLER COUNT BADGE ---

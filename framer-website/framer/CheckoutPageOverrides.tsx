@@ -583,16 +583,8 @@ export function withCheckoutVehicleSelect(Component): ComponentType {
             return () => select.removeEventListener("change", listener)
         }, [store.pricingData, store.date, store.transport, store.travellers])
 
-        const options = getTransportOptions(store.pricingData || [], store.date)
-        const shouldHide = options.length <= 1
-
         return (
-            <div
-                ref={wrapperRef}
-                style={{
-                    display: shouldHide ? "none" : "contents",
-                }}
-            >
+            <div ref={wrapperRef} style={{ display: "contents" }}>
                 <Component {...props} value={store.transport || ""} />
             </div>
         )

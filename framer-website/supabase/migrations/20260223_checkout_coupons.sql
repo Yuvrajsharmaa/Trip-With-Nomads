@@ -43,6 +43,7 @@ BEGIN
 END $$;
 
 ALTER TABLE public.bookings
+    ADD COLUMN IF NOT EXISTS transport TEXT,
     ADD COLUMN IF NOT EXISTS subtotal_amount NUMERIC(12, 2),
     ADD COLUMN IF NOT EXISTS discount_amount NUMERIC(12, 2) NOT NULL DEFAULT 0,
     ADD COLUMN IF NOT EXISTS coupon_code TEXT,
