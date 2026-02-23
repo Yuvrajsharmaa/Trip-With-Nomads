@@ -101,8 +101,10 @@ function fmt(amount: number): string {
 }
 
 function bookingRef(data: any): string {
+    if (!data) return "#—"
     if (data.booking_ref) return "#" + data.booking_ref
     if (!data.id) return "#—"
+    // Fallback: Generate a clean reference from the UUID
     return "#TWN-" + data.id.replace(/-/g, "").slice(0, 8).toUpperCase()
 }
 
@@ -131,6 +133,7 @@ export function withBookingStatus(Component): ComponentType {
                 if (!bookingId) return { error: "No booking_id" }
 
                 try {
+                    // First fetch the booking
                     const res = await fetch(
                         `${SUPABASE_URL}/rest/v1/bookings?id=eq.${bookingId}&select=*`,
                         {
@@ -143,7 +146,33 @@ export function withBookingStatus(Component): ComponentType {
                     if (!res.ok) return { error: "HTTP " + res.status }
                     const rows = await res.json()
                     if (!rows?.length) return { error: "Not found" }
-                    return { data: rows[0] }
+
+                    const booking = rows[0]
+
+                    // Then fetch the trip details since there is no foreign key relation
+                    if (booking.trip_id) {
+                        try {
+                            const tripRes = await fetch(
+                                `${SUPABASE_URL}/rest/v1/trips?id=eq.${booking.trip_id}&select=title`,
+                                {
+                                    headers: {
+                                        apikey: SUPABASE_KEY,
+                                        Authorization: `Bearer ${SUPABASE_KEY}`,
+                                    },
+                                }
+                            )
+                            if (tripRes.ok) {
+                                const tripRows = await tripRes.json()
+                                if (tripRows?.length) {
+                                    booking.trip_title = tripRows[0].title
+                                }
+                            }
+                        } catch (tripErr) {
+                            console.warn("Could not fetch trip details:", tripErr)
+                        }
+                    }
+
+                    return { data: booking }
                 } catch (err) {
                     return { error: String(err) }
                 }
@@ -205,7 +234,8 @@ export function withBookingStatus(Component): ComponentType {
                         if (newStatus !== _data.payment_status) {
                             console.log("[BookingStatus] Status changed:", newStatus)
                             _data = result.data
-                            if (_data.trip_title) result.data.trip_title = _data.trip_title // preserve title
+                            // Ensure trip_title is preserved
+                            if (result.data.trip_title) _data.trip_title = result.data.trip_title
                             notify()
                         }
 
@@ -302,7 +332,7 @@ function textOverride(getter: (d: BookingData) => string, fallback = "—") {
 // --- BOOKING DETAILS CARD ---
 
 export function withBookingId(Component): ComponentType {
-    return textOverride((d) => bookingRef(d.id))(Component)
+    return textOverride((d) => bookingRef(d))(Component)
 }
 
 export function withTripName(Component): ComponentType {

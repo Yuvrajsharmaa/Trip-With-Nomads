@@ -11,8 +11,9 @@ const SUPABASE_KEY =
 const TAX_RATE = 0.02
 
 // --- CONTEXT ---
-// TravellerContext provides the current index for components inside the withTravellerList repeater.
-const TravellerContext = createContext<number | null>(null)
+// TravellerContext provides stable traveller identity and visual index for Step 2 row overrides.
+type TravellerContextValue = { id: number; index: number }
+const TravellerContext = createContext<TravellerContextValue | null>(null)
 
 // --- STORE ---
 const useStore = createStore({
@@ -109,6 +110,34 @@ function computeTotals(store: any) {
 
     const tax = subtotal * TAX_RATE
     return { subtotal, tax, total: subtotal + tax, breakdown }
+}
+
+function normalizeTravellerId(id: any, index: number): number {
+    const parsed = Number(id)
+    if (Number.isFinite(parsed) && parsed > 0) return parsed
+    return index + 1
+}
+
+function getTravellerByContext(store: any, ctx: TravellerContextValue | null) {
+    const travellers = store?.travellers || []
+    if (!ctx) return null
+    const byId = travellers.find((t: any) => Number(t?.id) === ctx.id)
+    if (byId) return byId
+    return travellers[ctx.index] || null
+}
+
+function updateTravellerById(store: any, id: number, patch: Record<string, any>) {
+    const list = [...(store?.travellers || [])]
+    const idx = list.findIndex((t: any) => Number(t?.id) === id)
+    if (idx !== -1) {
+        list[idx] = { ...list[idx], ...patch }
+    }
+    return list
+}
+
+function removeTravellerById(store: any, id: number) {
+    const list = [...(store?.travellers || [])]
+    return list.filter((t: any) => Number(t?.id) !== id)
 }
 
 // =====================================================
@@ -214,15 +243,36 @@ export function withTravellerList(Component): ComponentType {
         if (store.step !== 2) return <Component {...props} style={{ ...props.style, display: "none" }} />
 
         const travellers = store.travellers || []
+        const template = React.Children.toArray(props.children).find((child) =>
+            React.isValidElement(child)
+        ) as React.ReactElement | undefined
+
         return (
-            <Component {...props} style={{ ...props.style, height: "auto", overflow: "visible" }}>
-                {travellers.map((_: any, index: number) => (
-                    <TravellerContext.Provider key={index} value={index}>
-                        {React.Children.map(props.children, (child) =>
-                            React.cloneElement(child, { key: `${index}-${child.key || index}` })
-                        )}
-                    </TravellerContext.Provider>
-                ))}
+            <Component
+                {...props}
+                style={{
+                    ...props.style,
+                    display: "flex",
+                    flexDirection: "column",
+                    gap: "16px",
+                    height: "auto",
+                    overflow: "visible",
+                }}
+            >
+                {template
+                    ? travellers.map((item: any, index: number) => {
+                        const travellerId = normalizeTravellerId(item?.id, index)
+                        return (
+                            <TravellerContext.Provider key={travellerId} value={{ id: travellerId, index }}>
+                                {React.cloneElement(template, { key: `traveller-${travellerId}` })}
+                            </TravellerContext.Provider>
+                        )
+                    })
+                    : React.Children.map(props.children, (child) => (
+                        <React.Fragment key={(child as any)?.key || "traveller-fallback"}>
+                            {child}
+                        </React.Fragment>
+                    ))}
             </Component>
         )
     }
@@ -232,16 +282,13 @@ export function withTravellerList(Component): ComponentType {
 export function withTravellerName(Component): ComponentType {
     return (props: any) => {
         const [store, setStore] = useStore()
-        const index = useContext(TravellerContext)
-        if (index === null) return <Component {...props} />
+        const ctx = useContext(TravellerContext)
+        if (ctx === null) return <Component {...props} />
 
-        const traveller = (store.travellers || [])[index] || {}
+        const traveller = getTravellerByContext(store, ctx) || {}
         const handleChange = (value: string) => {
-            const list = [...(store.travellers || [])]
-            if (list[index]) {
-                list[index] = { ...list[index], name: value }
-                setStore({ travellers: list })
-            }
+            const list = updateTravellerById(store, ctx.id, { name: value })
+            setStore({ travellers: list })
         }
 
         return (
@@ -259,9 +306,9 @@ export function withTravellerName(Component): ComponentType {
 // withTravellerLabel: Displays "TRAVELLER 1", "TRAVELLER 2", etc.
 export function withTravellerLabel(Component): ComponentType {
     return (props: any) => {
-        const index = useContext(TravellerContext)
-        if (index === null) return <Component {...props} />
-        return <Component {...props} text={`TRAVELLER ${index + 1}`} />
+        const ctx = useContext(TravellerContext)
+        if (ctx === null) return <Component {...props} />
+        return <Component {...props} text={`TRAVELLER ${ctx.index + 1}`} />
     }
 }
 
@@ -269,7 +316,7 @@ export function withTravellerLabel(Component): ComponentType {
 export function withTravellerSharingKey(Component): ComponentType {
     return (props: any) => {
         const [store, setStore] = useStore()
-        const index = useContext(TravellerContext)
+        const ctx = useContext(TravellerContext)
         const wrapperRef = useRef<HTMLDivElement>(null)
 
         const options = useMemo(() => {
@@ -278,30 +325,31 @@ export function withTravellerSharingKey(Component): ComponentType {
             return [...new Set(pd.filter((d: any) => d.start_date === store.date).map((d: any) => d.variant_name))].sort()
         }, [store.date, store.pricingData])
 
-        if (index === null) return <Component {...props} />
+        if (ctx === null) return <Component {...props} />
 
-        const traveller = (store.travellers || [])[index] || {}
+        const traveller = getTravellerByContext(store, ctx) || {}
 
         const handleChange = (val: string) => {
-            const list = [...(store.travellers || [])]
-            if (list[index]) {
-                list[index] = { ...list[index], sharing: val }
-                setStore({ travellers: list })
-            }
+            const list = updateTravellerById(store, ctx.id, { sharing: val })
+            setStore({ travellers: list })
         }
 
         useEffect(() => {
             if (!wrapperRef.current || options.length === 0) return
             const select = wrapperRef.current.querySelector("select") as HTMLSelectElement
-            if (select && select.getAttribute("data-populated") !== "true") {
-                populateDropdown(select, options, (s) => s.charAt(0).toUpperCase() + s.slice(1))
+            if (select) {
+                // Always populate if options changed or not yet populated
+                if (select.getAttribute("data-populated") !== JSON.stringify(options)) {
+                    populateDropdown(select, options, (s) => s.charAt(0).toUpperCase() + s.slice(1))
+                    select.setAttribute("data-populated", JSON.stringify(options))
+                }
                 select.value = traveller.sharing || ""
 
                 const listener = () => handleChange(select.value)
                 select.addEventListener("change", listener)
                 return () => select.removeEventListener("change", listener)
             }
-        }, [index, options])
+        }, [ctx.id, ctx.index, options, traveller.sharing])
 
         return (
             <div ref={wrapperRef} style={{ display: "contents" }}>
@@ -315,9 +363,9 @@ export function withTravellerSharingKey(Component): ComponentType {
 export function withRemoveTraveller(Component): ComponentType {
     return (props: any) => {
         const [store, setStore] = useStore()
-        const index = useContext(TravellerContext)
+        const ctx = useContext(TravellerContext)
 
-        if (index === null || index === 0) {
+        if (ctx === null || ctx.index === 0) {
             // Don't show remove button for the first guest
             return <Component {...props} style={{ ...props.style, opacity: 0, pointerEvents: "none" }} />
         }
@@ -326,8 +374,7 @@ export function withRemoveTraveller(Component): ComponentType {
             <Component
                 {...props}
                 onClick={() => {
-                    const list = [...(store.travellers || [])]
-                    list.splice(index, 1)
+                    const list = removeTravellerById(store, ctx.id)
                     setStore({ travellers: list })
                 }}
             />
@@ -345,7 +392,9 @@ export function withAddTraveller(Component): ComponentType {
             <Component
                 {...props}
                 onClick={() => {
-                    const list = [...(store.travellers || []), { id: Date.now(), name: "", sharing: "" }]
+                    const travellers = store.travellers || []
+                    const nextId = Math.max(0, ...travellers.map((t: any) => Number(t?.id) || 0)) + 1
+                    const list = [...travellers, { id: nextId, name: "", sharing: "" }]
                     setStore({ travellers: list })
                 }}
             />
@@ -653,7 +702,15 @@ export function withNextButton(Component): ComponentType {
         const handleClick = () => {
             if (!isValid) return
             const travellers = [...(store.travellers || [])]
-            if (travellers.length > 0) travellers[0] = { ...travellers[0], name: store.contactName.trim() }
+
+            // Sync contact name to Traveller 1 ONLY IF Traveller 1 name is empty
+            if (travellers.length > 0) {
+                const existingName = travellers[0].name?.trim()
+                if (!existingName || existingName === "") {
+                    travellers[0] = { ...travellers[0], name: store.contactName.trim() }
+                }
+            }
+
             setStore({ step: 2, travellers })
         }
 

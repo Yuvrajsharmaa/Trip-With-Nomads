@@ -1,0 +1,69 @@
+name: Task
+about: Track engineering/product work with clear acceptance criteria.
+title: "[Task] "
+labels:
+  - task
+body:
+  - type: textarea
+    id: scope
+    attributes:
+      label: Scope
+      description: What is included in this task and what is explicitly out of scope.
+      placeholder: |
+        In scope:
+        - ...
+
+        Out of scope:
+        - ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: Acceptance Criteria
+      description: Specific measurable outcomes required to close this issue.
+      placeholder: |
+        - [ ] ...
+        - [ ] ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: implementation_notes
+    attributes:
+      label: Implementation Notes
+      description: APIs, data contracts, edge cases, migration notes, and rollout constraints.
+      placeholder: |
+        - API changes:
+        - Data model:
+        - Risks/edge cases:
+
+  - type: textarea
+    id: test_evidence
+    attributes:
+      label: Test Plan / Evidence
+      description: Tests to run and evidence expected before marking done.
+      placeholder: |
+        - Unit:
+        - Integration:
+        - Manual QA:
+    validations:
+      required: true
+
+  - type: textarea
+    id: rollout
+    attributes:
+      label: Rollout and Monitoring
+      description: Deployment steps, observability, and rollback plan.
+      placeholder: |
+        - Rollout steps:
+        - Metrics/logs to watch:
+        - Rollback:
+
+  - type: input
+    id: project_item
+    attributes:
+      label: Linked Project Item
+      description: Project board and card identifier (if already created).
+      placeholder: "Trip-With-Nomads Kanban / issue #"
