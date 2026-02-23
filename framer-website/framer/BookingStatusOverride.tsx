@@ -55,8 +55,13 @@ interface BookingData {
     id: string
     trip_id: string
     departure_date: string
+    transport?: string
     travellers: Array<{ name: string; sharing: string }>
     payment_breakdown: Array<{ label: string; price: number; variant?: string; count?: number }>
+    subtotal_amount?: number
+    discount_amount?: number
+    coupon_code?: string | null
+    coupon_snapshot?: any
     tax_amount: number
     total_amount: number
     currency: string
@@ -98,6 +103,28 @@ function useBooking(): [BookingData | null, LoadState] {
 
 function fmt(amount: number): string {
     return "₹" + amount.toLocaleString("en-IN")
+}
+
+function toNumber(value: any): number {
+    const parsed = Number(value)
+    return Number.isFinite(parsed) ? parsed : 0
+}
+
+function subtotalBeforeDiscount(d: BookingData): number {
+    const explicit = toNumber((d as any).subtotal_amount)
+    if (explicit > 0) return explicit
+
+    const fallbackDiscounted = toNumber(d.total_amount) - toNumber(d.tax_amount)
+    const discount = Math.max(0, toNumber((d as any).discount_amount))
+    return Math.max(0, fallbackDiscounted + discount)
+}
+
+function discountAmount(d: BookingData): number {
+    return Math.max(0, toNumber((d as any).discount_amount))
+}
+
+function discountedSubtotal(d: BookingData): number {
+    return Math.max(0, subtotalBeforeDiscount(d) - discountAmount(d))
 }
 
 function bookingRef(data: any): string {
@@ -356,9 +383,10 @@ export function withTravellerCount(Component): ComponentType {
 
 export function withBasePrice(Component): ComponentType {
     return textOverride((d) => {
-        const breakdown = d.payment_breakdown || []
+        const breakdown = (d.payment_breakdown || []).filter(
+            (item) => String(item?.variant || "").toLowerCase() !== "coupon"
+        )
         if (breakdown.length === 0) return fmt(d.total_amount - d.tax_amount)
-        const totalItems = breakdown.reduce((sum, b) => sum + (b.count || 1), 0)
         if (breakdown.length === 1) {
             const b = breakdown[0]
             const count = b.count || 1
@@ -374,7 +402,22 @@ export function withBasePrice(Component): ComponentType {
 }
 
 export function withSubtotal(Component): ComponentType {
-    return textOverride((d) => fmt(d.total_amount - d.tax_amount))(Component)
+    return textOverride((d) => fmt(discountedSubtotal(d)))(Component)
+}
+
+export function withSubtotalBeforeDiscount(Component): ComponentType {
+    return textOverride((d) => fmt(subtotalBeforeDiscount(d)))(Component)
+}
+
+export function withDiscountAmount(Component): ComponentType {
+    return textOverride((d) => `- ${fmt(discountAmount(d))}`)(Component)
+}
+
+export function withCouponCode(Component): ComponentType {
+    return textOverride((d) => {
+        const code = (d as any).coupon_code
+        return code ? String(code).toUpperCase() : "No coupon"
+    })(Component)
 }
 
 export function withTaxAmount(Component): ComponentType {
@@ -647,4 +690,3 @@ export function withHideOnFailure(Component): ComponentType {
         return <Component {...props} />
     }
 }
-
