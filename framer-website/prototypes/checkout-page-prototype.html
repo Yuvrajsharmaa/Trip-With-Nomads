@@ -1,0 +1,732 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>TWN Checkout Prototype</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=DM+Sans:opsz,wght@9..40,400;500;700&family=Manrope:wght@400;600;700;800&display=swap" rel="stylesheet">
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: {
+                        primary: "#1B91C9"
+                    },
+                    fontFamily: {
+                        sans: ["DM Sans", "sans-serif"],
+                        heading: ["Manrope", "sans-serif"]
+                    }
+                }
+            }
+        }
+    </script>
+    <style>
+        :root {
+            --demo-width: 100%;
+        }
+
+        body {
+            background: #f5f5f5;
+        }
+
+        #demo-shell {
+            width: var(--demo-width);
+            margin-inline: auto;
+            transition: width .2s ease;
+        }
+
+        .no-scrollbar::-webkit-scrollbar {
+            display: none;
+        }
+
+        .no-scrollbar {
+            -ms-overflow-style: none;
+            scrollbar-width: none;
+        }
+    </style>
+</head>
+
+<body class="font-sans text-[#202020]">
+    <div class="fixed top-3 right-3 z-50 flex items-center gap-2 rounded-xl border border-gray-200 bg-white px-2 py-1 shadow-sm text-xs">
+        <span class="text-gray-500">Viewport</span>
+        <button class="rounded-md px-2 py-1 hover:bg-gray-100" data-vw="390">390</button>
+        <button class="rounded-md px-2 py-1 hover:bg-gray-100" data-vw="768">768</button>
+        <button class="rounded-md px-2 py-1 hover:bg-gray-100" data-vw="1280">1280</button>
+        <button class="rounded-md px-2 py-1 hover:bg-gray-100" data-vw="full">Full</button>
+    </div>
+
+    <div id="demo-shell">
+        <nav class="sticky top-0 z-30 border-b border-gray-200 bg-white/95 backdrop-blur">
+            <div class="mx-auto flex h-16 max-w-6xl items-center justify-between px-4 sm:px-6">
+                <div class="font-heading text-2xl font-bold tracking-tight text-primary">TWN</div>
+                <div class="text-sm font-medium text-gray-500">Secure Checkout</div>
+            </div>
+        </nav>
+
+        <main class="mx-auto max-w-6xl px-4 pb-28 pt-6 sm:px-6 sm:pt-8">
+            <div class="mb-6">
+                <p class="text-sm text-gray-500">Checkout</p>
+                <h1 id="trip-title" class="font-heading text-4xl font-extrabold tracking-tight">Book your spot</h1>
+                <p class="mt-2 text-gray-600" id="trip-subline">Complete details to continue to payment.</p>
+            </div>
+
+            <div class="grid grid-cols-1 gap-6 lg:grid-cols-12 lg:gap-8">
+                <section class="space-y-5 lg:col-span-8">
+                    <article class="rounded-3xl border border-gray-200 bg-white p-5 sm:p-6">
+                        <h2 class="font-heading text-2xl font-bold">Trip configuration</h2>
+                        <div class="mt-5 grid grid-cols-1 gap-4 sm:grid-cols-2">
+                            <label class="space-y-2">
+                                <span class="text-sm font-semibold text-gray-700">Departure date</span>
+                                <select id="departure-date"
+                                    class="w-full rounded-xl border border-gray-200 bg-gray-50 px-4 py-3 outline-none focus:border-primary focus:ring-2 focus:ring-primary/20">
+                                </select>
+                            </label>
+                            <label id="vehicle-wrap" class="space-y-2">
+                                <span class="text-sm font-semibold text-gray-700">Vehicle option</span>
+                                <select id="vehicle-option"
+                                    class="w-full rounded-xl border border-gray-200 bg-gray-50 px-4 py-3 outline-none focus:border-primary focus:ring-2 focus:ring-primary/20">
+                                </select>
+                            </label>
+                            <div class="rounded-xl border border-gray-100 bg-gray-50 px-4 py-3">
+                                <p class="text-xs font-semibold uppercase tracking-wider text-gray-500">Trip ID</p>
+                                <p id="trip-id" class="mt-1 font-mono text-sm text-gray-700"></p>
+                            </div>
+                        </div>
+                    </article>
+
+                    <article class="rounded-3xl border border-gray-200 bg-white p-5 sm:p-6">
+                        <div class="mb-4 flex items-center justify-between gap-2">
+                            <h2 class="font-heading text-2xl font-bold">Traveller details</h2>
+                            <span id="traveller-count" class="rounded-full bg-gray-100 px-3 py-1 text-xs font-semibold text-gray-600">1 traveller</span>
+                        </div>
+                        <div id="traveller-list" class="space-y-4"></div>
+                        <button id="add-guest"
+                            class="mt-4 w-full rounded-xl border-2 border-dashed border-gray-300 py-3 text-lg font-medium text-gray-700 transition hover:border-primary hover:text-primary">
+                            Add Guests
+                        </button>
+                    </article>
+
+                    <article class="rounded-3xl border border-gray-200 bg-white p-5 sm:p-6">
+                        <h2 class="font-heading text-2xl font-bold">Contact details</h2>
+                        <div class="mt-5 grid grid-cols-1 gap-4 sm:grid-cols-2">
+                            <label class="space-y-2">
+                                <span class="text-sm font-semibold text-gray-700">Your name</span>
+                                <input id="contact-name" type="text" placeholder="Your full name"
+                                    class="w-full rounded-xl border border-gray-200 bg-gray-50 px-4 py-3 outline-none focus:border-primary focus:ring-2 focus:ring-primary/20" />
+                            </label>
+                            <label class="space-y-2">
+                                <span class="text-sm font-semibold text-gray-700">Phone</span>
+                                <input id="contact-phone" type="tel" placeholder="Your phone"
+                                    class="w-full rounded-xl border border-gray-200 bg-gray-50 px-4 py-3 outline-none focus:border-primary focus:ring-2 focus:ring-primary/20" />
+                            </label>
+                        </div>
+                        <label class="mt-4 block space-y-2">
+                            <span class="text-sm font-semibold text-gray-700">Email</span>
+                            <input id="contact-email" type="email" placeholder="your@email.com"
+                                class="w-full rounded-xl border border-gray-200 bg-gray-50 px-4 py-3 outline-none focus:border-primary focus:ring-2 focus:ring-primary/20" />
+                        </label>
+                    </article>
+
+                    <article class="rounded-3xl border border-gray-200 bg-white p-5 sm:p-6">
+                        <h2 class="font-heading text-2xl font-bold">Coupon</h2>
+                        <p class="mt-1 text-sm text-gray-500">Single coupon only. Discount applies before tax.</p>
+                        <div class="mt-4 flex flex-col gap-3 sm:flex-row">
+                            <input id="coupon-code" type="text" placeholder="Enter coupon code"
+                                class="w-full rounded-xl border border-gray-200 bg-gray-50 px-4 py-3 uppercase outline-none focus:border-primary focus:ring-2 focus:ring-primary/20" />
+                            <button id="apply-coupon"
+                                class="rounded-xl bg-primary px-5 py-3 font-semibold text-white transition hover:bg-[#157da3]">Apply</button>
+                            <button id="remove-coupon"
+                                class="hidden rounded-xl border border-red-300 px-5 py-3 font-semibold text-red-600 transition hover:bg-red-50">Remove</button>
+                        </div>
+                        <p id="coupon-message" class="mt-3 text-sm text-gray-500">No coupon applied.</p>
+                    </article>
+                </section>
+
+                <aside class="lg:col-span-4">
+                    <div class="rounded-3xl border border-gray-200 bg-white p-5 shadow-sm lg:sticky lg:top-24">
+                        <h2 class="font-heading text-2xl font-bold">Payment summary</h2>
+                        <div class="mt-5 space-y-3 text-sm">
+                            <div class="flex items-center justify-between text-gray-600">
+                                <span>Subtotal</span>
+                                <span id="summary-subtotal">₹0</span>
+                            </div>
+                            <div class="flex items-center justify-between text-gray-600">
+                                <span id="summary-discount-label">Discount</span>
+                                <span id="summary-discount">- ₹0</span>
+                            </div>
+                            <div class="flex items-center justify-between text-gray-600">
+                                <span>Tax (2%)</span>
+                                <span id="summary-tax">₹0</span>
+                            </div>
+                            <div class="border-t border-gray-200 pt-3">
+                                <div class="flex items-center justify-between">
+                                    <span class="text-lg font-bold">Total</span>
+                                    <span id="summary-total" class="font-heading text-3xl font-extrabold text-primary">₹0</span>
+                                </div>
+                            </div>
+                        </div>
+
+                        <button id="pay-now"
+                            class="mt-5 w-full rounded-xl bg-primary py-3 text-lg font-semibold text-white transition hover:bg-[#157da3] disabled:cursor-not-allowed disabled:opacity-50">Pay
+                            now</button>
+                        <p id="pay-hint" class="mt-3 text-center text-xs text-gray-500">Fill date, all traveller fields, and contact info.</p>
+                    </div>
+                </aside>
+            </div>
+        </main>
+
+        <div class="fixed inset-x-0 bottom-0 z-40 border-t border-gray-200 bg-white/95 px-4 py-3 backdrop-blur md:hidden">
+            <div class="mx-auto flex max-w-6xl items-center justify-between gap-3">
+                <div>
+                    <p class="text-xs text-gray-500">Total payable</p>
+                    <p id="mobile-total" class="font-heading text-2xl font-extrabold text-primary">₹0</p>
+                </div>
+                <button id="mobile-pay"
+                    class="rounded-xl bg-primary px-5 py-3 text-base font-semibold text-white disabled:cursor-not-allowed disabled:opacity-50">Pay
+                    now</button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const TAX_RATE = 0.02
+
+        const TRIPS = {
+            "trip-spiti-001": { id: "trip-spiti-001", slug: "winter-spiti-expedition", title: "Winter Spiti Expedition" },
+            "trip-kashmir-001": { id: "trip-kashmir-001", slug: "kashmir-heaven-on-earth", title: "Kashmir: Heaven on Earth" },
+            "trip-thailand-001": { id: "trip-thailand-001", slug: "thailand-full-moon-party", title: "Thailand Full Moon Party" },
+        }
+
+        const PRICING_DATA = [
+            { trip_id: "trip-spiti-001", start_date: "2026-12-15", transport: "Seat in Coach", variant_name: "Double Sharing", price: 18499 },
+            { trip_id: "trip-spiti-001", start_date: "2026-12-15", transport: "Seat in Coach", variant_name: "Triple Sharing", price: 17499 },
+            { trip_id: "trip-spiti-001", start_date: "2026-12-15", transport: "RE Himalayan Solo", variant_name: "Double Sharing", price: 24499 },
+            { trip_id: "trip-spiti-001", start_date: "2026-12-15", transport: "RE Himalayan Solo", variant_name: "Triple Sharing", price: 23499 },
+            { trip_id: "trip-spiti-001", start_date: "2026-12-15", transport: "RE Himalayan Double", variant_name: "Double Sharing", price: 21499 },
+            { trip_id: "trip-spiti-001", start_date: "2026-12-15", transport: "RE Himalayan Double", variant_name: "Triple Sharing", price: 20499 },
+            { trip_id: "trip-spiti-001", start_date: "2027-01-10", transport: "Seat in Coach", variant_name: "Double Sharing", price: 19499 },
+            { trip_id: "trip-spiti-001", start_date: "2027-01-10", transport: "Seat in Coach", variant_name: "Triple Sharing", price: 18499 },
+            { trip_id: "trip-kashmir-001", start_date: "2026-12-15", transport: "Seat in Coach", variant_name: "Double Sharing", price: 12999 },
+            { trip_id: "trip-kashmir-001", start_date: "2026-12-15", transport: "Seat in Coach", variant_name: "Triple Sharing", price: 11999 },
+            { trip_id: "trip-thailand-001", start_date: "2027-02-05", transport: "Seat in Coach", variant_name: "Double Sharing", price: 39999 },
+            { trip_id: "trip-thailand-001", start_date: "2027-02-05", transport: "Seat in Coach", variant_name: "Triple Sharing", price: 34999 },
+        ]
+
+        const COUPONS = {
+            "WELCOME10": {
+                code: "WELCOME10",
+                is_active: true,
+                discount_type: "percent",
+                discount_value: 10,
+                max_discount: 5000,
+                min_subtotal: 20000,
+                starts_at: "2026-01-01T00:00:00.000Z",
+                ends_at: "2028-01-01T00:00:00.000Z",
+                applicable_trip_ids: [],
+            },
+            "SPITI500": {
+                code: "SPITI500",
+                is_active: true,
+                discount_type: "fixed",
+                discount_value: 500,
+                max_discount: null,
+                min_subtotal: 10000,
+                starts_at: "2026-01-01T00:00:00.000Z",
+                ends_at: "2028-01-01T00:00:00.000Z",
+                applicable_trip_ids: ["trip-spiti-001"],
+            },
+            "EXPIRED10": {
+                code: "EXPIRED10",
+                is_active: true,
+                discount_type: "percent",
+                discount_value: 10,
+                max_discount: null,
+                min_subtotal: 10000,
+                starts_at: "2022-01-01T00:00:00.000Z",
+                ends_at: "2023-01-01T00:00:00.000Z",
+                applicable_trip_ids: [],
+            }
+        }
+
+        const els = {
+            tripTitle: document.getElementById("trip-title"),
+            tripSubline: document.getElementById("trip-subline"),
+            tripId: document.getElementById("trip-id"),
+            departureDate: document.getElementById("departure-date"),
+            vehicleWrap: document.getElementById("vehicle-wrap"),
+            vehicleOption: document.getElementById("vehicle-option"),
+            travellerCount: document.getElementById("traveller-count"),
+            travellerList: document.getElementById("traveller-list"),
+            addGuest: document.getElementById("add-guest"),
+            contactName: document.getElementById("contact-name"),
+            contactPhone: document.getElementById("contact-phone"),
+            contactEmail: document.getElementById("contact-email"),
+            couponCode: document.getElementById("coupon-code"),
+            applyCoupon: document.getElementById("apply-coupon"),
+            removeCoupon: document.getElementById("remove-coupon"),
+            couponMessage: document.getElementById("coupon-message"),
+            summarySubtotal: document.getElementById("summary-subtotal"),
+            summaryDiscount: document.getElementById("summary-discount"),
+            summaryDiscountLabel: document.getElementById("summary-discount-label"),
+            summaryTax: document.getElementById("summary-tax"),
+            summaryTotal: document.getElementById("summary-total"),
+            payNow: document.getElementById("pay-now"),
+            payHint: document.getElementById("pay-hint"),
+            mobileTotal: document.getElementById("mobile-total"),
+            mobilePay: document.getElementById("mobile-pay"),
+        }
+
+        const state = {
+            tripId: "trip-spiti-001",
+            slug: "winter-spiti-expedition",
+            date: "",
+            vehicle: "",
+            travellers: [{ id: 1, name: "", sharing: "" }],
+            contactName: "",
+            contactPhone: "",
+            contactEmail: "",
+            couponCodeInput: "",
+            appliedCoupon: null,
+        }
+
+        function parseQuery() {
+            const q = new URLSearchParams(window.location.search)
+            const tripIdFromQuery = q.get("tripId") || q.get("trip_id") || ""
+            const slugFromQuery = q.get("slug") || ""
+            const dateFromQuery = q.get("date") || ""
+            const vehicleFromQuery = q.get("vehicle") || q.get("transport") || ""
+
+            let trip = TRIPS[tripIdFromQuery] || null
+            if (!trip && slugFromQuery) {
+                trip = Object.values(TRIPS).find((t) => t.slug === slugFromQuery) || null
+            }
+            if (!trip) trip = TRIPS["trip-spiti-001"]
+
+            state.tripId = trip.id
+            state.slug = trip.slug
+            state.date = dateFromQuery
+            state.vehicle = vehicleFromQuery
+        }
+
+        function formatINR(value) {
+            const safe = Number(value) || 0
+            return "₹" + safe.toLocaleString("en-IN", { maximumFractionDigits: 2 })
+        }
+
+        function round2(value) {
+            return Math.round((Number(value) + Number.EPSILON) * 100) / 100
+        }
+
+        function getTripRows() {
+            return PRICING_DATA.filter((row) => row.trip_id === state.tripId)
+        }
+
+        function getDateOptions() {
+            const rows = getTripRows()
+            return [...new Set(rows.map((r) => r.start_date))].sort()
+        }
+
+        function getVehicleOptions() {
+            const rows = getTripRows().filter((r) => !state.date || r.start_date === state.date)
+            const vehicles = [...new Set(rows.map((r) => r.transport || "Seat in Coach"))].sort()
+            return vehicles.length ? vehicles : ["Seat in Coach"]
+        }
+
+        function getSharingOptions() {
+            if (!state.date) return []
+            const rows = getTripRows().filter((r) => r.start_date === state.date && (r.transport || "Seat in Coach") === state.vehicle)
+            return [...new Set(rows.map((r) => r.variant_name))].sort()
+        }
+
+        function getPriceForSharing(sharing) {
+            if (!sharing || !state.date) return 0
+            const row = getTripRows().find((r) => r.start_date === state.date && (r.transport || "Seat in Coach") === state.vehicle && r.variant_name === sharing)
+            return Number(row?.price) || 0
+        }
+
+        function calcTotals() {
+            let subtotal = 0
+            for (const t of state.travellers) {
+                subtotal += getPriceForSharing(t.sharing)
+            }
+
+            let discount = 0
+            let couponLabel = "Discount"
+            if (state.appliedCoupon?.valid) {
+                const c = state.appliedCoupon
+                discount = c.discount_amount || 0
+                couponLabel = `Discount (${c.code})`
+            }
+
+            if (discount > subtotal) discount = subtotal
+            const taxable = Math.max(0, subtotal - discount)
+            const tax = round2(taxable * TAX_RATE)
+            const total = round2(taxable + tax)
+
+            return {
+                subtotal: round2(subtotal),
+                discount: round2(discount),
+                tax,
+                total,
+                couponLabel,
+            }
+        }
+
+        function validateCouponMock(code) {
+            const normalized = (code || "").trim().toUpperCase()
+            const now = new Date().toISOString()
+            const coupon = COUPONS[normalized]
+            const subtotal = calcTotals().subtotal
+
+            if (!normalized) {
+                return { valid: false, message: "Enter a coupon code." }
+            }
+            if (!coupon || !coupon.is_active) {
+                return { valid: false, message: "Invalid coupon code." }
+            }
+            if (coupon.starts_at && now < coupon.starts_at) {
+                return { valid: false, message: "Coupon is not active yet." }
+            }
+            if (coupon.ends_at && now > coupon.ends_at) {
+                return { valid: false, message: "Coupon has expired." }
+            }
+            if ((coupon.applicable_trip_ids || []).length > 0 && !coupon.applicable_trip_ids.includes(state.tripId)) {
+                return { valid: false, message: "Coupon is not applicable to this trip." }
+            }
+            if (subtotal < (coupon.min_subtotal || 0)) {
+                return { valid: false, message: `Minimum subtotal ${formatINR(coupon.min_subtotal)} required.` }
+            }
+
+            let discountAmount = 0
+            if (coupon.discount_type === "percent") {
+                discountAmount = round2(subtotal * (Number(coupon.discount_value) / 100))
+                if (coupon.max_discount != null) {
+                    discountAmount = Math.min(discountAmount, Number(coupon.max_discount))
+                }
+            } else {
+                discountAmount = round2(Number(coupon.discount_value) || 0)
+            }
+
+            discountAmount = Math.min(discountAmount, subtotal)
+
+            return {
+                valid: true,
+                code: coupon.code,
+                discount_type: coupon.discount_type,
+                discount_value: Number(coupon.discount_value),
+                discount_amount: discountAmount,
+                min_subtotal: Number(coupon.min_subtotal || 0),
+                message: `Coupon ${coupon.code} applied successfully.`,
+            }
+        }
+
+        function clearCoupon(message = "Coupon removed.") {
+            state.appliedCoupon = null
+            els.removeCoupon.classList.add("hidden")
+            els.couponMessage.className = "mt-3 text-sm text-gray-500"
+            els.couponMessage.textContent = message
+            renderSummary()
+        }
+
+        function ensureDateSelection() {
+            const options = getDateOptions()
+            if (!options.length) {
+                state.date = ""
+                return
+            }
+            if (!state.date || !options.includes(state.date)) {
+                state.date = options[0]
+            }
+
+            const vehicleOptions = getVehicleOptions()
+            if (!state.vehicle || !vehicleOptions.includes(state.vehicle)) {
+                state.vehicle = vehicleOptions[0]
+            }
+        }
+
+        function renderHeader() {
+            const trip = TRIPS[state.tripId]
+            els.tripTitle.textContent = trip?.title || "Book your spot"
+            els.tripSubline.textContent = `Checkout for ${trip?.title || "selected trip"}`
+            els.tripId.textContent = state.tripId
+        }
+
+        function renderDateSelect() {
+            const options = getDateOptions()
+            els.departureDate.innerHTML = ""
+            for (const value of options) {
+                const opt = document.createElement("option")
+                opt.value = value
+                opt.textContent = value
+                els.departureDate.appendChild(opt)
+            }
+            if (state.date && options.includes(state.date)) {
+                els.departureDate.value = state.date
+            } else if (options.length) {
+                state.date = options[0]
+                els.departureDate.value = options[0]
+            }
+        }
+
+        function renderVehicleSelect() {
+            const options = getVehicleOptions()
+            els.vehicleOption.innerHTML = ""
+
+            for (const value of options) {
+                const opt = document.createElement("option")
+                opt.value = value
+                opt.textContent = value
+                els.vehicleOption.appendChild(opt)
+            }
+
+            if (!state.vehicle || !options.includes(state.vehicle)) {
+                state.vehicle = options[0] || ""
+            }
+
+            els.vehicleOption.value = state.vehicle
+            els.vehicleWrap.classList.toggle("hidden", options.length <= 1)
+        }
+
+        function renderTravellers() {
+            const sharingOptions = getSharingOptions()
+            els.travellerList.innerHTML = ""
+
+            state.travellers.forEach((traveller, index) => {
+                const row = document.createElement("div")
+                row.className = "rounded-2xl border border-gray-200 bg-[#f5f5f5] p-4"
+
+                const price = getPriceForSharing(traveller.sharing)
+
+                row.innerHTML = `
+                    <div class="mb-3 flex items-center justify-between">
+                        <p class="text-sm font-extrabold tracking-wide">TRAVELLER ${index + 1}</p>
+                        ${index === 0
+                        ? '<span class="text-xs font-semibold text-gray-300">PRIMARY</span>'
+                        : '<button data-remove="' + traveller.id + '" class="text-sm font-bold text-red-500 hover:text-red-600">REMOVE</button>'}
+                    </div>
+                    <div class="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                        <label class="space-y-1">
+                            <span class="text-sm text-gray-700">Name</span>
+                            <input data-name="${traveller.id}" value="${traveller.name || ""}" type="text" placeholder="Guest Name"
+                                class="w-full rounded-xl border border-gray-200 bg-white px-3 py-2.5 outline-none focus:border-primary focus:ring-2 focus:ring-primary/20" />
+                        </label>
+                        <label class="space-y-1">
+                            <span class="text-sm text-gray-700">Select sharing</span>
+                            <select data-sharing="${traveller.id}" class="w-full rounded-xl border border-gray-200 bg-white px-3 py-2.5 outline-none focus:border-primary focus:ring-2 focus:ring-primary/20">
+                                <option value="">Select sharing option</option>
+                                ${sharingOptions.map((option) => `<option value="${option}" ${traveller.sharing === option ? "selected" : ""}>${option}</option>`).join("")}
+                            </select>
+                        </label>
+                    </div>
+                    <p class="mt-2 text-xs text-gray-500">${price > 0 ? "Price: " + formatINR(price) : "Select date + sharing"}</p>
+                `
+
+                els.travellerList.appendChild(row)
+            })
+
+            els.travellerCount.textContent = `${state.travellers.length} traveller${state.travellers.length > 1 ? "s" : ""}`
+
+            els.travellerList.querySelectorAll("[data-remove]").forEach((btn) => {
+                btn.addEventListener("click", () => {
+                    const id = Number(btn.getAttribute("data-remove"))
+                    state.travellers = state.travellers.filter((t) => t.id !== id)
+                    if (state.travellers.length === 0) {
+                        state.travellers = [{ id: 1, name: "", sharing: "" }]
+                    }
+                    clearCoupon("Coupon reset because traveller list changed.")
+                    renderTravellers()
+                })
+            })
+
+            els.travellerList.querySelectorAll("[data-name]").forEach((input) => {
+                input.addEventListener("input", (e) => {
+                    const id = Number(input.getAttribute("data-name"))
+                    const next = e.target.value
+                    const idx = state.travellers.findIndex((t) => t.id === id)
+                    if (idx !== -1) state.travellers[idx].name = next
+                    renderSummary()
+                })
+            })
+
+            els.travellerList.querySelectorAll("[data-sharing]").forEach((select) => {
+                select.addEventListener("change", (e) => {
+                    const id = Number(select.getAttribute("data-sharing"))
+                    const next = e.target.value
+                    const idx = state.travellers.findIndex((t) => t.id === id)
+                    if (idx !== -1) state.travellers[idx].sharing = next
+                    clearCoupon("Coupon reset because sharing changed.")
+                    renderTravellers()
+                })
+            })
+
+            renderSummary()
+        }
+
+        function getFormErrors() {
+            const errors = []
+            if (!state.date) errors.push("Select a departure date")
+            if (!state.vehicle) errors.push("Select a vehicle option")
+            if (!state.contactName.trim()) errors.push("Contact name is required")
+            if (!state.contactPhone.trim()) errors.push("Contact phone is required")
+            if (!state.contactEmail.trim()) errors.push("Contact email is required")
+
+            state.travellers.forEach((traveller, index) => {
+                if (!traveller.name.trim()) errors.push(`Name missing for Traveller ${index + 1}`)
+                if (!traveller.sharing) errors.push(`Sharing missing for Traveller ${index + 1}`)
+            })
+
+            return errors
+        }
+
+        function renderSummary() {
+            const totals = calcTotals()
+            els.summarySubtotal.textContent = formatINR(totals.subtotal)
+            els.summaryDiscount.textContent = `- ${formatINR(totals.discount)}`
+            els.summaryDiscountLabel.textContent = totals.couponLabel
+            els.summaryTax.textContent = formatINR(totals.tax)
+            els.summaryTotal.textContent = formatINR(totals.total)
+            els.mobileTotal.textContent = formatINR(totals.total)
+
+            const errors = getFormErrors()
+            const valid = errors.length === 0 && totals.total > 0
+
+            els.payNow.disabled = !valid
+            els.mobilePay.disabled = !valid
+            els.payHint.textContent = valid
+                ? "Ready to pay. Server-side totals will be recomputed before payment."
+                : errors[0] || "Fill date, all traveller fields, and contact info."
+        }
+
+        async function applyCoupon() {
+            const code = els.couponCode.value
+            state.couponCodeInput = code
+
+            els.applyCoupon.disabled = true
+            els.applyCoupon.textContent = "Applying..."
+
+            await new Promise((resolve) => setTimeout(resolve, 300))
+            const result = validateCouponMock(code)
+
+            if (!result.valid) {
+                state.appliedCoupon = null
+                els.removeCoupon.classList.add("hidden")
+                els.couponMessage.className = "mt-3 text-sm text-red-600"
+                els.couponMessage.textContent = result.message
+            } else {
+                state.appliedCoupon = result
+                els.removeCoupon.classList.remove("hidden")
+                els.couponMessage.className = "mt-3 text-sm text-green-700"
+                els.couponMessage.textContent = result.message
+                els.couponCode.value = result.code
+            }
+
+            els.applyCoupon.disabled = false
+            els.applyCoupon.textContent = "Apply"
+            renderSummary()
+        }
+
+        function nextTravellerId() {
+            const max = Math.max(0, ...state.travellers.map((t) => Number(t.id) || 0))
+            return max + 1
+        }
+
+        function addTraveller() {
+            state.travellers.push({ id: nextTravellerId(), name: "", sharing: "" })
+            clearCoupon("Coupon reset because traveller list changed.")
+            renderTravellers()
+        }
+
+        function payNow() {
+            const errors = getFormErrors()
+            if (errors.length > 0) {
+                alert(errors.join("\n"))
+                return
+            }
+
+            const totals = calcTotals()
+            const payload = {
+                trip_id: state.tripId,
+                slug: state.slug,
+                departure_date: state.date,
+                transport: state.vehicle,
+                travellers: state.travellers,
+                name: state.contactName,
+                phone: state.contactPhone,
+                email: state.contactEmail,
+                coupon_code: state.appliedCoupon?.code || null,
+                pricing_snapshot: {
+                    subtotal_amount: totals.subtotal,
+                    discount_amount: totals.discount,
+                    tax_amount: totals.tax,
+                    total_amount: totals.total,
+                }
+            }
+
+            console.log("[Checkout Prototype] Payload", payload)
+            alert(`Prototype only. Total: ${formatINR(totals.total)}\n\nPayload logged in console.`)
+        }
+
+        function bindEvents() {
+            els.departureDate.addEventListener("change", (e) => {
+                state.date = e.target.value
+                renderVehicleSelect()
+                clearCoupon("Coupon reset because date changed.")
+                renderTravellers()
+            })
+
+            els.vehicleOption.addEventListener("change", (e) => {
+                state.vehicle = e.target.value
+                clearCoupon("Coupon reset because vehicle changed.")
+                renderTravellers()
+            })
+
+            els.contactName.addEventListener("input", (e) => {
+                state.contactName = e.target.value
+                renderSummary()
+            })
+
+            els.contactPhone.addEventListener("input", (e) => {
+                state.contactPhone = e.target.value
+                renderSummary()
+            })
+
+            els.contactEmail.addEventListener("input", (e) => {
+                state.contactEmail = e.target.value
+                renderSummary()
+            })
+
+            els.addGuest.addEventListener("click", addTraveller)
+            els.applyCoupon.addEventListener("click", applyCoupon)
+            els.removeCoupon.addEventListener("click", () => clearCoupon())
+            els.payNow.addEventListener("click", payNow)
+            els.mobilePay.addEventListener("click", payNow)
+
+            document.querySelectorAll("[data-vw]").forEach((btn) => {
+                btn.addEventListener("click", () => {
+                    const value = btn.getAttribute("data-vw")
+                    const width = value === "full" ? "100%" : `${value}px`
+                    document.documentElement.style.setProperty("--demo-width", width)
+                })
+            })
+        }
+
+        function init() {
+            parseQuery()
+            ensureDateSelection()
+            renderHeader()
+            renderDateSelect()
+            renderVehicleSelect()
+            bindEvents()
+            renderTravellers()
+            renderSummary()
+        }
+
+        init()
+    </script>
+</body>
+
+</html>
