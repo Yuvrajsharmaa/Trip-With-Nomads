@@ -9,6 +9,7 @@ const SUPABASE_URL = "https://jxozzvwvprmnhvafmpsa.supabase.co"
 const SUPABASE_KEY =
     "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imp4b3p6dnd2cHJtbmh2YWZtcHNhIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjgwNTg2NjIsImV4cCI6MjA4MzYzNDY2Mn0.KpVa9dWlJEguL1TA00Tf4QDpziJ1mgA2I0f4_l-vlOk"
 const TAX_RATE = 0.02
+const TRAVELLER_LIST_HEIGHT = "58vh"
 
 // --- CONTEXT ---
 // TravellerContext provides stable traveller identity and visual index for Step 2 row overrides.
@@ -118,8 +119,27 @@ function normalizeTravellerId(id: any, index: number): number {
     return index + 1
 }
 
+function normalizeTravellers(input: any[]): any[] {
+    const base = Array.isArray(input) ? input : []
+    const seen = new Set<number>()
+
+    return base.map((item: any, index: number) => {
+        const next = item || {}
+        let id = normalizeTravellerId(next.id, index)
+        while (seen.has(id)) id += 1
+        seen.add(id)
+
+        return {
+            ...next,
+            id,
+            name: typeof next.name === "string" ? next.name : "",
+            sharing: typeof next.sharing === "string" ? next.sharing : "",
+        }
+    })
+}
+
 function getTravellerByContext(store: any, ctx: TravellerContextValue | null) {
-    const travellers = store?.travellers || []
+    const travellers = normalizeTravellers(store?.travellers || [])
     if (!ctx) return null
     const byId = travellers.find((t: any) => Number(t?.id) === ctx.id)
     if (byId) return byId
@@ -127,17 +147,200 @@ function getTravellerByContext(store: any, ctx: TravellerContextValue | null) {
 }
 
 function updateTravellerById(store: any, id: number, patch: Record<string, any>) {
-    const list = [...(store?.travellers || [])]
+    const list = normalizeTravellers(store?.travellers || [])
     const idx = list.findIndex((t: any) => Number(t?.id) === id)
     if (idx !== -1) {
         list[idx] = { ...list[idx], ...patch }
     }
-    return list
+    return normalizeTravellers(list)
 }
 
 function removeTravellerById(store: any, id: number) {
-    const list = [...(store?.travellers || [])]
-    return list.filter((t: any) => Number(t?.id) !== id)
+    const list = normalizeTravellers(store?.travellers || [])
+    const filtered = list.filter((t: any) => Number(t?.id) !== id)
+    if (filtered.length === 0) {
+        return [{ id: 1, name: "", sharing: "" }]
+    }
+    return normalizeTravellers(filtered)
+}
+
+function buildTravellerCloneProps(
+    template: React.ReactElement,
+    travellerId: number,
+    index: number
+) {
+    const baseStyle = (template.props as any)?.style || {}
+    return {
+        key: `traveller-${travellerId}-${index}`,
+        style: {
+            ...baseStyle,
+            width: "100%",
+            flex: "0 0 auto",
+            alignSelf: "stretch",
+            opacity: 1,
+            pointerEvents: "auto",
+            transform: "none",
+            position: "relative",
+            inset: "auto",
+            height: "auto",
+            overflow: "visible",
+            transition: "none",
+            animation: "none",
+        },
+        initial: undefined,
+        animate: undefined,
+        exit: undefined,
+        whileHover: undefined,
+        whileTap: undefined,
+        whileInView: undefined,
+        layout: false,
+        layoutId: undefined,
+    }
+}
+
+function extractText(node: any): string {
+    if (typeof node === "string") return node
+    if (typeof node === "number") return String(node)
+    if (Array.isArray(node)) return node.map((n) => extractText(n)).join(" ")
+    if (React.isValidElement(node)) return extractText((node as any).props?.children)
+    return ""
+}
+
+function isRemoveControlTarget(props: any): boolean {
+    const directChildText =
+        typeof props?.children === "string"
+            ? props.children
+            : typeof props?.children === "number"
+                ? String(props.children)
+                : ""
+
+    const merged = [
+        props?.text,
+        props?.name,
+        props?.title,
+        props?.ariaLabel,
+        props?.["data-framer-name"],
+        directChildText,
+    ]
+        .filter((v) => typeof v === "string" && v.trim().length > 0)
+        .join(" ")
+        .toLowerCase()
+
+    if (!merged.includes("remove")) return false
+
+    // Guard against accidentally treating row cards as remove controls.
+    return !merged.includes("traveller")
+}
+
+function treeText(node: any): string {
+    if (typeof node === "string") return node
+    if (typeof node === "number") return String(node)
+    if (Array.isArray(node)) return node.map((n) => treeText(n)).join(" ")
+    if (React.isValidElement(node)) return treeText((node as any).props?.children)
+    return ""
+}
+
+function nodeLooksLikeRowTemplate(node: any): boolean {
+    if (!React.isValidElement(node)) return false
+    const text = treeText((node as any).props?.children).toLowerCase()
+    return text.includes("traveller") || text.includes("remove") || text.includes("guest name") || text.includes("select sharing")
+}
+
+function isRemoveTextNode(el: HTMLElement | null): boolean {
+    if (!el) return false
+    const text = (el.textContent || "").replace(/\s+/g, " ").trim().toLowerCase()
+    if (!text.includes("remove")) return false
+    if (text.length > 16) return false
+    if (el.querySelector("input,select,textarea,button")) return false
+    return true
+}
+
+function stabilizeTravellerRowDom(rowEl: HTMLDivElement | null, index: number) {
+    if (!rowEl) return
+
+    const run = () => {
+        rowEl.style.width = "100%"
+        rowEl.style.flex = "0 0 auto"
+        rowEl.style.alignSelf = "stretch"
+        rowEl.style.opacity = "1"
+        rowEl.style.pointerEvents = "auto"
+        rowEl.style.transform = "none"
+        rowEl.style.transition = "none"
+        rowEl.style.animation = "none"
+
+        const nodes = Array.from(rowEl.querySelectorAll<HTMLElement>("*"))
+
+        for (const node of nodes) {
+            if (index === 0 && isRemoveTextNode(node)) {
+                node.style.opacity = "0"
+                node.style.pointerEvents = "none"
+                continue
+            }
+
+            if (node.style.display === "none") node.style.display = ""
+
+            const opacity = Number.parseFloat(node.style.opacity || "")
+            if (Number.isFinite(opacity) && opacity < 1) node.style.opacity = "1"
+
+            if (node.style.pointerEvents === "none") node.style.pointerEvents = "auto"
+            if (node.style.transform && node.style.transform.includes("translate")) {
+                node.style.transform = "none"
+            }
+            if (node.style.transition !== "none") node.style.transition = "none"
+            if (node.style.animation && node.style.animation !== "none") node.style.animation = "none"
+
+            if (isRemoveTextNode(node) && index > 0) {
+                node.style.opacity = "1"
+                node.style.pointerEvents = "auto"
+                node.style.cursor = "pointer"
+            }
+        }
+    }
+
+    const prevObserver = (rowEl as any).__travellerRowObserver as MutationObserver | undefined
+    if (prevObserver) prevObserver.disconnect()
+
+    const observer = new MutationObserver(() => run())
+    observer.observe(rowEl, {
+        subtree: true,
+        childList: true,
+        attributes: true,
+        attributeFilter: ["style", "class"],
+    })
+    ; (rowEl as any).__travellerRowObserver = observer
+
+    // Re-run a few times because Framer can apply motion/variant styles asynchronously.
+    requestAnimationFrame(() => {
+        run()
+        requestAnimationFrame(run)
+        setTimeout(run, 0)
+        setTimeout(run, 50)
+        setTimeout(run, 120)
+    })
+
+    // Keep observer short-lived to avoid long-lived overhead.
+    setTimeout(() => {
+        if ((rowEl as any).__travellerRowObserver === observer) {
+            observer.disconnect()
+            delete (rowEl as any).__travellerRowObserver
+        }
+    }, 1800)
+}
+
+function ensureTravellerNoMotionStyles() {
+    if (typeof document === "undefined") return
+    const id = "__traveller_list_no_motion_styles"
+    if (document.getElementById(id)) return
+
+    const style = document.createElement("style")
+    style.id = id
+    style.textContent = `
+        [data-traveller-list-root], [data-traveller-list-root] * {
+            transition: none !important;
+            animation: none !important;
+        }
+    `
+    document.head.appendChild(style)
 }
 
 // =====================================================
@@ -211,21 +414,35 @@ export function withDateSelect(Component): ComponentType {
             if (!select) return
 
             const pricingData = store.pricingData || []
-            if (pricingData.length > 0 && select.getAttribute("data-populated") !== "true") {
-                const uniqueDates = Array.from(new Set(pricingData.map((d: any) => d.start_date))).sort() as string[]
+            if (pricingData.length === 0) return
+
+            const uniqueDates = Array.from(new Set(pricingData.map((d: any) => d.start_date))).sort() as string[]
+            const optionsSignature = JSON.stringify(uniqueDates)
+
+            if (select.getAttribute("data-populated") !== optionsSignature) {
                 populateDropdown(select, uniqueDates)
+                select.setAttribute("data-populated", optionsSignature)
+            }
 
-                select.addEventListener("change", () => {
+            const nextDate =
+                store.date && uniqueDates.includes(store.date) ? store.date : uniqueDates[0] || ""
+
+            if (nextDate && select.value !== nextDate) {
+                select.value = nextDate
+            }
+
+            if (nextDate && store.date !== nextDate) {
+                setStore({ date: nextDate })
+            }
+
+            const listener = () => {
+                if (store.date !== select.value) {
                     setStore({ date: select.value })
-                })
-
-                // Auto-select first date if none selected
-                if (!store.date && uniqueDates.length > 0) {
-                    select.value = uniqueDates[0]
-                    setStore({ date: uniqueDates[0] })
                 }
             }
-        }, [store.pricingData])
+            select.addEventListener("change", listener)
+            return () => select.removeEventListener("change", listener)
+        }, [store.pricingData, store.date])
 
         return <Component {...props} />
     }
@@ -239,33 +456,176 @@ export function withDateSelect(Component): ComponentType {
 // Apply to the parent frame that holds the traveller row component.
 export function withTravellerList(Component): ComponentType {
     return (props: any) => {
-        const [store] = useStore()
+        const [store, setStore] = useStore()
         if (store.step !== 2) return <Component {...props} style={{ ...props.style, display: "none" }} />
+        const styleProps = (props.style || {}) as any
+        const listMaxHeight = styleProps.maxHeight || TRAVELLER_LIST_HEIGHT
 
-        const travellers = store.travellers || []
-        const template = React.Children.toArray(props.children).find((child) =>
+        useEffect(() => {
+            ensureTravellerNoMotionStyles()
+        }, [])
+
+        const travellers = normalizeTravellers(store.travellers || [])
+        const childrenArray = React.Children.toArray(props.children)
+        const template = childrenArray.find((child) =>
             React.isValidElement(child)
         ) as React.ReactElement | undefined
+        const rowTemplate = childrenArray.find((child) => nodeLooksLikeRowTemplate(child)) as
+            | React.ReactElement
+            | undefined
+        const childText = treeText(props.children).toLowerCase()
+        const looksLikeOuterSection =
+            childText.includes("add guests") ||
+            childText.includes("previous") ||
+            childText.includes("review")
+        const renderAsRowCardRepeater = !looksLikeOuterSection
+
+        if (renderAsRowCardRepeater) {
+            return (
+                <div
+                    data-traveller-list-root="true"
+                    style={{
+                        width: "100%",
+                        display: "flex",
+                        flexDirection: "column",
+                        justifyContent: "flex-start",
+                        alignItems: "stretch",
+                        gap: "16px",
+                        height: "auto",
+                        maxHeight: listMaxHeight,
+                        overflowY: "auto",
+                        overflowX: "hidden",
+                        overscrollBehavior: "contain",
+                        WebkitOverflowScrolling: "touch",
+                        scrollbarGutter: "stable",
+                        contain: "layout paint",
+                    }}
+                >
+                    {travellers.map((item: any, index: number) => {
+                        const travellerId = normalizeTravellerId(item?.id, index)
+                        const baseStyle = (props.style || {}) as any
+                        return (
+                            <div
+                                ref={(node) => stabilizeTravellerRowDom(node, index)}
+                                key={`traveller-row-${travellerId}`}
+                                data-traveller-index={index}
+                                data-traveller-id={travellerId}
+                                style={{ width: "100%", position: "relative", contain: "layout", flex: "0 0 auto", alignSelf: "stretch" }}
+                                onClickCapture={(e: any) => {
+                                    const current = e.currentTarget as HTMLElement
+                                    let node = e.target as HTMLElement | null
+
+                                    while (node && node !== current) {
+                                        if (isRemoveTextNode(node)) {
+                                            e.preventDefault()
+                                            e.stopPropagation()
+                                            if (index > 0) {
+                                                const list = removeTravellerById(store, travellerId)
+                                                setStore({ travellers: list })
+                                            }
+                                            return
+                                        }
+                                        node = node.parentElement
+                                    }
+                                }}
+                            >
+                                <TravellerContext.Provider value={{ id: travellerId, index }}>
+                                    <Component
+                                        {...props}
+                                        style={{
+                                            ...baseStyle,
+                                            width: "100%",
+                                            flex: "0 0 auto",
+                                            alignSelf: "stretch",
+                                            opacity: 1,
+                                            pointerEvents: "auto",
+                                            transform: "none",
+                                            position: "relative",
+                                            inset: "auto",
+                                            height: "auto",
+                                            overflow: "visible",
+                                            transition: "none",
+                                            animation: "none",
+                                        }}
+                                        initial={undefined}
+                                        animate={undefined}
+                                        exit={undefined}
+                                        whileHover={undefined}
+                                        whileTap={undefined}
+                                        whileInView={undefined}
+                                        layout={false}
+                                        layoutId={undefined}
+                                    />
+                                </TravellerContext.Provider>
+                            </div>
+                        )
+                    })}
+                </div>
+            )
+        }
 
         return (
             <Component
                 {...props}
+                data-traveller-list-root="true"
                 style={{
                     ...props.style,
                     display: "flex",
                     flexDirection: "column",
+                    justifyContent: "flex-start",
+                    alignItems: "stretch",
                     gap: "16px",
                     height: "auto",
-                    overflow: "visible",
+                    maxHeight: listMaxHeight,
+                    overflowY: "auto",
+                    overflowX: "hidden",
+                    overscrollBehavior: "contain",
+                    WebkitOverflowScrolling: "touch",
+                    scrollbarGutter: "stable",
+                    contain: "layout paint",
+                    transition: "none",
+                    animation: "none",
                 }}
+                layout={false}
+                layoutId={undefined}
             >
-                {template
+                {rowTemplate || template
                     ? travellers.map((item: any, index: number) => {
                         const travellerId = normalizeTravellerId(item?.id, index)
+                        const source = (rowTemplate || template) as React.ReactElement
+                        const row = React.cloneElement(
+                            source,
+                            buildTravellerCloneProps(source, travellerId, index)
+                        )
                         return (
-                            <TravellerContext.Provider key={travellerId} value={{ id: travellerId, index }}>
-                                {React.cloneElement(template, { key: `traveller-${travellerId}` })}
-                            </TravellerContext.Provider>
+                            <div
+                                ref={(node) => stabilizeTravellerRowDom(node, index)}
+                                key={`traveller-row-${travellerId}`}
+                                data-traveller-index={index}
+                                data-traveller-id={travellerId}
+                                style={{ width: "100%", position: "relative", contain: "layout", flex: "0 0 auto", alignSelf: "stretch" }}
+                                onClickCapture={(e: any) => {
+                                    const current = e.currentTarget as HTMLElement
+                                    let node = e.target as HTMLElement | null
+
+                                    while (node && node !== current) {
+                                        if (isRemoveTextNode(node)) {
+                                            e.preventDefault()
+                                            e.stopPropagation()
+                                            if (index > 0) {
+                                                const list = removeTravellerById(store, travellerId)
+                                                setStore({ travellers: list })
+                                            }
+                                            return
+                                        }
+                                        node = node.parentElement
+                                    }
+                                }}
+                            >
+                                <TravellerContext.Provider value={{ id: travellerId, index }}>
+                                    {row}
+                                </TravellerContext.Provider>
+                            </div>
                         )
                     })
                     : React.Children.map(props.children, (child) => (
@@ -361,25 +721,7 @@ export function withTravellerSharingKey(Component): ComponentType {
 
 // withRemoveTraveller: Removes the current traveller from the list.
 export function withRemoveTraveller(Component): ComponentType {
-    return (props: any) => {
-        const [store, setStore] = useStore()
-        const ctx = useContext(TravellerContext)
-
-        if (ctx === null || ctx.index === 0) {
-            // Don't show remove button for the first guest
-            return <Component {...props} style={{ ...props.style, opacity: 0, pointerEvents: "none" }} />
-        }
-
-        return (
-            <Component
-                {...props}
-                onClick={() => {
-                    const list = removeTravellerById(store, ctx.id)
-                    setStore({ travellers: list })
-                }}
-            />
-        )
-    }
+    return (props: any) => <Component {...props} />
 }
 
 // withAddTraveller: Adds a new guest to the list.
@@ -391,10 +733,13 @@ export function withAddTraveller(Component): ComponentType {
         return (
             <Component
                 {...props}
-                onClick={() => {
-                    const travellers = store.travellers || []
+                type="button"
+                onClick={(e: any) => {
+                    if (e?.preventDefault) e.preventDefault()
+                    if (e?.stopPropagation) e.stopPropagation()
+                    const travellers = normalizeTravellers(store.travellers || [])
                     const nextId = Math.max(0, ...travellers.map((t: any) => Number(t?.id) || 0)) + 1
-                    const list = [...travellers, { id: nextId, name: "", sharing: "" }]
+                    const list = normalizeTravellers([...travellers, { id: nextId, name: "", sharing: "" }])
                     setStore({ travellers: list })
                 }}
             />
@@ -462,7 +807,18 @@ export function withVariantSection(Component): ComponentType {
 }
 
 export function withTravellerSection(Component): ComponentType {
-    return (props: any) => <Component {...props} />
+    return (props: any) => (
+        <Component
+            {...props}
+            style={{
+                ...(props.style || {}),
+                transition: "none",
+                animation: "none",
+            }}
+            layout={false}
+            layoutId={undefined}
+        />
+    )
 }
 
 export function withButtonRow(Component): ComponentType {
@@ -701,7 +1057,7 @@ export function withNextButton(Component): ComponentType {
 
         const handleClick = () => {
             if (!isValid) return
-            const travellers = [...(store.travellers || [])]
+            const travellers = normalizeTravellers([...(store.travellers || [])])
 
             // Sync contact name to Traveller 1 ONLY IF Traveller 1 name is empty
             if (travellers.length > 0) {
@@ -711,7 +1067,7 @@ export function withNextButton(Component): ComponentType {
                 }
             }
 
-            setStore({ step: 2, travellers })
+            setStore({ step: 2, travellers: normalizeTravellers(travellers) })
         }
 
         const blockEvent = (e: any) => {

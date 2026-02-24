@@ -48,44 +48,76 @@ const { useState, useEffect, useCallback } = React
 const POPUP_DELAY_MS = 15000       // Show popup after 15 seconds
 const DISMISS_COOLDOWN_HOURS = 24  // If closed, show again after 24 hours
 const STORAGE_KEY = "twn_popup"    // localStorage key
+const DELAY_START_KEY = "__twnPopupDelayStartAt"
 
 // ─── LOCAL STORAGE HELPERS ───────────────────────────────────
 
-function shouldShowPopup(): boolean {
+type PopupState = {
+    submitted?: boolean
+    at?: number
+    closedAt?: number
+}
+
+function readPopupState(): PopupState {
     try {
         const raw = localStorage.getItem(STORAGE_KEY)
-        if (!raw) return true
-
-        const data = JSON.parse(raw)
-
-        // User submitted the form → never show again
-        if (data.submitted) return false
-
-        // User closed it → check cooldown
-        if (data.closedAt) {
-            const elapsed = Date.now() - data.closedAt
-            const cooldownMs = DISMISS_COOLDOWN_HOURS * 60 * 60 * 1000
-            return elapsed > cooldownMs
-        }
-
-        return true
+        if (!raw) return {}
+        const parsed = JSON.parse(raw)
+        if (!parsed || typeof parsed !== "object") return {}
+        return parsed as PopupState
     } catch {
-        return true
+        return {}
     }
 }
 
+function writePopupState(next: PopupState) {
+    try {
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(next))
+    } catch {
+        // Ignore write failures (private mode / storage blocked)
+    }
+}
+
+function getSharedDelayStart(): number {
+    if (typeof window === "undefined") return Date.now()
+    const w = window as any
+    const existing = Number(w[DELAY_START_KEY])
+    if (Number.isFinite(existing) && existing > 0) return existing
+    const now = Date.now()
+    w[DELAY_START_KEY] = now
+    return now
+}
+
+function shouldShowPopup(): boolean {
+    const data = readPopupState()
+
+    // User submitted the form → never show again
+    if (data.submitted) return false
+
+    // User closed it → check cooldown
+    if (data.closedAt) {
+        const elapsed = Date.now() - data.closedAt
+        const cooldownMs = DISMISS_COOLDOWN_HOURS * 60 * 60 * 1000
+        return elapsed > cooldownMs
+    }
+
+    return true
+}
+
 function markClosed() {
-    localStorage.setItem(
-        STORAGE_KEY,
-        JSON.stringify({ closedAt: Date.now() })
-    )
+    const data = readPopupState()
+    // Never overwrite a submitted state with a temporary close state.
+    if (data.submitted) return
+    writePopupState({ ...data, closedAt: Date.now() })
 }
 
 function markSubmitted() {
-    localStorage.setItem(
-        STORAGE_KEY,
-        JSON.stringify({ submitted: true, at: Date.now() })
-    )
+    const data = readPopupState()
+    writePopupState({ ...data, submitted: true, at: Date.now() })
+}
+
+function callHandler<T>(handler: ((event: T) => void) | undefined, event: T) {
+    if (typeof handler === "function") handler(event)
 }
 
 // ─── SHARED STATE (communication between overrides) ──────────
@@ -123,12 +155,24 @@ export function withPopupOverlay(Component): ComponentType {
                 return
             }
 
+            const delayStart = getSharedDelayStart()
+            const elapsed = Date.now() - delayStart
+            const remaining = Math.max(0, POPUP_DELAY_MS - elapsed)
+
+            if (remaining === 0) {
+                if (shouldShowPopup()) {
+                    setIsVisible(true)
+                    console.log("[Popup] Triggering waitlist popup (shared timer immediate)")
+                }
+                return
+            }
+
             const timer = setTimeout(() => {
                 if (shouldShowPopup()) {
                     setIsVisible(true)
                     console.log("[Popup] Triggering waitlist popup")
                 }
-            }, POPUP_DELAY_MS)
+            }, remaining)
 
             return () => clearTimeout(timer)
         }, [])
@@ -178,7 +222,7 @@ export function withPopupOverlay(Component): ComponentType {
                         to   { opacity: 0; }
                     }
                     @keyframes twnPopupIn {
-                        from { opacity: 0; transform: scale(0.95) translateY(10px); }
+                        from { opacity: 0.6; transform: scale(0.98) translateY(4px); }
                         to   { opacity: 1; transform: scale(1) translateY(0px); }
                     }
                     @keyframes twnPopupOut {
@@ -200,6 +244,18 @@ export function withPopupOverlay(Component): ComponentType {
                         
                         /* Animation */
                         will-change: transform, opacity;
+                    }
+                    .twn-popup-content-shell {
+                        width: 100%;
+                        opacity: 1;
+                        visibility: visible;
+                        pointer-events: auto;
+                    }
+                    /* Prevent delayed inner Framer animations so card appears with overlay */
+                    .twn-popup-content-shell,
+                    .twn-popup-content-shell * {
+                        transition-delay: 0s !important;
+                        animation-delay: 0s !important;
                     }
                     @media (max-width: 800px) {
                         .twn-popup-wrapper {
@@ -239,7 +295,7 @@ export function withPopupOverlay(Component): ComponentType {
                             bottom: 0,
                             backgroundColor: "rgba(0, 0, 0, 0.6)",
                             animation: isActive
-                                ? (isClosing ? "twnOverlayOut 0.3s ease forwards" : "twnOverlayIn 0.4s ease forwards")
+                                ? (isClosing ? "twnOverlayOut 0.24s ease-out forwards" : "twnOverlayIn 0.24s ease-out forwards")
                                 : "none",
                         }}
                     />
@@ -248,22 +304,37 @@ export function withPopupOverlay(Component): ComponentType {
                     <div
                         className="twn-popup-wrapper"
                         onClick={(e) => e.stopPropagation()}
+                        onSubmitCapture={(e: any) => {
+                            // Capture successful form submits even if submit is triggered
+                            // via Enter key or a different submit button.
+                            const form = e?.target as HTMLFormElement | null
+                            if (form && typeof form.checkValidity === "function" && form.checkValidity()) {
+                                markSubmitted()
+                                console.log("[Popup] Form submitted via submit event — won't show again")
+                            }
+                        }}
                         style={{
                             animation: isActive
-                                ? (isClosing ? "twnPopupOut 0.3s ease forwards" : "twnPopupIn 0.5s cubic-bezier(0.16, 1, 0.3, 1) forwards")
+                                ? (isClosing ? "twnPopupOut 0.24s ease-out forwards" : "twnPopupIn 0.24s ease-out forwards")
                                 : "none",
                         }}
                     >
-                        {/* The Framer Component */}
-                        <Component
-                            {...props}
-                            style={{
-                                ...(props.style || {}),
-                                position: "relative",
-                                width: "100%", // Fill the wrapper's width
-                                height: "auto", // Allow height to grow (Fixes tiny box)
-                            }}
-                        />
+                        <div className="twn-popup-content-shell">
+                            {/* The Framer Component */}
+                            <Component
+                                {...props}
+                                style={{
+                                    ...(props.style || {}),
+                                    position: "relative",
+                                    width: "100%", // Fill the wrapper's width
+                                    height: "auto", // Allow height to grow (Fixes tiny box)
+                                    opacity: 1,
+                                    visibility: "visible",
+                                    pointerEvents: "auto",
+                                    transform: "none",
+                                }}
+                            />
+                        </div>
                     </div>
                 </div>
             </>,
@@ -288,6 +359,7 @@ export function withClosePopup(Component): ComponentType {
                 {...props}
                 onClick={(e: any) => {
                     e?.stopPropagation?.()
+                    callHandler(props.onClick, e)
                     emitClose()
                     console.log("[Popup] Closed by user")
                 }}
@@ -314,10 +386,17 @@ export function withPopupSubmitted(Component): ComponentType {
             <Component
                 {...props}
                 onClick={(e: any) => {
-                    markSubmitted()
-                    console.log("[Popup] Form submitted — won't show again")
-                    // Let the original click handler (Framer form) continue
-                    if (props.onClick) props.onClick(e)
+                    const target = e?.currentTarget as HTMLElement | null
+                    const form = target?.closest?.("form") as HTMLFormElement | null
+                    const isValid = !form || (typeof form.checkValidity === "function" ? form.checkValidity() : true)
+                    if (isValid) {
+                        markSubmitted()
+                        console.log("[Popup] Form submitted — won't show again")
+                    } else {
+                        console.log("[Popup] Submit blocked by validation; state not persisted")
+                    }
+                    // Let original Framer click behavior run unchanged.
+                    callHandler(props.onClick, e)
                 }}
             />
         )

@@ -15,13 +15,17 @@ const SUPABASE_URL = "https://jxozzvwvprmnhvafmpsa.supabase.co"
 const SUPABASE_KEY =
     "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imp4b3p6dnd2cHJtbmh2YWZtcHNhIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjgwNTg2NjIsImV4cCI6MjA4MzYzNDY2Mn0.KpVa9dWlJEguL1TA00Tf4QDpziJ1mgA2I0f4_l-vlOk"
 const TAX_RATE = 0.02
+const CHECKOUT_PAGE_URL = "https://twn2.framer.website/checkout"
 
 const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
 const PHONE_REGEX = /^\+?[\d\s\-()]{10,15}$/
+let checkoutBootstrapped = false
+let checkoutBootstrapInFlight = false
 
 type Traveller = {
     id: number
     name: string
+    transport: string
     sharing: string
 }
 
@@ -41,16 +45,17 @@ const TravellerContext = createContext<TravellerContextValue | null>(null)
 const useStore = createStore({
     tripId: "",
     slug: "",
+    tripName: "",
     pricingData: [] as any[],
     date: "",
     transport: "",
-    travellers: [{ id: 1, name: "", sharing: "" }] as Traveller[],
+    travellers: [{ id: 1, name: "", transport: "", sharing: "" }] as Traveller[],
     contactName: "",
     contactPhone: "",
     contactEmail: "",
     couponCode: "",
     appliedCoupon: null as CouponResult | null,
-    couponMessage: "No coupon applied",
+    couponMessage: "Enter a coupon code and tap Apply.",
     couponMessageType: "neutral" as "neutral" | "success" | "error",
     loading: false,
     submitting: false,
@@ -86,12 +91,13 @@ function normalizeTravellers(input: any[]): Traveller[] {
         return {
             id,
             name: typeof item?.name === "string" ? item.name : "",
+            transport: typeof item?.transport === "string" ? item.transport : "",
             sharing: typeof item?.sharing === "string" ? item.sharing : "",
         }
     })
 
     if (out.length === 0) {
-        return [{ id: 1, name: "", sharing: "" }]
+        return [{ id: 1, name: "", transport: "", sharing: "" }]
     }
 
     return out
@@ -147,7 +153,7 @@ function getTransportOptions(pricing: any[], date: string): string[] {
     return options.length > 0 ? options : ["Seat in Coach"]
 }
 
-function getSharingOptions(pricing: any[], date: string, transport: string): string[] {
+function getSharingOptions(pricing: any[], date: string, transport?: string): string[] {
     const filtered = (pricing || []).filter(
         (row: any) =>
             (!date || getDateValue(row) === date) &&
@@ -167,6 +173,46 @@ function resolvePriceForTraveller(pricing: any[], date: string, transport: strin
     return toNumber(row?.price)
 }
 
+function normalizeTravellerTransport(
+    pricing: any[],
+    date: string,
+    value: string,
+    fallback = "Seat in Coach"
+): string {
+    const options = getTransportOptions(pricing, date)
+    if (value && options.includes(value)) return value
+    if (fallback && options.includes(fallback)) return fallback
+    return options[0] || "Seat in Coach"
+}
+
+function sanitizeTravellersForDate(
+    pricing: any[],
+    date: string,
+    travellersInput: Traveller[],
+    fallbackTransport = "Seat in Coach"
+): Traveller[] {
+    const travellers = normalizeTravellers(travellersInput || [])
+    return travellers.map((traveller) => {
+        const transport = normalizeTravellerTransport(
+            pricing,
+            date,
+            traveller.transport,
+            fallbackTransport
+        )
+        const sharingOptions = getSharingOptions(pricing, date, transport)
+        const sharing =
+            traveller.sharing && sharingOptions.includes(traveller.sharing)
+                ? traveller.sharing
+                : ""
+
+        return {
+            ...traveller,
+            transport,
+            sharing,
+        }
+    })
+}
+
 function computeTotals(store: any) {
     const pricingData = store?.pricingData || []
     const travellers = normalizeTravellers(store?.travellers || [])
@@ -175,15 +221,17 @@ function computeTotals(store: any) {
     const groups: Record<string, { count: number; unit: number }> = {}
 
     for (const traveller of travellers) {
+        const transport = traveller.transport || "Seat in Coach"
         const sharing = traveller.sharing
         if (!sharing) continue
 
-        const price = resolvePriceForTraveller(pricingData, store.date, store.transport, sharing)
+        const price = resolvePriceForTraveller(pricingData, store.date, transport, sharing)
         if (price <= 0) continue
 
         subtotal += price
-        if (!groups[sharing]) groups[sharing] = { count: 0, unit: price }
-        groups[sharing].count += 1
+        const key = `${transport}__${sharing}`
+        if (!groups[key]) groups[key] = { count: 0, unit: price }
+        groups[key].count += 1
     }
 
     const discountRaw = toNumber(store?.appliedCoupon?.discount_amount)
@@ -192,13 +240,19 @@ function computeTotals(store: any) {
     const tax = round2(taxableSubtotal * TAX_RATE)
     const total = round2(taxableSubtotal + tax)
 
-    const breakdown = Object.entries(groups).map(([variant, data]) => ({
-        label: `${data.count}x Guest (${variant})`,
-        count: data.count,
-        variant,
-        unit_price: data.unit,
-        price: data.unit * data.count,
-    }))
+    const breakdown = Object.entries(groups).map(([key, data]) => {
+        const parts = key.split("__")
+        const transport = parts[0] || "Seat in Coach"
+        const variant = parts[1] || ""
+        return {
+            label: `${data.count}x Guest (${variant}${transport ? ` · ${transport}` : ""})`,
+            count: data.count,
+            variant,
+            transport,
+            unit_price: data.unit,
+            price: data.unit * data.count,
+        }
+    })
 
     return {
         subtotal: round2(subtotal),
@@ -215,7 +269,6 @@ function getValidationErrors(store: any): string[] {
 
     if (!store?.tripId) errors.push("Trip ID missing")
     if (!store?.date) errors.push("Departure date is required")
-    if (!store?.transport) errors.push("Vehicle option is required")
 
     if (!store?.contactName?.trim()) errors.push("Contact name is required")
     if (!store?.contactPhone?.trim()) errors.push("Phone number is required")
@@ -227,6 +280,7 @@ function getValidationErrors(store: any): string[] {
     const travellers = normalizeTravellers(store?.travellers || [])
     travellers.forEach((t, index) => {
         if (!t.name.trim()) errors.push(`Name required for Traveller ${index + 1}`)
+        if (!t.transport) errors.push(`Vehicle required for Traveller ${index + 1}`)
         if (!t.sharing) errors.push(`Sharing required for Traveller ${index + 1}`)
     })
 
@@ -280,14 +334,25 @@ function showInlineError(errors: string | string[]) {
     }, 3200)
 }
 
-function sanitizeTravellerSharing(list: Traveller[], options: string[]): Traveller[] {
-    const allowed = new Set(options)
-    return list.map((t) => {
-        if (t.sharing && !allowed.has(t.sharing)) {
-            return { ...t, sharing: "" }
-        }
-        return t
-    })
+function firstNonEmpty(...values: any[]): string {
+    for (const value of values) {
+        const next = String(value || "").trim()
+        if (next) return next
+    }
+    return ""
+}
+
+function readInputValue(selectors: string[]): string {
+    if (typeof document === "undefined") return ""
+    for (const selector of selectors) {
+        const el = document.querySelector(selector) as
+            | HTMLInputElement
+            | HTMLTextAreaElement
+            | null
+        const value = String(el?.value || "").trim()
+        if (value) return value
+    }
+    return ""
 }
 
 function populateDropdown(select: HTMLSelectElement, options: string[]) {
@@ -353,12 +418,13 @@ async function fetchTripPricing(tripId: string): Promise<any[]> {
     return Array.isArray(rows) ? rows : []
 }
 
-function resetCouponState(setStore: (next: any) => void, message = "Coupon reset due to selection change") {
-    setStore({
-        appliedCoupon: null,
-        couponMessage: message,
-        couponMessageType: "neutral",
-    })
+function toTitleFromSlug(slug: string): string {
+    const clean = String(slug || "").trim()
+    if (!clean) return ""
+    return clean
+        .replace(/[-_]+/g, " ")
+        .replace(/\s+/g, " ")
+        .trim()
 }
 
 function withTextFromState(getText: (store: any) => string, fallback = "—") {
@@ -376,12 +442,19 @@ export function withCheckoutBootstrap(Component): ComponentType {
         const [store, setStore] = useStore()
 
         useEffect(() => {
+            if (
+                checkoutBootstrapped ||
+                checkoutBootstrapInFlight ||
+                (store?.tripId && Array.isArray(store?.pricingData) && store.pricingData.length > 0)
+            ) {
+                return
+            }
             let disposed = false
+            checkoutBootstrapInFlight = true
 
             const run = async () => {
-                setStore({ loading: true })
-
                 const query = new URLSearchParams(window.location.search)
+                setStore({ loading: true })
                 let tripId = query.get("tripId") || query.get("trip_id") || ""
                 const slug = query.get("slug") || ""
                 const queryDate = query.get("date") || ""
@@ -411,33 +484,37 @@ export function withCheckoutBootstrap(Component): ComponentType {
                 const transport = transports.includes(queryTransport)
                     ? queryTransport
                     : transports[0] || "Seat in Coach"
-                const sharingOptions = getSharingOptions(pricing, date, transport)
-
-                const travellers = sanitizeTravellerSharing(
+                const travellers = sanitizeTravellersForDate(
+                    pricing,
+                    date,
                     normalizeTravellers(store.travellers || []),
-                    sharingOptions
+                    transport
                 )
 
                 setStore({
                     tripId,
-                    slug,
+                    slug: slug || "",
+                    tripName: toTitleFromSlug(slug) || tripId,
                     pricingData: pricing,
                     date,
                     transport,
                     travellers,
                     loading: false,
                 })
+                checkoutBootstrapped = true
+                checkoutBootstrapInFlight = false
 
                 console.log("[Checkout] Opened", {
                     tripId,
                     slug,
                     date,
-                    transport,
+                    defaultTransport: transport,
                 })
             }
 
             run().catch((err) => {
                 console.error("[Checkout] Bootstrap failed", err)
+                checkoutBootstrapInFlight = false
                 if (!disposed) {
                     setStore({
                         loading: false,
@@ -449,6 +526,7 @@ export function withCheckoutBootstrap(Component): ComponentType {
 
             return () => {
                 disposed = true
+                checkoutBootstrapInFlight = false
             }
         }, [])
 
@@ -476,10 +554,12 @@ export function withBookNowToCheckout(Component): ComponentType {
             if (tripId) next.set("tripId", tripId)
             if (slug) next.set("slug", slug)
             if (store.date) next.set("date", store.date)
-            if (store.transport) next.set("vehicle", store.transport)
+            const travellers = normalizeTravellers(store.travellers || [])
+            const firstTransport = travellers[0]?.transport || store.transport
+            if (firstTransport) next.set("vehicle", firstTransport)
 
             const qs = next.toString()
-            window.location.href = qs ? `/checkout?${qs}` : "/checkout"
+            window.location.href = qs ? `${CHECKOUT_PAGE_URL}?${qs}` : CHECKOUT_PAGE_URL
         }
 
         return <Component {...props} onClick={handleClick} />
@@ -492,16 +572,65 @@ export function withCheckoutTripId(Component): ComponentType {
 
 export function withCheckoutSelectionText(Component): ComponentType {
     return withTextFromState((store) => {
-        const date = store.date || "No date"
-        const vehicle = store.transport || "No vehicle"
-        return `${date} · ${vehicle}`
+        const tripName = store.tripName || store.slug || store.tripId || "trip name"
+        return `Checkout for ${tripName}`
     })(Component)
+}
+
+export function withTravellerCount(Component): ComponentType {
+    return withTextFromState((store) => {
+        const count = normalizeTravellers(store?.travellers || []).length
+        return `${count} Traveller${count === 1 ? "" : "s"}`
+    })(Component)
+}
+
+export function withCheckoutBackButton(Component): ComponentType {
+    return (props: any) => {
+        const [store] = useStore()
+
+        const handleClick = (e: any) => {
+            e?.preventDefault?.()
+            e?.stopPropagation?.()
+
+            const slug = String(store?.slug || "").trim()
+            if (slug) {
+                window.location.href = `https://twn2.framer.website/upcoming-trips/${slug}`
+                return
+            }
+
+            if (window.history.length > 1) {
+                window.history.back()
+                return
+            }
+
+            window.location.href = "https://twn2.framer.website/upcoming-trips"
+        }
+
+        return <Component {...props} onClick={handleClick} />
+    }
 }
 
 export function withCheckoutDateSelect(Component): ComponentType {
     return (props: any) => {
         const [store, setStore] = useStore()
         const wrapperRef = useRef<HTMLDivElement>(null)
+        const handleDateChange = (nextDate: string) => {
+            const transports = getTransportOptions(store.pricingData || [], nextDate)
+            const nextTransport = transports.includes(store.transport)
+                ? store.transport
+                : transports[0] || "Seat in Coach"
+            const travellers = sanitizeTravellersForDate(
+                store.pricingData || [],
+                nextDate,
+                normalizeTravellers(store.travellers || []),
+                nextTransport
+            )
+            setStore({
+                date: nextDate,
+                transport: nextTransport,
+                travellers,
+            })
+        }
 
         useEffect(() => {
             if (!wrapperRef.current) return
@@ -518,31 +647,16 @@ export function withCheckoutDateSelect(Component): ComponentType {
             if (store.date && select.value !== store.date) {
                 select.value = store.date
             }
-
-            const listener = () => {
-                const nextDate = select.value
-                const transports = getTransportOptions(store.pricingData || [], nextDate)
-                const nextTransport = transports.includes(store.transport)
-                    ? store.transport
-                    : transports[0] || "Seat in Coach"
-                const sharingOptions = getSharingOptions(store.pricingData || [], nextDate, nextTransport)
-                const travellers = sanitizeTravellerSharing(normalizeTravellers(store.travellers || []), sharingOptions)
-
-                setStore({
-                    date: nextDate,
-                    transport: nextTransport,
-                    travellers,
-                })
-                resetCouponState(setStore, "Coupon reset because date changed")
-            }
-
-            select.addEventListener("change", listener)
-            return () => select.removeEventListener("change", listener)
         }, [store.pricingData, store.date, store.transport, store.travellers])
 
         return (
             <div ref={wrapperRef} style={{ display: "contents" }}>
-                <Component {...props} value={store.date || ""} />
+                <Component
+                    {...props}
+                    value={store.date || ""}
+                    onValueChange={handleDateChange}
+                    onChange={(e: any) => handleDateChange(e?.target?.value || "")}
+                />
             </div>
         )
     }
@@ -550,7 +664,7 @@ export function withCheckoutDateSelect(Component): ComponentType {
 
 export function withCheckoutVehicleSelect(Component): ComponentType {
     return (props: any) => {
-        const [store, setStore] = useStore()
+        const [store] = useStore()
         const wrapperRef = useRef<HTMLDivElement>(null)
 
         useEffect(() => {
@@ -560,32 +674,19 @@ export function withCheckoutVehicleSelect(Component): ComponentType {
 
             const options = getTransportOptions(store.pricingData || [], store.date)
             const signature = JSON.stringify(options)
-
             if (select.getAttribute("data-populated") !== signature) {
                 populateDropdown(select, options)
                 select.setAttribute("data-populated", signature)
             }
-
-            if (store.transport && select.value !== store.transport) {
-                select.value = store.transport
-            }
-
-            const listener = () => {
-                const nextTransport = select.value
-                const sharingOptions = getSharingOptions(store.pricingData || [], store.date, nextTransport)
-                const travellers = sanitizeTravellerSharing(normalizeTravellers(store.travellers || []), sharingOptions)
-
-                setStore({ transport: nextTransport, travellers })
-                resetCouponState(setStore, "Coupon reset because vehicle changed")
-            }
-
-            select.addEventListener("change", listener)
-            return () => select.removeEventListener("change", listener)
-        }, [store.pricingData, store.date, store.transport, store.travellers])
+            if (!select.value) select.value = ""
+        }, [store.pricingData, store.date])
 
         return (
             <div ref={wrapperRef} style={{ display: "contents" }}>
-                <Component {...props} value={store.transport || ""} />
+                <Component
+                    {...props}
+                    style={{ ...(props.style || {}), display: "none", pointerEvents: "none" }}
+                />
             </div>
         )
     }
@@ -679,15 +780,15 @@ export function withTravellerSharing(Component): ComponentType {
         if (!ctx) return <Component {...props} />
 
         const traveller = getTravellerByContext(store, ctx)
+        const travellerTransport = traveller?.transport || store.transport || "Seat in Coach"
         const options = useMemo(
-            () => getSharingOptions(store.pricingData || [], store.date, store.transport),
-            [store.pricingData, store.date, store.transport]
+            () => getSharingOptions(store.pricingData || [], store.date, travellerTransport),
+            [store.pricingData, store.date, travellerTransport]
         )
 
         const handleChange = (value: string) => {
             const next = updateTravellerById(store, ctx.id, { sharing: value })
             setStore({ travellers: next })
-            resetCouponState(setStore, "Coupon reset because sharing changed")
         }
 
         useEffect(() => {
@@ -700,17 +801,98 @@ export function withTravellerSharing(Component): ComponentType {
                 populateDropdown(select, options)
                 select.setAttribute("data-populated", signature)
             }
-
-            select.value = traveller?.sharing || ""
-
-            const listener = () => handleChange(select.value)
-            select.addEventListener("change", listener)
-            return () => select.removeEventListener("change", listener)
-        }, [options, traveller?.sharing, ctx.id])
+        }, [options, ctx.id])
 
         return (
             <div ref={wrapperRef} style={{ display: "contents" }}>
-                <Component {...props} value={traveller?.sharing || ""} />
+                <Component
+                    {...props}
+                    value={traveller?.sharing || ""}
+                    onValueChange={handleChange}
+                    onChange={(e: any) => handleChange(e?.target?.value || "")}
+                />
+            </div>
+        )
+    }
+}
+
+export function withTravellerVehicleSelect(Component): ComponentType {
+    return (props: any) => {
+        const [store, setStore] = useStore()
+        const ctx = useContext(TravellerContext)
+        const wrapperRef = useRef<HTMLDivElement>(null)
+
+        if (!ctx) return <Component {...props} />
+
+        const traveller = getTravellerByContext(store, ctx)
+        const options = useMemo(
+            () => getTransportOptions(store.pricingData || [], store.date),
+            [store.pricingData, store.date]
+        )
+        const hasMultipleVehicleOptions = options.length > 1
+        const selectedTransport = normalizeTravellerTransport(
+            store.pricingData || [],
+            store.date,
+            traveller?.transport || "",
+            store.transport || "Seat in Coach"
+        )
+
+        const handleChange = (value: string) => {
+            const normalized = normalizeTravellerTransport(
+                store.pricingData || [],
+                store.date,
+                value,
+                store.transport || "Seat in Coach"
+            )
+            const sharingOptions = getSharingOptions(store.pricingData || [], store.date, normalized)
+            const nextSharing =
+                traveller?.sharing && sharingOptions.includes(traveller.sharing)
+                    ? traveller.sharing
+                    : ""
+
+            const next = updateTravellerById(store, ctx.id, {
+                transport: normalized,
+                sharing: nextSharing,
+            })
+            setStore({ travellers: next })
+        }
+
+        useEffect(() => {
+            if (!wrapperRef.current) return
+            const select = wrapperRef.current.querySelector("select") as HTMLSelectElement | null
+            if (!select) return
+
+            const signature = JSON.stringify(options)
+            if (select.getAttribute("data-populated") !== signature) {
+                populateDropdown(select, options)
+                select.setAttribute("data-populated", signature)
+            }
+        }, [options, ctx.id])
+
+        useEffect(() => {
+            if (traveller && (!traveller.transport || traveller.transport !== selectedTransport)) {
+                const next = updateTravellerById(store, ctx.id, { transport: selectedTransport })
+                setStore({ travellers: next })
+            }
+        }, [ctx.id, traveller?.transport, selectedTransport])
+
+        return (
+            <div ref={wrapperRef} style={{ display: "contents" }}>
+                <Component
+                    {...props}
+                    value={selectedTransport || ""}
+                    onValueChange={handleChange}
+                    onChange={(e: any) => handleChange(e?.target?.value || "")}
+                    style={{
+                        ...(props.style || {}),
+                        ...(hasMultipleVehicleOptions
+                            ? {}
+                            : {
+                                  display: "none",
+                                  pointerEvents: "none",
+                              }),
+                    }}
+                />
             </div>
         )
     }
@@ -734,7 +916,6 @@ export function withRemoveTraveller(Component): ComponentType {
                     e?.stopPropagation?.()
                     const list = removeTravellerById(store, ctx.id)
                     setStore({ travellers: list })
-                    resetCouponState(setStore, "Coupon reset because traveller list changed")
                 }}
             />
         )
@@ -752,9 +933,19 @@ export function withAddTraveller(Component): ComponentType {
                     e?.preventDefault?.()
                     e?.stopPropagation?.()
                     const list = normalizeTravellers(store.travellers || [])
-                    list.push({ id: nextTravellerId(store), name: "", sharing: "" })
+                    const fallbackTransport = normalizeTravellerTransport(
+                        store.pricingData || [],
+                        store.date,
+                        store.transport || "",
+                        "Seat in Coach"
+                    )
+                    list.push({
+                        id: nextTravellerId(store),
+                        name: "",
+                        transport: fallbackTransport,
+                        sharing: "",
+                    })
                     setStore({ travellers: normalizeTravellers(list) })
-                    resetCouponState(setStore, "Coupon reset because traveller list changed")
                 }}
             />
         )
@@ -859,8 +1050,13 @@ export function withApplyCouponButton(Component): ComponentType {
                 const payload = {
                     trip_id: store.tripId,
                     departure_date: store.date,
-                    transport: store.transport,
-                    travellers: normalizeTravellers(store.travellers || []),
+                    transport: store.transport || null,
+                    travellers: normalizeTravellers(store.travellers || []).map((t) => ({
+                        id: t.id,
+                        name: t.name,
+                        sharing: t.sharing,
+                        transport: t.transport || "Seat in Coach",
+                    })),
                     coupon_code: code,
                     email: store.contactEmail || "",
                 }
@@ -971,7 +1167,13 @@ export function withCouponMessage(Component): ComponentType {
                   ? "#dc2626"
                   : "#6b7280"
 
-        return <Component {...props} text={store.couponMessage || "No coupon applied"} style={{ ...(props.style || {}), color }} />
+        return (
+            <Component
+                {...props}
+                text={store.couponMessage || "Enter a coupon code and tap Apply."}
+                style={{ ...(props.style || {}), color }}
+            />
+        )
     }
 }
 
@@ -1000,9 +1202,22 @@ export function withCheckoutTotal(Component): ComponentType {
 
 export function withCheckoutValidationHint(Component): ComponentType {
     return withTextFromState((store) => {
-        const errors = getValidationErrors(store)
-        if (errors.length === 0) return "Ready to pay"
-        return errors[0]
+        if (!store?.date) return "Select departure date."
+
+        const travellers = normalizeTravellers(store?.travellers || [])
+        const travellerMissing = travellers.some(
+            (t) => !t.name?.trim() || !t.sharing || !t.transport
+        )
+        if (travellerMissing) return "Complete traveller details (name, sharing, vehicle)."
+
+        if (!store?.contactName?.trim() || !store?.contactPhone?.trim() || !store?.contactEmail?.trim()) {
+            return "Enter contact name, phone and email."
+        }
+
+        const totals = computeTotals(store)
+        if (totals.total <= 0) return "Select valid sharing options to calculate total."
+
+        return "Ready to pay"
     })(Component)
 }
 
@@ -1025,18 +1240,52 @@ export function withCheckoutPayButton(Component): ComponentType {
                 total: totals.total,
             })
 
+            const fallbackName = readInputValue([
+                'input[name="contact_name"]',
+                'input[name="name"]',
+                'input[placeholder*="name" i]',
+            ])
+            const fallbackPhone = readInputValue([
+                'input[name="contact_phone"]',
+                'input[name="phone"]',
+                'input[type="tel"]',
+                'input[placeholder*="phone" i]',
+                'input[placeholder*="number" i]',
+            ])
+            const fallbackEmail = readInputValue([
+                'input[name="contact_email"]',
+                'input[name="email"]',
+                'input[type="email"]',
+                'input[placeholder*="email" i]',
+            ])
+
+            const contactName = firstNonEmpty(store.contactName, fallbackName)
+            const contactPhone = firstNonEmpty(store.contactPhone, fallbackPhone)
+            const contactEmail = firstNonEmpty(store.contactEmail, fallbackEmail)
+            const normalizedTravellers = normalizeTravellers(store.travellers || []).map((t) => ({
+                id: t.id,
+                name: String(t.name || "").trim(),
+                sharing: String(t.sharing || "").trim(),
+                transport: String(t.transport || "Seat in Coach").trim() || "Seat in Coach",
+            }))
+
             const payload = {
                 trip_id: store.tripId,
+                date: store.date,
                 departure_date: store.date,
-                transport: store.transport,
-                travellers: normalizeTravellers(store.travellers || []).map((t) => ({
-                    id: t.id,
-                    name: t.name,
-                    sharing: t.sharing,
-                })),
-                name: store.contactName,
-                email: store.contactEmail,
-                phone: store.contactPhone,
+                transport: store.transport || null,
+                travellers: normalizedTravellers,
+                traveller_details: normalizedTravellers,
+                travellers_count: normalizedTravellers.length,
+                name: contactName,
+                email: contactEmail,
+                phone: contactPhone,
+                amount: totals.total,
+                total_amount: totals.total,
+                tax_amount: totals.tax,
+                payment_breakdown: totals.breakdown,
+                currency: "INR",
+                created_at: new Date().toISOString(),
                 coupon_code: store.appliedCoupon?.code || null,
                 pricing_snapshot: {
                     subtotal_amount: totals.subtotal,
@@ -1047,18 +1296,54 @@ export function withCheckoutPayButton(Component): ComponentType {
             }
 
             try {
-                const res = await fetch(`${SUPABASE_URL}/functions/v1/create-booking`, {
+                const headers = {
+                    "Content-Type": "application/json",
+                    apikey: SUPABASE_KEY,
+                    Authorization: `Bearer ${SUPABASE_KEY}`,
+                }
+
+                let res = await fetch(`${SUPABASE_URL}/functions/v1/create-booking`, {
                     method: "POST",
-                    headers: {
-                        "Content-Type": "application/json",
-                        apikey: SUPABASE_KEY,
-                        Authorization: `Bearer ${SUPABASE_KEY}`,
-                    },
+                    headers,
                     body: JSON.stringify(payload),
                 })
 
-                const data = await res.json().catch(() => ({}))
+                let data = await res.json().catch(() => ({}))
+                const legacyMissingFieldsError =
+                    typeof data?.error === "string" &&
+                    data.error.includes("Missing required fields (trip_id, date, travellers, amount, email, name)")
+
+                if (!res.ok && legacyMissingFieldsError) {
+                    const form = new URLSearchParams()
+                    form.set("trip_id", String(payload.trip_id || ""))
+                    form.set("date", String(payload.date || ""))
+                    form.set("amount", String(payload.amount || ""))
+                    form.set("email", String(payload.email || ""))
+                    form.set("name", String(payload.name || ""))
+                    form.set("phone", String(payload.phone || ""))
+                    form.set("transport", String(payload.transport || ""))
+                    form.set("travellers", JSON.stringify(payload.travellers || []))
+                    form.set("coupon_code", String(payload.coupon_code || ""))
+                    form.set("pricing_snapshot", JSON.stringify(payload.pricing_snapshot || {}))
+
+                    res = await fetch(`${SUPABASE_URL}/functions/v1/create-booking`, {
+                        method: "POST",
+                        headers: {
+                            apikey: SUPABASE_KEY,
+                            Authorization: `Bearer ${SUPABASE_KEY}`,
+                            "Content-Type": "application/x-www-form-urlencoded",
+                        },
+                        body: form.toString(),
+                    })
+                    data = await res.json().catch(() => ({}))
+                }
+
                 if (!res.ok) {
+                    console.error("[Checkout] create-booking failed", {
+                        status: res.status,
+                        payload,
+                        response: data,
+                    })
                     showInlineError(data?.error || `Payment setup failed (HTTP ${res.status})`)
                     setStore({ submitting: false })
                     return

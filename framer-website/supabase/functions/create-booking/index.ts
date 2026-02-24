@@ -13,6 +13,7 @@ type TravellerInput = {
     id?: number
     name?: string
     sharing?: string
+    transport?: string
 }
 
 function json(payload: Record<string, unknown>, status = 200) {
@@ -54,16 +55,17 @@ function normalizeTravellers(input: any[]): TravellerInput[] {
         id: Number(item?.id) || undefined,
         name: typeof item?.name === "string" ? item.name.trim() : "",
         sharing: typeof item?.sharing === "string" ? item.sharing.trim() : "",
+        transport: typeof item?.transport === "string" ? item.transport.trim() : "",
     }))
 }
 
 function computePricing(params: {
     pricingRows: any[]
     departureDate: string
-    transport: string
+    fallbackTransport: string
     travellers: TravellerInput[]
 }) {
-    const { pricingRows, departureDate, transport, travellers } = params
+    const { pricingRows, departureDate, fallbackTransport, travellers } = params
 
     let subtotal = 0
     const missingSharings: string[] = []
@@ -73,6 +75,8 @@ function computePricing(params: {
 
     for (const traveller of travellers) {
         const sharing = String(traveller.sharing || "")
+        const transport =
+            String(traveller.transport || "").trim() || fallbackTransport || "Seat in Coach"
         if (!sharing) {
             missingSharings.push("<blank>")
             continue
@@ -96,17 +100,24 @@ function computePricing(params: {
         }
 
         subtotal += unitPrice
-        if (!groups[sharing]) groups[sharing] = { count: 0, unit: unitPrice }
-        groups[sharing].count += 1
+        const key = `${transport}__${sharing}`
+        if (!groups[key]) groups[key] = { count: 0, unit: unitPrice }
+        groups[key].count += 1
     }
 
-    const breakdown = Object.entries(groups).map(([variant, data]) => ({
-        label: `${data.count}x Guest (${variant})`,
-        price: data.unit * data.count,
-        unit_price: data.unit,
-        count: data.count,
-        variant,
-    }))
+    const breakdown = Object.entries(groups).map(([key, data]) => {
+        const parts = key.split("__")
+        const transport = parts[0] || "Seat in Coach"
+        const variant = parts[1] || ""
+        return {
+            label: `${data.count}x Guest (${variant}${transport ? ` · ${transport}` : ""})`,
+            price: data.unit * data.count,
+            unit_price: data.unit,
+            count: data.count,
+            variant,
+            transport,
+        }
+    })
 
     return {
         subtotal: round2(subtotal),
@@ -271,7 +282,7 @@ serve(async (req) => {
 
         const tripId = String(body?.trip_id || "").trim()
         const departureDate = String(body?.departure_date || "").trim()
-        const transport = String(body?.transport || "").trim() || "Seat in Coach"
+        const fallbackTransport = String(body?.transport || "").trim() || "Seat in Coach"
         const travellers = normalizeTravellers(body?.travellers || [])
         const couponCode = normalizeCouponCode(body?.coupon_code || "")
         const pricingSnapshot = body?.pricing_snapshot
@@ -328,7 +339,7 @@ serve(async (req) => {
         const pricingResult = computePricing({
             pricingRows: pricing,
             departureDate,
-            transport,
+            fallbackTransport,
             travellers,
         })
 
@@ -401,7 +412,7 @@ serve(async (req) => {
             .insert({
                 trip_id: tripId,
                 departure_date: departureDate,
-                transport,
+                transport: fallbackTransport,
                 travellers,
                 payment_breakdown: paymentBreakdown,
                 subtotal_amount: subtotalAmount,
@@ -454,7 +465,7 @@ serve(async (req) => {
                 discount_amount: discountAmount,
                 tax_amount: taxAmount,
                 total_amount: totalAmount,
-                transport,
+                transport: fallbackTransport,
                 departure_date: departureDate,
             },
             payu: {

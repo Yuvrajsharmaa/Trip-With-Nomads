@@ -285,7 +285,7 @@
             slug: "winter-spiti-expedition",
             date: "",
             vehicle: "",
-            travellers: [{ id: 1, name: "", sharing: "" }],
+            travellers: [{ id: 1, name: "", transport: "", sharing: "" }],
             contactName: "",
             contactPhone: "",
             contactEmail: "",
@@ -330,28 +330,36 @@
             return [...new Set(rows.map((r) => r.start_date))].sort()
         }
 
-        function getVehicleOptions() {
-            const rows = getTripRows().filter((r) => !state.date || r.start_date === state.date)
+        function getVehicleOptions(date = state.date) {
+            const rows = getTripRows().filter((r) => !date || r.start_date === date)
             const vehicles = [...new Set(rows.map((r) => r.transport || "Seat in Coach"))].sort()
             return vehicles.length ? vehicles : ["Seat in Coach"]
         }
 
-        function getSharingOptions() {
-            if (!state.date) return []
-            const rows = getTripRows().filter((r) => r.start_date === state.date && (r.transport || "Seat in Coach") === state.vehicle)
+        function getSharingOptions(vehicle, date = state.date) {
+            if (!date) return []
+            const rows = getTripRows().filter((r) => r.start_date === date && (r.transport || "Seat in Coach") === vehicle)
             return [...new Set(rows.map((r) => r.variant_name))].sort()
         }
 
-        function getPriceForSharing(sharing) {
-            if (!sharing || !state.date) return 0
-            const row = getTripRows().find((r) => r.start_date === state.date && (r.transport || "Seat in Coach") === state.vehicle && r.variant_name === sharing)
+        function getPriceForSharing(sharing, vehicle, date = state.date) {
+            if (!sharing || !date) return 0
+            const row = getTripRows().find((r) => r.start_date === date && (r.transport || "Seat in Coach") === vehicle && r.variant_name === sharing)
             return Number(row?.price) || 0
+        }
+
+        function normalizeTravellerVehicle(value) {
+            const options = getVehicleOptions(state.date)
+            if (value && options.includes(value)) return value
+            if (state.vehicle && options.includes(state.vehicle)) return state.vehicle
+            return options[0] || "Seat in Coach"
         }
 
         function calcTotals() {
             let subtotal = 0
             for (const t of state.travellers) {
-                subtotal += getPriceForSharing(t.sharing)
+                const vehicle = normalizeTravellerVehicle(t.transport)
+                subtotal += getPriceForSharing(t.sharing, vehicle)
             }
 
             let discount = 0
@@ -446,6 +454,12 @@
             if (!state.vehicle || !vehicleOptions.includes(state.vehicle)) {
                 state.vehicle = vehicleOptions[0]
             }
+            state.travellers = state.travellers.map((t) => {
+                const transport = normalizeTravellerVehicle(t.transport)
+                const sharingOptions = getSharingOptions(transport, state.date)
+                const sharing = t.sharing && sharingOptions.includes(t.sharing) ? t.sharing : ""
+                return { ...t, transport, sharing }
+            })
         }
 
         function renderHeader() {
@@ -473,33 +487,21 @@
         }
 
         function renderVehicleSelect() {
-            const options = getVehicleOptions()
-            els.vehicleOption.innerHTML = ""
-
-            for (const value of options) {
-                const opt = document.createElement("option")
-                opt.value = value
-                opt.textContent = value
-                els.vehicleOption.appendChild(opt)
-            }
-
-            if (!state.vehicle || !options.includes(state.vehicle)) {
-                state.vehicle = options[0] || ""
-            }
-
-            els.vehicleOption.value = state.vehicle
-            els.vehicleWrap.classList.toggle("hidden", options.length <= 1)
+            els.vehicleWrap.classList.add("hidden")
         }
 
         function renderTravellers() {
-            const sharingOptions = getSharingOptions()
             els.travellerList.innerHTML = ""
 
             state.travellers.forEach((traveller, index) => {
                 const row = document.createElement("div")
                 row.className = "rounded-2xl border border-gray-200 bg-[#f5f5f5] p-4"
 
-                const price = getPriceForSharing(traveller.sharing)
+                const vehicleOptions = getVehicleOptions(state.date)
+                const selectedVehicle = normalizeTravellerVehicle(traveller.transport)
+                const sharingOptions = getSharingOptions(selectedVehicle, state.date)
+                if (!sharingOptions.includes(traveller.sharing)) traveller.sharing = ""
+                const price = getPriceForSharing(traveller.sharing, selectedVehicle)
 
                 row.innerHTML = `
                     <div class="mb-3 flex items-center justify-between">
@@ -522,6 +524,14 @@
                             </select>
                         </label>
                     </div>
+                    <div class="mt-3">
+                        <label class="space-y-1">
+                            <span class="text-sm text-gray-700">Vehicle selection</span>
+                            <select data-vehicle="${traveller.id}" class="w-full rounded-xl border border-gray-200 bg-white px-3 py-2.5 outline-none focus:border-primary focus:ring-2 focus:ring-primary/20">
+                                ${vehicleOptions.map((option) => `<option value="${option}" ${selectedVehicle === option ? "selected" : ""}>${option}</option>`).join("")}
+                            </select>
+                        </label>
+                    </div>
                     <p class="mt-2 text-xs text-gray-500">${price > 0 ? "Price: " + formatINR(price) : "Select date + sharing"}</p>
                 `
 
@@ -535,7 +545,7 @@
                     const id = Number(btn.getAttribute("data-remove"))
                     state.travellers = state.travellers.filter((t) => t.id !== id)
                     if (state.travellers.length === 0) {
-                        state.travellers = [{ id: 1, name: "", sharing: "" }]
+                        state.travellers = [{ id: 1, name: "", transport: normalizeTravellerVehicle(""), sharing: "" }]
                     }
                     clearCoupon("Coupon reset because traveller list changed.")
                     renderTravellers()
@@ -563,19 +573,36 @@
                 })
             })
 
+            els.travellerList.querySelectorAll("[data-vehicle]").forEach((select) => {
+                select.addEventListener("change", (e) => {
+                    const id = Number(select.getAttribute("data-vehicle"))
+                    const next = e.target.value
+                    const idx = state.travellers.findIndex((t) => t.id === id)
+                    if (idx !== -1) {
+                        state.travellers[idx].transport = normalizeTravellerVehicle(next)
+                        const sharingOptions = getSharingOptions(state.travellers[idx].transport, state.date)
+                        if (!sharingOptions.includes(state.travellers[idx].sharing)) {
+                            state.travellers[idx].sharing = ""
+                        }
+                    }
+                    clearCoupon("Coupon reset because vehicle changed.")
+                    renderTravellers()
+                })
+            })
+
             renderSummary()
         }
 
         function getFormErrors() {
             const errors = []
             if (!state.date) errors.push("Select a departure date")
-            if (!state.vehicle) errors.push("Select a vehicle option")
             if (!state.contactName.trim()) errors.push("Contact name is required")
             if (!state.contactPhone.trim()) errors.push("Contact phone is required")
             if (!state.contactEmail.trim()) errors.push("Contact email is required")
 
             state.travellers.forEach((traveller, index) => {
                 if (!traveller.name.trim()) errors.push(`Name missing for Traveller ${index + 1}`)
+                if (!traveller.transport) errors.push(`Vehicle missing for Traveller ${index + 1}`)
                 if (!traveller.sharing) errors.push(`Sharing missing for Traveller ${index + 1}`)
             })
 
@@ -635,7 +662,12 @@
         }
 
         function addTraveller() {
-            state.travellers.push({ id: nextTravellerId(), name: "", sharing: "" })
+            state.travellers.push({
+                id: nextTravellerId(),
+                name: "",
+                transport: normalizeTravellerVehicle(""),
+                sharing: "",
+            })
             clearCoupon("Coupon reset because traveller list changed.")
             renderTravellers()
         }
@@ -652,8 +684,13 @@
                 trip_id: state.tripId,
                 slug: state.slug,
                 departure_date: state.date,
-                transport: state.vehicle,
-                travellers: state.travellers,
+                transport: state.vehicle || null,
+                travellers: state.travellers.map((t) => ({
+                    id: t.id,
+                    name: t.name,
+                    sharing: t.sharing,
+                    transport: normalizeTravellerVehicle(t.transport),
+                })),
                 name: state.contactName,
                 phone: state.contactPhone,
                 email: state.contactEmail,
@@ -673,14 +710,15 @@
         function bindEvents() {
             els.departureDate.addEventListener("change", (e) => {
                 state.date = e.target.value
-                renderVehicleSelect()
+                const options = getVehicleOptions(state.date)
+                state.vehicle = options[0] || "Seat in Coach"
+                state.travellers = state.travellers.map((t) => {
+                    const transport = normalizeTravellerVehicle(t.transport)
+                    const sharingOptions = getSharingOptions(transport, state.date)
+                    const sharing = t.sharing && sharingOptions.includes(t.sharing) ? t.sharing : ""
+                    return { ...t, transport, sharing }
+                })
                 clearCoupon("Coupon reset because date changed.")
-                renderTravellers()
-            })
-
-            els.vehicleOption.addEventListener("change", (e) => {
-                state.vehicle = e.target.value
-                clearCoupon("Coupon reset because vehicle changed.")
                 renderTravellers()
             })
 

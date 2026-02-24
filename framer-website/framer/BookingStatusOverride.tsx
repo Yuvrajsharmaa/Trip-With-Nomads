@@ -137,14 +137,20 @@ function bookingRef(data: any): string {
     return "#TWN-" + data.id.replace(/-/g, "").slice(0, 8).toUpperCase()
 }
 
-function initials(name: string): string {
-    if (!name) return "?"
-    const parts = name.trim().split(/\s+/)
-    return parts.length === 1
-        ? parts[0][0].toUpperCase()
-        : (parts[0][0] + parts[parts.length - 1][0]).toUpperCase()
+function nodeText(node: any): string {
+    if (typeof node === "string") return node
+    if (typeof node === "number") return String(node)
+    if (Array.isArray(node)) return node.map((n) => nodeText(n)).join(" ")
+    if (React.isValidElement(node)) return nodeText((node as any).props?.children)
+    return ""
 }
 
+function normalizeSharingLabel(value: string): string {
+    const clean = String(value || "").trim().replace(/\s+/g, " ")
+    if (!clean) return ""
+    if (/\bsharing\b/i.test(clean)) return clean
+    return `${clean} Sharing`
+}
 
 // ═════════════════════════════════════════════════════════════
 // 1. PAGE-LEVEL: withBookingStatus
@@ -281,44 +287,6 @@ export function withBookingStatus(Component): ComponentType {
 }
 
 // ═════════════════════════════════════════════════════════════
-// DEBUG: View Raw Data
-// ═════════════════════════════════════════════════════════════
-
-export function withDebugOverlay(Component): ComponentType {
-    return (props: any) => {
-        const [data, state] = useBooking()
-        if (!data) return <Component {...props} />
-
-        return (
-            <div style={{ position: "relative" }}>
-                <Component {...props} />
-                <div style={{
-                    position: "fixed",
-                    bottom: 10,
-                    right: 10,
-                    background: "rgba(0,0,0,0.8)",
-                    color: "#0f0",
-                    padding: 10,
-                    fontSize: 10,
-                    zIndex: 9999,
-                    pointerEvents: "none",
-                    maxWidth: 300,
-                    overflow: "hidden"
-                }}>
-                    <pre>{JSON.stringify({
-                        id: data.id?.slice(0, 4),
-                        status: data.payment_status,
-                        ref: data.booking_ref,
-                        amount: data.total_amount
-                    }, null, 2)}</pre>
-                </div>
-            </div>
-        )
-    }
-}
-
-
-// ═════════════════════════════════════════════════════════════
 // 2. TEXT OVERRIDES
 //    Each finds the first text element inside the Framer
 //    component and replaces its textContent.
@@ -422,7 +390,7 @@ export function withDiscountAmount(Component): ComponentType {
 export function withCouponCode(Component): ComponentType {
     return textOverride((d) => {
         const code = (d as any).coupon_code
-        return code ? String(code).toUpperCase() : "No coupon"
+        return code ? String(code).toUpperCase() : ""
     })(Component)
 }
 
@@ -475,61 +443,95 @@ export function withPaymentBadge(Component): ComponentType {
 export function withTravellerList(Component): ComponentType {
     return (props: any) => {
         const [data, state] = useBooking()
-        const ref = useRef<HTMLDivElement>(null)
+        const travellers = data?.travellers || []
+        const rowRefs = useRef<Array<HTMLDivElement | null>>([])
+        const childrenArray = React.Children.toArray(props.children)
+        const template =
+            (childrenArray.find((child) => {
+                if (!React.isValidElement(child)) return false
+                const text = nodeText((child as any).props?.children).toLowerCase()
+                return text.includes("name") || text.includes("sharing") || text.includes("email")
+            }) as React.ReactElement | undefined) ||
+            (childrenArray.find((child) => React.isValidElement(child)) as React.ReactElement | undefined)
 
         useEffect(() => {
-            if (state !== "ready" || !data || !ref.current) return
+            if (state !== "ready" || !data || !template || travellers.length === 0) return
 
-            const container = ref.current
-            const travellers = data.travellers || []
+            travellers.forEach((traveller, index) => {
+                const row = rowRefs.current[index]
+                if (!row) return
 
-            // Clear Framer placeholder content
-            container.innerHTML = ""
+                const textNodes = Array.from(
+                    row.querySelectorAll<HTMLElement>("p, span, h1, h2, h3, h4, h5, h6")
+                ).filter((el) => String(el.textContent || "").trim().length > 0)
 
-            if (travellers.length === 0) {
-                container.innerHTML = `
-                    <div style="color:#999; font-size:14px; padding:8px 0;">
-                        No traveller details recorded.
-                    </div>
-                `
-                return
-            }
+                if (textNodes.length === 0) return
 
-            // Inject styles once
-            const style = document.createElement("style")
-            style.textContent = `
-                .twn-t { display:flex; align-items:center; gap:12px; padding:12px 0; border-bottom:1px solid #eee; }
-                .twn-t:last-child { border-bottom:none; }
-                .twn-av { width:36px; height:36px; border-radius:50%; background:linear-gradient(135deg,#6366f1,#a855f7); display:flex; align-items:center; justify-content:center; font-size:13px; font-weight:700; color:#fff; flex-shrink:0; }
-                .twn-ti { flex:1; }
-                .twn-tn { font-size:14px; font-weight:600; color:#1a1a1a; margin:0; }
-                .twn-td { font-size:13px; color:#888; margin:2px 0 0 0; }
-            `
-            container.appendChild(style)
+                const name = String(traveller?.name || "").trim() || `Traveller ${index + 1}`
+                const sharing = normalizeSharingLabel(String(traveller?.sharing || ""))
+                const sharingText = sharing || ""
+                const emailPart = index === 0 && data.email ? ` · ${data.email}` : ""
+                const metaText = `${sharingText}${emailPart}`.trim()
 
-            // Build traveller rows
-            travellers.forEach((t, i) => {
-                const name = t.name || `Traveller ${i + 1}`
-                const sharing = (t.sharing || "—").charAt(0).toUpperCase() + (t.sharing || "—").slice(1)
-                const emailPart = i === 0 && data.email ? ` · ${data.email}` : ""
+                const nameNode =
+                    textNodes.find((el) => /name/i.test(String(el.textContent || ""))) || textNodes[0]
+                const metaNode =
+                    textNodes.find((el) => /sharing|email/i.test(String(el.textContent || ""))) ||
+                    textNodes[1]
 
-                const row = document.createElement("div")
-                row.className = "twn-t"
-                row.innerHTML = `
-                    <div class="twn-av">${initials(name)}</div>
-                    <div class="twn-ti">
-                        <p class="twn-tn">${name}</p>
-                        <p class="twn-td">${sharing} Sharing${emailPart}</p>
-                    </div>
-                `
-                container.appendChild(row)
+                if (nameNode) nameNode.textContent = name
+                if (metaNode) metaNode.textContent = metaText
+
+                // Remove any leftover placeholder nodes like "Sharing", "Email", bullets, etc.
+                textNodes.forEach((el) => {
+                    if (el === nameNode || el === metaNode) return
+                    const lower = String(el.textContent || "").trim().toLowerCase()
+                    if (
+                        lower === "name" ||
+                        lower === "·" ||
+                        /\bsharing\b/i.test(lower) ||
+                        /\bemail\b/i.test(lower)
+                    ) {
+                        el.textContent = ""
+                        ;(el as HTMLElement).style.display = "none"
+                    }
+                })
             })
-        }, [data, state])
+        }, [state, data, template, travellers])
+
+        if (state !== "ready" || !data || !template || travellers.length === 0) {
+            return <Component {...props} />
+        }
 
         return (
-            <div ref={ref} style={{ width: "100%", minHeight: "20px" }}>
-                <Component {...props} />
-            </div>
+            <Component
+                {...props}
+                style={{
+                    ...(props.style || {}),
+                    display: "flex",
+                    flexDirection: "column",
+                    gap: "12px",
+                }}
+            >
+                {travellers.map((_, index) => (
+                    <div
+                        key={`status-traveller-row-${index}`}
+                        ref={(el) => {
+                            rowRefs.current[index] = el
+                        }}
+                        style={{ width: "100%" }}
+                    >
+                        {React.cloneElement(template, {
+                            key: `status-traveller-template-${index}`,
+                            style: {
+                                ...((template.props as any)?.style || {}),
+                                width: "100%",
+                                position: "relative",
+                            },
+                        })}
+                    </div>
+                ))}
+            </Component>
         )
     }
 }
@@ -693,6 +695,32 @@ export function withHideOnFailure(Component): ComponentType {
             return <Component {...props} style={{ ...props.style, display: "none" }} />
         }
 
+        return <Component {...props} />
+    }
+}
+
+// Hide coupon-related layers when no coupon is applied.
+export function withHideWhenNoCoupon(Component): ComponentType {
+    return (props: any) => {
+        const [data, state] = useBooking()
+        const hasCoupon = Boolean(String((data as any)?.coupon_code || "").trim())
+
+        if (state === "ready" && !hasCoupon) {
+            return <Component {...props} style={{ ...(props.style || {}), display: "none" }} />
+        }
+        return <Component {...props} />
+    }
+}
+
+// Hide discount rows when discount amount is zero.
+export function withHideWhenNoDiscount(Component): ComponentType {
+    return (props: any) => {
+        const [data, state] = useBooking()
+        const discount = data ? discountAmount(data) : 0
+
+        if (state === "ready" && discount <= 0) {
+            return <Component {...props} style={{ ...(props.style || {}), display: "none" }} />
+        }
         return <Component {...props} />
     }
 }

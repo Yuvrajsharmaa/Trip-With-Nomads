@@ -11,6 +11,7 @@ const corsHeaders = {
 type TravellerInput = {
     name?: string
     sharing?: string
+    transport?: string
 }
 
 function round2(value: number): number {
@@ -39,6 +40,7 @@ function normalizeTravellers(raw: any[]): TravellerInput[] {
     return raw.map((item) => ({
         name: typeof item?.name === "string" ? item.name.trim() : "",
         sharing: typeof item?.sharing === "string" ? item.sharing.trim() : "",
+        transport: typeof item?.transport === "string" ? item.transport.trim() : "",
     }))
 }
 
@@ -52,10 +54,10 @@ function json(payload: any, status = 200) {
 function computeSubtotal(params: {
     pricingRows: any[]
     departureDate: string
-    transport: string
+    fallbackTransport: string
     travellers: TravellerInput[]
 }) {
-    const { pricingRows, departureDate, transport, travellers } = params
+    const { pricingRows, departureDate, fallbackTransport, travellers } = params
 
     let subtotal = 0
     const missingSharings: string[] = []
@@ -65,6 +67,7 @@ function computeSubtotal(params: {
         if (!sharing) continue
 
         const rowsByDate = pricingRows.filter((row) => getDateValue(row) === departureDate)
+        const transport = String(traveller.transport || "").trim() || fallbackTransport || "Seat in Coach"
         const rowByTransport = rowsByDate.find(
             (row) => getTransportValue(row) === transport && getVariantValue(row) === sharing
         )
@@ -105,7 +108,7 @@ Deno.serve(async (req) => {
 
         const tripId = String(body?.trip_id || "").trim()
         const departureDate = String(body?.departure_date || "").trim()
-        const transport = String(body?.transport || "").trim() || "Seat in Coach"
+        const fallbackTransport = String(body?.transport || "").trim() || "Seat in Coach"
         const email = String(body?.email || "").trim().toLowerCase()
         const couponCode = normalizeCode(body?.coupon_code || "")
         const travellers = normalizeTravellers(body?.travellers || [])
@@ -138,7 +141,7 @@ Deno.serve(async (req) => {
         const subtotalResult = computeSubtotal({
             pricingRows: pricing,
             departureDate,
-            transport,
+            fallbackTransport,
             travellers,
         })
 
