@@ -234,7 +234,15 @@ function computeTotals(store: any) {
         groups[key].count += 1
     }
 
-    const discountRaw = toNumber(store?.appliedCoupon?.discount_amount)
+    const coupon = store?.appliedCoupon || null
+    const couponType = String(coupon?.discount_type || "").toLowerCase()
+    const couponValue = toNumber(coupon?.discount_value)
+    const discountRaw =
+        couponType === "percent"
+            ? round2((subtotal * couponValue) / 100)
+            : couponType === "fixed"
+              ? couponValue
+              : toNumber(coupon?.discount_amount)
     const discount = Math.min(Math.max(0, discountRaw), subtotal)
     const taxableSubtotal = Math.max(0, subtotal - discount)
     const tax = round2(taxableSubtotal * TAX_RATE)
@@ -1192,6 +1200,13 @@ export function withCheckoutDiscountLabel(Component): ComponentType {
     })(Component)
 }
 
+export function withCheckoutCouponCode(Component): ComponentType {
+    return withTextFromState((store) => {
+        const code = String(store?.appliedCoupon?.code || "").trim()
+        return code || "No coupon"
+    })(Component)
+}
+
 export function withCheckoutTax(Component): ComponentType {
     return withTextFromState((store) => fmtINR(computeTotals(store).tax))(Component)
 }
@@ -1219,6 +1234,32 @@ export function withCheckoutValidationHint(Component): ComponentType {
 
         return "Ready to pay"
     })(Component)
+}
+
+// Hide coupon-specific rows/labels if no coupon is currently applied.
+export function withCheckoutHideWhenNoCoupon(Component): ComponentType {
+    return (props: any) => {
+        const [store] = useStore()
+        const hasCoupon = Boolean(String(store?.appliedCoupon?.code || "").trim())
+
+        if (!hasCoupon) {
+            return <Component {...props} style={{ ...(props.style || {}), display: "none" }} />
+        }
+        return <Component {...props} />
+    }
+}
+
+// Hide discount rows when discount is zero (or no coupon effect).
+export function withCheckoutHideWhenNoDiscount(Component): ComponentType {
+    return (props: any) => {
+        const [store] = useStore()
+        const hasDiscount = computeTotals(store).discount > 0
+
+        if (!hasDiscount) {
+            return <Component {...props} style={{ ...(props.style || {}), display: "none" }} />
+        }
+        return <Component {...props} />
+    }
 }
 
 export function withCheckoutPayButton(Component): ComponentType {
