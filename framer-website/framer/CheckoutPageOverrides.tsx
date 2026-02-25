@@ -16,17 +16,18 @@ const SUPABASE_KEY =
     "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imp4b3p6dnd2cHJtbmh2YWZtcHNhIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjgwNTg2NjIsImV4cCI6MjA4MzYzNDY2Mn0.KpVa9dWlJEguL1TA00Tf4QDpziJ1mgA2I0f4_l-vlOk"
 const TAX_RATE = 0.02
 const CHECKOUT_PAGE_URL = "https://twn2.framer.website/checkout"
+const SHARING_VALUES = ["Quad", "Triple", "Double"] as const
+type SharingValue = (typeof SHARING_VALUES)[number]
 
 const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
 const PHONE_REGEX = /^\+?[\d\s\-()]{10,15}$/
-let checkoutBootstrapped = false
-let checkoutBootstrapInFlight = false
+const tripDisplayCache = new Map<string, { ts: number; data: any }>()
 
 type Traveller = {
     id: number
     name: string
     transport: string
-    sharing: string
+    sharing: SharingValue | ""
 }
 
 type CouponResult = {
@@ -36,11 +37,48 @@ type CouponResult = {
     discount_value?: number
     discount_amount?: number
     min_subtotal?: number
+    coupon_wins?: boolean
+    final_applied_source?: "none" | "early_bird" | "coupon"
+    base_subtotal?: number
+    early_bird_discount_amount?: number
+    coupon_discount_amount?: number
+    applied_discount_source?: "none" | "early_bird" | "coupon"
+    applied_discount_code?: string | null
+    discount_amount_total?: number
+    taxable_amount?: number
+    tax_amount?: number
+    total_amount?: number
+    line_items?: Array<{
+        traveller_id: number
+        sharing: string
+        transport: string
+        unit_price: number
+    }>
     message?: string
+}
+
+type PricingBreakdown = {
+    base_subtotal: number
+    early_bird_discount_amount: number
+    coupon_discount_amount: number
+    applied_discount_source: "none" | "early_bird" | "coupon"
+    applied_discount_code: string | null
+    discount_amount_total: number
+    taxable_amount: number
+    tax_amount: number
+    total_amount: number
+    line_items: Array<{
+        traveller_id: number
+        sharing: string
+        transport: string
+        unit_price: number
+    }>
 }
 
 type TravellerContextValue = { id: number; index: number }
 const TravellerContext = createContext<TravellerContextValue | null>(null)
+type SummaryLineContextValue = { key: string; label: string; amount: number }
+const SummaryLineContext = createContext<SummaryLineContextValue | null>(null)
 
 const useStore = createStore({
     tripId: "",
@@ -50,11 +88,13 @@ const useStore = createStore({
     date: "",
     transport: "",
     travellers: [{ id: 1, name: "", transport: "", sharing: "" }] as Traveller[],
+    inviteOnly: false,
     contactName: "",
     contactPhone: "",
     contactEmail: "",
     couponCode: "",
     appliedCoupon: null as CouponResult | null,
+    pricingBreakdown: null as PricingBreakdown | null,
     couponMessage: "Enter a coupon code and tap Apply.",
     couponMessageType: "neutral" as "neutral" | "success" | "error",
     loading: false,
@@ -66,12 +106,88 @@ function toNumber(value: any): number {
     return Number.isFinite(parsed) ? parsed : 0
 }
 
+function pickFirstNumber(source: any, keys: string[], fallback = 0): number {
+    if (!source || typeof source !== "object") return fallback
+    for (const key of keys) {
+        if (!(key in source)) continue
+        const parsed = Number(source[key])
+        if (Number.isFinite(parsed)) return parsed
+    }
+    return fallback
+}
+
 function round2(value: number): number {
     return Math.round((Number(value) + Number.EPSILON) * 100) / 100
 }
 
 function fmtINR(value: number): string {
     return "₹" + toNumber(value).toLocaleString("en-IN")
+}
+
+function buildPricingBreakdownFromQuote(source: any, fallbackStore: any): PricingBreakdown {
+    const fallback = buildLocalPricingBreakdown(fallbackStore)
+    const baseSubtotal = round2(
+        pickFirstNumber(source, ["base_subtotal", "subtotal_amount", "subtotal"], fallback.base_subtotal)
+    )
+    const earlyBirdDiscountAmount = round2(
+        pickFirstNumber(
+            source,
+            ["early_bird_discount_amount", "earlyBirdDiscountAmount"],
+            fallback.early_bird_discount_amount
+        )
+    )
+    const couponDiscountAmount = round2(
+        pickFirstNumber(
+            source,
+            ["coupon_discount_amount", "couponDiscountAmount"],
+            fallback.coupon_discount_amount
+        )
+    )
+    const discountAmountTotal = round2(
+        pickFirstNumber(
+            source,
+            ["discount_amount_total", "discount_amount", "discountAmount"],
+            fallback.discount_amount_total
+        )
+    )
+
+    const appliedDiscountSource = ((
+        String(source?.applied_discount_source || source?.final_applied_source || "")
+            .trim()
+            .toLowerCase() || fallback.applied_discount_source
+    ) as PricingBreakdown["applied_discount_source"]) || "none"
+
+    const appliedDiscountCodeRaw = String(
+        source?.applied_discount_code || source?.code || fallback.applied_discount_code || ""
+    )
+        .trim()
+        .toUpperCase()
+
+    const taxableAmount = round2(
+        pickFirstNumber(
+            source,
+            ["taxable_amount", "taxableSubtotal"],
+            Math.max(0, baseSubtotal - discountAmountTotal)
+        )
+    )
+    const fallbackTax = round2(Math.max(0, taxableAmount) * TAX_RATE)
+    const taxAmount = round2(pickFirstNumber(source, ["tax_amount", "taxAmount"], fallbackTax))
+    const totalAmount = round2(
+        pickFirstNumber(source, ["total_amount", "totalAmount"], Math.max(0, taxableAmount + taxAmount))
+    )
+
+    return {
+        base_subtotal: baseSubtotal,
+        early_bird_discount_amount: earlyBirdDiscountAmount,
+        coupon_discount_amount: couponDiscountAmount,
+        applied_discount_source: appliedDiscountSource,
+        applied_discount_code: appliedDiscountCodeRaw || null,
+        discount_amount_total: discountAmountTotal,
+        taxable_amount: taxableAmount,
+        tax_amount: taxAmount,
+        total_amount: totalAmount,
+        line_items: Array.isArray(source?.line_items) ? source.line_items : fallback.line_items,
+    }
 }
 
 function normalizeTravellerId(id: any, index: number): number {
@@ -92,7 +208,7 @@ function normalizeTravellers(input: any[]): Traveller[] {
             id,
             name: typeof item?.name === "string" ? item.name : "",
             transport: typeof item?.transport === "string" ? item.transport : "",
-            sharing: typeof item?.sharing === "string" ? item.sharing : "",
+            sharing: normalizeSharing(typeof item?.sharing === "string" ? item.sharing : ""),
         }
     })
 
@@ -135,12 +251,26 @@ function getDateValue(row: any): string {
     return row?.start_date || row?.departure_date || ""
 }
 
+function normalizeSharing(value: string): SharingValue | "" {
+    const clean = String(value || "").trim().replace(/\s+/g, " ")
+    if (!clean) return ""
+    const lower = clean.toLowerCase()
+    if (lower.includes("quad")) return "Quad"
+    if (lower.includes("triple")) return "Triple"
+    if (lower.includes("double")) return "Double"
+    return ""
+}
+
 function getVariantValue(row: any): string {
-    return row?.variant_name || row?.sharing || ""
+    return normalizeSharing(String(row?.sharing || ""))
 }
 
 function getTransportValue(row: any): string {
-    return row?.transport || "Seat in Coach"
+    const vehicle = String(row?.vehicle || "").trim()
+    if (vehicle) return vehicle
+    const transport = String(row?.transport || "").trim()
+    if (transport) return transport
+    return ""
 }
 
 function getDateOptions(pricing: any[]): string[] {
@@ -150,7 +280,11 @@ function getDateOptions(pricing: any[]): string[] {
 function getTransportOptions(pricing: any[], date: string): string[] {
     const filtered = (pricing || []).filter((row: any) => !date || getDateValue(row) === date)
     const options = [...new Set(filtered.map((row: any) => getTransportValue(row)).filter(Boolean))].sort()
-    return options.length > 0 ? options : ["Seat in Coach"]
+    return options
+}
+
+function hasVehicleOptions(pricing: any[], date: string): boolean {
+    return getTransportOptions(pricing, date).length > 1
 }
 
 function getSharingOptions(pricing: any[], date: string, transport?: string): string[] {
@@ -159,7 +293,29 @@ function getSharingOptions(pricing: any[], date: string, transport?: string): st
             (!date || getDateValue(row) === date) &&
             (!transport || getTransportValue(row) === transport)
     )
-    return [...new Set(filtered.map((row: any) => getVariantValue(row)).filter(Boolean))].sort()
+    const valueSet = new Set(
+        filtered
+            .map((row: any) => getVariantValue(row))
+            .filter((value) => SHARING_VALUES.includes(value as SharingValue))
+    )
+    return SHARING_VALUES.filter((value) => valueSet.has(value))
+}
+
+function pickBestPricingRow(rows: any[]): any | null {
+    if (!Array.isArray(rows) || rows.length === 0) return null
+    return rows.reduce((best, row) => {
+        if (!best) return row
+        const bestPrice = toNumber(best?.price)
+        const nextPrice = toNumber(row?.price)
+        if (nextPrice < bestPrice) return row
+        if (nextPrice > bestPrice) return best
+        const bestCreated = Date.parse(String(best?.created_at || ""))
+        const nextCreated = Date.parse(String(row?.created_at || ""))
+        if (Number.isFinite(nextCreated) && Number.isFinite(bestCreated) && nextCreated > bestCreated) {
+            return row
+        }
+        return best
+    }, rows[0] || null)
 }
 
 function resolvePriceForTraveller(pricing: any[], date: string, transport: string, sharing: string): number {
@@ -167,29 +323,154 @@ function resolvePriceForTraveller(pricing: any[], date: string, transport: strin
     const row = (pricing || []).find(
         (item: any) =>
             getDateValue(item) === date &&
-            getTransportValue(item) === transport &&
+            (!transport || getTransportValue(item) === transport) &&
             getVariantValue(item) === sharing
     )
     return toNumber(row?.price)
+}
+
+function resolvePricingRowForTraveller(
+    pricing: any[],
+    date: string,
+    transport: string,
+    sharing: string
+): any | null {
+    if (!date || !sharing) return null
+    const byTransportRows = (pricing || []).filter(
+        (item: any) =>
+            getDateValue(item) === date &&
+            (!transport || getTransportValue(item) === transport) &&
+            getVariantValue(item) === sharing
+    )
+    const byTransport = pickBestPricingRow(byTransportRows)
+    if (byTransport) return byTransport
+    const fallbackRows = (pricing || []).filter(
+        (item: any) => getDateValue(item) === date && getVariantValue(item) === sharing
+    )
+    return pickBestPricingRow(fallbackRows)
+}
+
+function isEarlyBirdActive(row: any): boolean {
+    if (!row?.early_bird_enabled) return false
+    const now = Date.now()
+    const start = row?.early_bird_starts_at ? Date.parse(String(row.early_bird_starts_at)) : null
+    const end = row?.early_bird_ends_at ? Date.parse(String(row.early_bird_ends_at)) : null
+    if (Number.isFinite(start) && now < (start as number)) return false
+    if (Number.isFinite(end) && now > (end as number)) return false
+    return true
+}
+
+function computeEarlyBirdDiscountForRow(row: any, unitPrice: number): number {
+    if (!isEarlyBirdActive(row) || unitPrice <= 0) return 0
+    const type = String(row?.early_bird_discount_type || "").toLowerCase()
+    const value = toNumber(row?.early_bird_discount_value)
+    if (value <= 0) return 0
+
+    let discount = type === "percent" ? unitPrice * (value / 100) : value
+    const maxDiscount =
+        row?.early_bird_max_discount != null ? toNumber(row.early_bird_max_discount) : null
+    if (maxDiscount != null && maxDiscount > 0) discount = Math.min(discount, maxDiscount)
+    return round2(Math.max(0, Math.min(discount, unitPrice)))
+}
+
+function buildLocalPricingBreakdown(store: any): PricingBreakdown {
+    const pricingData = store?.pricingData || []
+    const travellers = normalizeTravellers(store?.travellers || [])
+
+    let subtotal = 0
+    let earlyBirdDiscount = 0
+    const lineItems: PricingBreakdown["line_items"] = []
+
+    for (const traveller of travellers) {
+        const transport = traveller.transport || ""
+        const sharing = traveller.sharing
+        if (!sharing) continue
+
+        const row = resolvePricingRowForTraveller(pricingData, store.date, transport, sharing)
+        const price = toNumber(row?.price)
+        if (price <= 0) continue
+        const resolvedTransport = getTransportValue(row)
+
+        subtotal += price
+        earlyBirdDiscount += computeEarlyBirdDiscountForRow(row, price)
+        lineItems.push({
+            traveller_id: toNumber(traveller.id),
+            sharing,
+            transport: resolvedTransport,
+            unit_price: round2(price),
+        })
+    }
+
+    const coupon = store?.appliedCoupon || null
+    const couponType = String(coupon?.discount_type || "").toLowerCase()
+    const couponValue = toNumber(coupon?.discount_value)
+    const meetsCouponMinSubtotal =
+        toNumber(coupon?.min_subtotal) <= 0 || subtotal >= toNumber(coupon?.min_subtotal)
+    const couponRaw =
+        couponType === "percent"
+            ? round2((subtotal * couponValue) / 100)
+            : couponType === "fixed"
+              ? couponValue
+              : toNumber(coupon?.discount_amount)
+    const couponDiscount = meetsCouponMinSubtotal
+        ? round2(Math.max(0, Math.min(couponRaw, subtotal)))
+        : 0
+    const earlyDiscount = round2(Math.max(0, Math.min(earlyBirdDiscount, subtotal)))
+
+    const couponWins = couponDiscount > earlyDiscount
+
+    const appliedSource: "none" | "early_bird" | "coupon" =
+        couponWins && couponDiscount > 0
+            ? "coupon"
+            : earlyDiscount > 0
+              ? "early_bird"
+              : couponDiscount > 0
+                ? "coupon"
+                : "none"
+
+    const discountTotal =
+        appliedSource === "coupon"
+            ? couponDiscount
+            : appliedSource === "early_bird"
+              ? earlyDiscount
+              : 0
+    const taxable = round2(Math.max(0, subtotal - discountTotal))
+    const tax = round2(taxable * TAX_RATE)
+    const total = round2(taxable + tax)
+
+    return {
+        base_subtotal: round2(subtotal),
+        early_bird_discount_amount: appliedSource === "early_bird" ? discountTotal : earlyDiscount,
+        coupon_discount_amount: appliedSource === "coupon" ? discountTotal : couponDiscount,
+        applied_discount_source: appliedSource,
+        applied_discount_code:
+            appliedSource === "coupon" ? String(coupon?.code || "").trim().toUpperCase() || null : null,
+        discount_amount_total: round2(discountTotal),
+        taxable_amount: taxable,
+        tax_amount: tax,
+        total_amount: total,
+        line_items: lineItems,
+    }
 }
 
 function normalizeTravellerTransport(
     pricing: any[],
     date: string,
     value: string,
-    fallback = "Seat in Coach"
+    fallback = ""
 ): string {
     const options = getTransportOptions(pricing, date)
+    if (options.length === 0) return ""
     if (value && options.includes(value)) return value
     if (fallback && options.includes(fallback)) return fallback
-    return options[0] || "Seat in Coach"
+    return options[0] || ""
 }
 
 function sanitizeTravellersForDate(
     pricing: any[],
     date: string,
     travellersInput: Traveller[],
-    fallbackTransport = "Seat in Coach"
+    fallbackTransport = ""
 ): Traveller[] {
     const travellers = normalizeTravellers(travellersInput || [])
     return travellers.map((traveller) => {
@@ -214,68 +495,114 @@ function sanitizeTravellersForDate(
 }
 
 function computeTotals(store: any) {
-    const pricingData = store?.pricingData || []
-    const travellers = normalizeTravellers(store?.travellers || [])
-
-    let subtotal = 0
+    const pricingBreakdown = store?.pricingBreakdown || buildLocalPricingBreakdown(store)
     const groups: Record<string, { count: number; unit: number }> = {}
-
-    for (const traveller of travellers) {
-        const transport = traveller.transport || "Seat in Coach"
-        const sharing = traveller.sharing
-        if (!sharing) continue
-
-        const price = resolvePriceForTraveller(pricingData, store.date, transport, sharing)
-        if (price <= 0) continue
-
-        subtotal += price
+    for (const line of pricingBreakdown.line_items || []) {
+        const transport = String(line.transport || "")
+        const sharing = String(line.sharing || "")
         const key = `${transport}__${sharing}`
-        if (!groups[key]) groups[key] = { count: 0, unit: price }
+        if (!groups[key]) groups[key] = { count: 0, unit: toNumber(line.unit_price) }
         groups[key].count += 1
     }
 
-    const coupon = store?.appliedCoupon || null
-    const couponType = String(coupon?.discount_type || "").toLowerCase()
-    const couponValue = toNumber(coupon?.discount_value)
-    const discountRaw =
-        couponType === "percent"
-            ? round2((subtotal * couponValue) / 100)
-            : couponType === "fixed"
-              ? couponValue
-              : toNumber(coupon?.discount_amount)
-    const discount = Math.min(Math.max(0, discountRaw), subtotal)
-    const taxableSubtotal = Math.max(0, subtotal - discount)
-    const tax = round2(taxableSubtotal * TAX_RATE)
-    const total = round2(taxableSubtotal + tax)
-
     const breakdown = Object.entries(groups).map(([key, data]) => {
-        const parts = key.split("__")
-        const transport = parts[0] || "Seat in Coach"
-        const variant = parts[1] || ""
+        const [transport, variant] = key.split("__")
         return {
             label: `${data.count}x Guest (${variant}${transport ? ` · ${transport}` : ""})`,
             count: data.count,
             variant,
             transport,
-            unit_price: data.unit,
-            price: data.unit * data.count,
+            unit_price: round2(data.unit),
+            price: round2(data.unit * data.count),
         }
     })
 
+    const lineItemsSubtotal = round2(
+        (pricingBreakdown.line_items || []).reduce(
+            (sum: number, item: any) => sum + toNumber(item?.unit_price),
+            0
+        )
+    )
+    const subtotal = round2(
+        pricingBreakdown.base_subtotal > 0 ? pricingBreakdown.base_subtotal : lineItemsSubtotal
+    )
+    const discount = round2(
+        pricingBreakdown.discount_amount_total > 0
+            ? pricingBreakdown.discount_amount_total
+            : pricingBreakdown.applied_discount_source === "coupon"
+              ? pricingBreakdown.coupon_discount_amount
+              : pricingBreakdown.applied_discount_source === "early_bird"
+                ? pricingBreakdown.early_bird_discount_amount
+                : 0
+    )
+    const taxableSubtotal = round2(
+        pricingBreakdown.taxable_amount > 0
+            ? pricingBreakdown.taxable_amount
+            : Math.max(0, subtotal - discount)
+    )
+    const computedTaxFromTaxable = round2(taxableSubtotal * TAX_RATE)
+    const taxFromServerTotal = round2(
+        Math.max(0, round2(pricingBreakdown.total_amount) - taxableSubtotal)
+    )
+    const tax =
+        round2(pricingBreakdown.tax_amount) > 0
+            ? round2(pricingBreakdown.tax_amount)
+            : computedTaxFromTaxable > 0
+              ? computedTaxFromTaxable
+              : taxFromServerTotal
+    const total =
+        round2(pricingBreakdown.total_amount) > 0
+            ? round2(pricingBreakdown.total_amount)
+            : round2(taxableSubtotal + tax)
+
     return {
-        subtotal: round2(subtotal),
-        discount: round2(discount),
-        taxableSubtotal: round2(taxableSubtotal),
+        subtotal,
+        discount,
+        taxableSubtotal,
         tax,
         total,
+        earlyBirdDiscount: round2(pricingBreakdown.early_bird_discount_amount),
+        couponDiscount: round2(pricingBreakdown.coupon_discount_amount),
+        appliedDiscountSource: pricingBreakdown.applied_discount_source,
+        appliedDiscountCode: pricingBreakdown.applied_discount_code,
         breakdown,
+        lineItems: pricingBreakdown.line_items || [],
     }
+}
+
+function subtotalLineItemsText(store: any): string {
+    const totals = computeTotals(store)
+    if (!totals.breakdown?.length) return "Subtotal"
+
+    const lines = totals.breakdown
+        .map((item: any) => {
+            const count = Math.max(1, toNumber(item?.count))
+            const variant = String(item?.variant || "").trim() || "Sharing"
+            return `${count} x ${variant}`
+        })
+        .filter(Boolean)
+
+    return lines.length ? lines.join(" + ") : "Subtotal"
+}
+
+function getSummaryLineRows(store: any): Array<{ key: string; label: string; amount: number }> {
+    const totals = computeTotals(store)
+    if (!Array.isArray(totals.breakdown) || totals.breakdown.length === 0) return []
+    return totals.breakdown.map((item: any, index: number) => ({
+        key: `${item.variant || "variant"}-${item.transport || "transport"}-${index}`,
+        label: `${Math.max(1, toNumber(item?.count))} × ${String(item?.variant || "Sharing")}`,
+        amount: round2(toNumber(item?.price)),
+    }))
 }
 
 function getValidationErrors(store: any): string[] {
     const errors: string[] = []
 
     if (!store?.tripId) errors.push("Trip ID missing")
+    if (store?.inviteOnly) {
+        errors.push("This trip is invite-only. Contact support to complete booking.")
+        return errors
+    }
     if (!store?.date) errors.push("Departure date is required")
 
     if (!store?.contactName?.trim()) errors.push("Contact name is required")
@@ -286,9 +613,10 @@ function getValidationErrors(store: any): string[] {
     else if (!EMAIL_REGEX.test(store.contactEmail.trim())) errors.push("Email is invalid")
 
     const travellers = normalizeTravellers(store?.travellers || [])
+    const requireVehicle = hasVehicleOptions(store?.pricingData || [], store?.date || "")
     travellers.forEach((t, index) => {
         if (!t.name.trim()) errors.push(`Name required for Traveller ${index + 1}`)
-        if (!t.transport) errors.push(`Vehicle required for Traveller ${index + 1}`)
+        if (requireVehicle && !t.transport) errors.push(`Vehicle required for Traveller ${index + 1}`)
         if (!t.sharing) errors.push(`Sharing required for Traveller ${index + 1}`)
     })
 
@@ -405,6 +733,39 @@ async function fetchTripIdBySlug(slug: string): Promise<string> {
     return rows?.[0]?.id || ""
 }
 
+async function fetchTripContextById(tripId: string): Promise<{ id: string; slug: string; title: string } | null> {
+    const cleanTripId = String(tripId || "").trim()
+    if (!cleanTripId) return null
+
+    const res = await fetch(
+        `${SUPABASE_URL}/rest/v1/trips?id=eq.${encodeURIComponent(
+            cleanTripId
+        )}&select=id,slug,title&limit=1`,
+        {
+            headers: {
+                apikey: SUPABASE_KEY,
+                Authorization: `Bearer ${SUPABASE_KEY}`,
+            },
+        }
+    )
+    if (!res.ok) return null
+    const rows = await res.json().catch(() => [])
+    const row = Array.isArray(rows) ? rows[0] : null
+    if (!row?.id) return null
+    return {
+        id: String(row.id || ""),
+        slug: String(row.slug || ""),
+        title: String(row.title || ""),
+    }
+}
+
+function isInviteOnlyTrip(pricingRows: any[]): boolean {
+    const rows = Array.isArray(pricingRows) ? pricingRows : []
+    if (rows.length === 0) return false
+    const hasSharingRows = rows.some((row) => Boolean(getVariantValue(row)))
+    return !hasSharingRows
+}
+
 async function fetchTripPricing(tripId: string): Promise<any[]> {
     const cleanTripId = (tripId || "").trim()
     if (!cleanTripId) return []
@@ -426,6 +787,35 @@ async function fetchTripPricing(tripId: string): Promise<any[]> {
     return Array.isArray(rows) ? rows : []
 }
 
+async function fetchTripDisplayPrice(params: { slug?: string; tripId?: string }): Promise<any | null> {
+    const slug = String(params.slug || "").trim()
+    const tripId = String(params.tripId || "").trim()
+    if (!slug && !tripId) return null
+
+    const cacheKey = `${slug}::${tripId}`
+    const now = Date.now()
+    const cached = tripDisplayCache.get(cacheKey)
+    if (cached && now - cached.ts < 120000) {
+        return cached.data
+    }
+
+    const query = new URLSearchParams()
+    if (slug) query.set("slug", slug)
+    if (tripId) query.set("trip_id", tripId)
+    query.set("v", "2")
+    const res = await fetch(`${SUPABASE_URL}/functions/v1/get-trip-display-price?${query.toString()}`, {
+        method: "GET",
+        headers: {
+            apikey: SUPABASE_KEY,
+            Authorization: `Bearer ${SUPABASE_KEY}`,
+        },
+    })
+    if (!res.ok) return null
+    const data = await res.json().catch(() => null)
+    if (data) tripDisplayCache.set(cacheKey, { ts: now, data })
+    return data
+}
+
 function toTitleFromSlug(slug: string): string {
     const clean = String(slug || "").trim()
     if (!clean) return ""
@@ -433,6 +823,28 @@ function toTitleFromSlug(slug: string): string {
         .replace(/[-_]+/g, " ")
         .replace(/\s+/g, " ")
         .trim()
+}
+
+function readCheckoutRouteContext() {
+    if (typeof window === "undefined") {
+        return { tripId: "", slug: "", date: "", transport: "" }
+    }
+    const query = new URLSearchParams(window.location.search)
+    return {
+        tripId: String(query.get("tripId") || query.get("trip_id") || "").trim(),
+        slug: String(query.get("slug") || "").trim(),
+        date: String(query.get("date") || "").trim(),
+        transport: String(query.get("vehicle") || query.get("transport") || "").trim(),
+    }
+}
+
+function routeContextKey(ctx: {
+    tripId: string
+    slug: string
+    date: string
+    transport: string
+}): string {
+    return [ctx.tripId, ctx.slug, ctx.date, ctx.transport].join("|")
 }
 
 function withTextFromState(getText: (store: any) => string, fallback = "—") {
@@ -448,25 +860,40 @@ function withTextFromState(getText: (store: any) => string, fallback = "—") {
 export function withCheckoutBootstrap(Component): ComponentType {
     return (props: any) => {
         const [store, setStore] = useStore()
+        const bootKeyRef = useRef("")
+        const [routeKey, setRouteKey] = useState(() =>
+            routeContextKey(readCheckoutRouteContext())
+        )
 
         useEffect(() => {
-            if (
-                checkoutBootstrapped ||
-                checkoutBootstrapInFlight ||
-                (store?.tripId && Array.isArray(store?.pricingData) && store.pricingData.length > 0)
-            ) {
-                return
+            const refreshRouteKey = () => {
+                const key = routeContextKey(readCheckoutRouteContext())
+                setRouteKey((prev) => (prev === key ? prev : key))
             }
+
+            const interval = window.setInterval(refreshRouteKey, 500)
+            window.addEventListener("popstate", refreshRouteKey)
+            refreshRouteKey()
+
+            return () => {
+                window.clearInterval(interval)
+                window.removeEventListener("popstate", refreshRouteKey)
+            }
+        }, [])
+
+        useEffect(() => {
             let disposed = false
-            checkoutBootstrapInFlight = true
 
             const run = async () => {
-                const query = new URLSearchParams(window.location.search)
+                const ctx = readCheckoutRouteContext()
+                if (!ctx.tripId && !ctx.slug) return
+
+                if (bootKeyRef.current === routeKey) return
+                bootKeyRef.current = routeKey
+
                 setStore({ loading: true })
-                let tripId = query.get("tripId") || query.get("trip_id") || ""
-                const slug = query.get("slug") || ""
-                const queryDate = query.get("date") || ""
-                const queryTransport = query.get("vehicle") || query.get("transport") || ""
+                let tripId = ctx.tripId
+                let slug = ctx.slug
 
                 if (!tripId && slug) {
                     tripId = await fetchTripIdBySlug(slug)
@@ -483,46 +910,73 @@ export function withCheckoutBootstrap(Component): ComponentType {
                     return
                 }
 
-                const pricing = await fetchTripPricing(tripId)
+                const [pricing, tripContext] = await Promise.all([
+                    fetchTripPricing(tripId),
+                    fetchTripContextById(tripId),
+                ])
                 if (disposed) return
 
-                const dates = getDateOptions(pricing)
-                const date = dates.includes(queryDate) ? queryDate : dates[0] || ""
-                const transports = getTransportOptions(pricing, date)
-                const transport = transports.includes(queryTransport)
-                    ? queryTransport
-                    : transports[0] || "Seat in Coach"
-                const travellers = sanitizeTravellersForDate(
-                    pricing,
-                    date,
-                    normalizeTravellers(store.travellers || []),
-                    transport
+                slug = slug || String(tripContext?.slug || "").trim()
+                const tripName = firstNonEmpty(
+                    String(tripContext?.title || "").trim(),
+                    toTitleFromSlug(slug),
+                    tripId
                 )
 
-                setStore({
+                const inviteOnly = isInviteOnlyTrip(pricing)
+                const dates = getDateOptions(pricing)
+                const date = dates.includes(ctx.date) ? ctx.date : dates[0] || ""
+                const transports = getTransportOptions(pricing, date)
+                const transport = transports.includes(ctx.transport)
+                    ? ctx.transport
+                    : transports[0] || ""
+                const travellers = inviteOnly
+                    ? normalizeTravellers(store.travellers || [])
+                    : sanitizeTravellersForDate(
+                          pricing,
+                          date,
+                          normalizeTravellers(store.travellers || []),
+                          transport
+                      )
+
+                const nextState = {
+                    ...store,
                     tripId,
-                    slug: slug || "",
-                    tripName: toTitleFromSlug(slug) || tripId,
+                    slug,
+                    tripName,
                     pricingData: pricing,
                     date,
                     transport,
                     travellers,
+                    inviteOnly,
+                    loading: false,
+                }
+                const pricingBreakdown = buildLocalPricingBreakdown(nextState)
+
+                setStore({
+                    tripId,
+                    slug,
+                    tripName,
+                    pricingData: pricing,
+                    date,
+                    transport,
+                    travellers,
+                    inviteOnly,
+                    pricingBreakdown,
                     loading: false,
                 })
-                checkoutBootstrapped = true
-                checkoutBootstrapInFlight = false
 
                 console.log("[Checkout] Opened", {
                     tripId,
                     slug,
                     date,
                     defaultTransport: transport,
+                    inviteOnly,
                 })
             }
 
             run().catch((err) => {
                 console.error("[Checkout] Bootstrap failed", err)
-                checkoutBootstrapInFlight = false
                 if (!disposed) {
                     setStore({
                         loading: false,
@@ -534,9 +988,15 @@ export function withCheckoutBootstrap(Component): ComponentType {
 
             return () => {
                 disposed = true
-                checkoutBootstrapInFlight = false
             }
-        }, [])
+        }, [routeKey])
+
+        useEffect(() => {
+            if (!store?.tripId) return
+            setStore({
+                pricingBreakdown: buildLocalPricingBreakdown(store),
+            })
+        }, [store.tripId, store.pricingData, store.date, store.travellers, store.appliedCoupon])
 
         return <Component {...props} />
     }
@@ -626,7 +1086,7 @@ export function withCheckoutDateSelect(Component): ComponentType {
             const transports = getTransportOptions(store.pricingData || [], nextDate)
             const nextTransport = transports.includes(store.transport)
                 ? store.transport
-                : transports[0] || "Seat in Coach"
+                : transports[0] || ""
             const travellers = sanitizeTravellersForDate(
                 store.pricingData || [],
                 nextDate,
@@ -788,14 +1248,15 @@ export function withTravellerSharing(Component): ComponentType {
         if (!ctx) return <Component {...props} />
 
         const traveller = getTravellerByContext(store, ctx)
-        const travellerTransport = traveller?.transport || store.transport || "Seat in Coach"
+        const travellerTransport = traveller?.transport || store.transport || ""
         const options = useMemo(
             () => getSharingOptions(store.pricingData || [], store.date, travellerTransport),
             [store.pricingData, store.date, travellerTransport]
         )
 
         const handleChange = (value: string) => {
-            const next = updateTravellerById(store, ctx.id, { sharing: value })
+            const normalized = normalizeSharing(value)
+            const next = updateTravellerById(store, ctx.id, { sharing: normalized })
             setStore({ travellers: next })
         }
 
@@ -842,7 +1303,7 @@ export function withTravellerVehicleSelect(Component): ComponentType {
             store.pricingData || [],
             store.date,
             traveller?.transport || "",
-            store.transport || "Seat in Coach"
+            store.transport || ""
         )
 
         const handleChange = (value: string) => {
@@ -850,7 +1311,7 @@ export function withTravellerVehicleSelect(Component): ComponentType {
                 store.pricingData || [],
                 store.date,
                 value,
-                store.transport || "Seat in Coach"
+                store.transport || ""
             )
             const sharingOptions = getSharingOptions(store.pricingData || [], store.date, normalized)
             const nextSharing =
@@ -945,7 +1406,7 @@ export function withAddTraveller(Component): ComponentType {
                         store.pricingData || [],
                         store.date,
                         store.transport || "",
-                        "Seat in Coach"
+                        ""
                     )
                     list.push({
                         id: nextTravellerId(store),
@@ -1034,6 +1495,15 @@ export function withApplyCouponButton(Component): ComponentType {
         const [busy, setBusy] = useState(false)
 
         const applyCoupon = async () => {
+            if (store?.inviteOnly) {
+                setStore({
+                    couponMessageType: "error",
+                    couponMessage: "Coupon is not applicable for invite-only trips.",
+                    appliedCoupon: null,
+                })
+                return
+            }
+
             const code = String(store.couponCode || "").trim().toUpperCase()
             if (!code) {
                 setStore({
@@ -1063,7 +1533,7 @@ export function withApplyCouponButton(Component): ComponentType {
                         id: t.id,
                         name: t.name,
                         sharing: t.sharing,
-                        transport: t.transport || "Seat in Coach",
+                        transport: t.transport || "",
                     })),
                     coupon_code: code,
                     email: store.contactEmail || "",
@@ -1084,6 +1554,10 @@ export function withApplyCouponButton(Component): ComponentType {
                 if (!res.ok || !data?.valid) {
                     setStore({
                         appliedCoupon: null,
+                        pricingBreakdown: buildLocalPricingBreakdown({
+                            ...store,
+                            appliedCoupon: null,
+                        }),
                         couponMessageType: "error",
                         couponMessage:
                             data?.message || data?.error || `Coupon failed (HTTP ${res.status})`,
@@ -1092,25 +1566,54 @@ export function withApplyCouponButton(Component): ComponentType {
                     return
                 }
 
+                const nextBreakdown = buildPricingBreakdownFromQuote(data, store)
+                const appliedCode = String(
+                    data.applied_discount_code || data.code || code || ""
+                )
+                    .trim()
+                    .toUpperCase()
+
                 setStore({
                     appliedCoupon: {
                         valid: true,
-                        code: data.code,
+                        code: data.code || code,
                         discount_type: data.discount_type,
                         discount_value: toNumber(data.discount_value),
                         discount_amount: toNumber(data.discount_amount),
                         min_subtotal: toNumber(data.min_subtotal),
+                        coupon_wins: Boolean(data.coupon_wins),
+                        final_applied_source:
+                            data.final_applied_source || data.applied_discount_source || "none",
+                        base_subtotal: nextBreakdown.base_subtotal,
+                        early_bird_discount_amount: nextBreakdown.early_bird_discount_amount,
+                        coupon_discount_amount: nextBreakdown.coupon_discount_amount,
+                        applied_discount_source: nextBreakdown.applied_discount_source,
+                        applied_discount_code: nextBreakdown.applied_discount_code,
+                        discount_amount_total: nextBreakdown.discount_amount_total,
+                        taxable_amount: nextBreakdown.taxable_amount,
+                        tax_amount: nextBreakdown.tax_amount,
+                        total_amount: nextBreakdown.total_amount,
+                        line_items: nextBreakdown.line_items,
                         message: data.message,
                     },
                     couponCode: data.code || code,
+                    pricingBreakdown: nextBreakdown,
                     couponMessageType: "success",
-                    couponMessage: data.message || `Coupon ${data.code || code} applied`,
+                    couponMessage:
+                        data.message ||
+                        (data.final_applied_source === "coupon"
+                            ? `Coupon ${appliedCode || data.code || code} applied`
+                            : "Early-bird discount gives the best price"),
                 })
 
                 console.log("[Checkout] Coupon apply success", data)
             } catch (err: any) {
                 setStore({
                     appliedCoupon: null,
+                    pricingBreakdown: buildLocalPricingBreakdown({
+                        ...store,
+                        appliedCoupon: null,
+                    }),
                     couponMessageType: "error",
                     couponMessage: "Could not validate coupon",
                 })
@@ -1156,6 +1659,10 @@ export function withRemoveCouponButton(Component): ComponentType {
                     e?.stopPropagation?.()
                     setStore({
                         appliedCoupon: null,
+                        pricingBreakdown: buildLocalPricingBreakdown({
+                            ...store,
+                            appliedCoupon: null,
+                        }),
                         couponMessageType: "neutral",
                         couponMessage: "Coupon removed",
                     })
@@ -1168,6 +1675,16 @@ export function withRemoveCouponButton(Component): ComponentType {
 export function withCouponMessage(Component): ComponentType {
     return (props: any) => {
         const [store] = useStore()
+        const totals = computeTotals(store)
+        let text = store.couponMessage || "Enter a coupon code and tap Apply."
+        if (store.appliedCoupon?.code) {
+            if (totals.appliedDiscountSource === "early_bird") {
+                text = "Early-bird discount gives the best price for current selection."
+            } else if (totals.appliedDiscountSource === "coupon") {
+                text = `Coupon ${store.appliedCoupon.code} applied`
+            }
+        }
+
         const color =
             store.couponMessageType === "success"
                 ? "#15803d"
@@ -1178,15 +1695,62 @@ export function withCouponMessage(Component): ComponentType {
         return (
             <Component
                 {...props}
-                text={store.couponMessage || "Enter a coupon code and tap Apply."}
+                text={text}
                 style={{ ...(props.style || {}), color }}
             />
         )
     }
 }
 
+export function withCheckoutSummaryLineItems(Component): ComponentType {
+    return (props: any) => {
+        const [store] = useStore()
+        const rows = getSummaryLineRows(store)
+        const childrenArray = React.Children.toArray(props.children)
+        const template = childrenArray.find((child) => React.isValidElement(child)) as
+            | React.ReactElement
+            | undefined
+
+        if (!template) return <Component {...props} />
+        if (rows.length === 0) {
+            return <Component {...props} style={{ ...(props.style || {}), display: "none" }} />
+        }
+
+        return (
+            <Component
+                {...props}
+                style={{ ...(props.style || {}), display: "flex", flexDirection: "column", gap: "8px" }}
+            >
+                {rows.map((row) => (
+                    <SummaryLineContext.Provider key={row.key} value={row}>
+                        {React.cloneElement(template, { key: row.key })}
+                    </SummaryLineContext.Provider>
+                ))}
+            </Component>
+        )
+    }
+}
+
+export function withCheckoutSummaryLineLabel(Component): ComponentType {
+    return (props: any) => {
+        const row = useContext(SummaryLineContext)
+        return <Component {...props} text={row?.label || props.text || ""} />
+    }
+}
+
+export function withCheckoutSummaryLineAmount(Component): ComponentType {
+    return (props: any) => {
+        const row = useContext(SummaryLineContext)
+        return <Component {...props} text={fmtINR(toNumber(row?.amount || 0))} />
+    }
+}
+
 export function withCheckoutSubtotal(Component): ComponentType {
     return withTextFromState((store) => fmtINR(computeTotals(store).subtotal))(Component)
+}
+
+export function withCheckoutSubtotalLabel(Component): ComponentType {
+    return withTextFromState((store) => subtotalLineItemsText(store), "Subtotal")(Component)
 }
 
 export function withCheckoutDiscount(Component): ComponentType {
@@ -1195,19 +1759,34 @@ export function withCheckoutDiscount(Component): ComponentType {
 
 export function withCheckoutDiscountLabel(Component): ComponentType {
     return withTextFromState((store) => {
-        const code = store?.appliedCoupon?.code
-        return code ? `Discount (${code})` : "Discount"
+        const totals = computeTotals(store)
+        if (totals.appliedDiscountSource === "coupon" && totals.appliedDiscountCode) {
+            return `Coupon (${totals.appliedDiscountCode})`
+        }
+        if (totals.appliedDiscountSource === "early_bird") return "Early Bird"
+        return "Discount"
     })(Component)
 }
 
 export function withCheckoutCouponCode(Component): ComponentType {
     return withTextFromState((store) => {
-        const code = String(store?.appliedCoupon?.code || "").trim()
-        return code || "No coupon"
+        const totals = computeTotals(store)
+        if (totals.appliedDiscountSource === "coupon" && totals.appliedDiscountCode) {
+            return totals.appliedDiscountCode
+        }
+        return "No coupon"
     })(Component)
 }
 
 export function withCheckoutTax(Component): ComponentType {
+    return withTextFromState((store) => fmtINR(computeTotals(store).tax))(Component)
+}
+
+export function withCheckoutTaxLabel(Component): ComponentType {
+    return withTextFromState(() => "Tax (2%)")(Component)
+}
+
+export function withCheckoutTaxValue(Component): ComponentType {
     return withTextFromState((store) => fmtINR(computeTotals(store).tax))(Component)
 }
 
@@ -1217,13 +1796,21 @@ export function withCheckoutTotal(Component): ComponentType {
 
 export function withCheckoutValidationHint(Component): ComponentType {
     return withTextFromState((store) => {
+        if (store?.inviteOnly) {
+            return "This trip is invite-only. Contact support to book."
+        }
         if (!store?.date) return "Select departure date."
 
         const travellers = normalizeTravellers(store?.travellers || [])
+        const requireVehicle = hasVehicleOptions(store?.pricingData || [], store?.date || "")
         const travellerMissing = travellers.some(
-            (t) => !t.name?.trim() || !t.sharing || !t.transport
+            (t) => !t.name?.trim() || !t.sharing || (requireVehicle && !t.transport)
         )
-        if (travellerMissing) return "Complete traveller details (name, sharing, vehicle)."
+        if (travellerMissing) {
+            return requireVehicle
+                ? "Complete traveller details (name, sharing, vehicle)."
+                : "Complete traveller details (name, sharing)."
+        }
 
         if (!store?.contactName?.trim() || !store?.contactPhone?.trim() || !store?.contactEmail?.trim()) {
             return "Enter contact name, phone and email."
@@ -1240,7 +1827,10 @@ export function withCheckoutValidationHint(Component): ComponentType {
 export function withCheckoutHideWhenNoCoupon(Component): ComponentType {
     return (props: any) => {
         const [store] = useStore()
-        const hasCoupon = Boolean(String(store?.appliedCoupon?.code || "").trim())
+        const totals = computeTotals(store)
+        const hasCoupon =
+            totals.appliedDiscountSource === "coupon" &&
+            Boolean(String(totals.appliedDiscountCode || "").trim())
 
         if (!hasCoupon) {
             return <Component {...props} style={{ ...(props.style || {}), display: "none" }} />
@@ -1271,6 +1861,11 @@ export function withCheckoutPayButton(Component): ComponentType {
 
         const submit = async () => {
             if (!isValid || store.submitting) return
+
+            if (store?.inviteOnly) {
+                showInlineError("This trip is invite-only. Please contact support to book.")
+                return
+            }
 
             setStore({ submitting: true })
             console.log("[Checkout] Pay initiated", {
@@ -1307,7 +1902,7 @@ export function withCheckoutPayButton(Component): ComponentType {
                 id: t.id,
                 name: String(t.name || "").trim(),
                 sharing: String(t.sharing || "").trim(),
-                transport: String(t.transport || "Seat in Coach").trim() || "Seat in Coach",
+                transport: String(t.transport || "").trim(),
             }))
 
             const payload = {
@@ -1331,6 +1926,8 @@ export function withCheckoutPayButton(Component): ComponentType {
                 pricing_snapshot: {
                     subtotal_amount: totals.subtotal,
                     discount_amount: totals.discount,
+                    applied_discount_source: totals.appliedDiscountSource,
+                    applied_discount_code: totals.appliedDiscountCode,
                     tax_amount: totals.tax,
                     total_amount: totals.total,
                 },
@@ -1448,5 +2045,106 @@ export function withCheckoutPayButton(Component): ComponentType {
                 )}
             </div>
         )
+    }
+}
+
+function getTripSlugFromPathname(pathname: string): string {
+    const clean = String(pathname || "")
+    const match = clean.match(/\/upcoming-trips\/([^/?#]+)/i)
+    return match?.[1] ? decodeURIComponent(match[1]) : ""
+}
+
+function useTripDisplaySummary() {
+    const [summary, setSummary] = useState<any>(null)
+
+    useEffect(() => {
+        let disposed = false
+        const query = new URLSearchParams(window.location.search)
+        const slug = query.get("slug") || getTripSlugFromPathname(window.location.pathname)
+        const tripId = query.get("tripId") || query.get("trip_id") || ""
+
+        fetchTripDisplayPrice({ slug, tripId })
+            .then((data) => {
+                if (disposed) return
+                setSummary(data?.display_summary || null)
+            })
+            .catch(() => {
+                if (disposed) return
+                setSummary(null)
+            })
+
+        return () => {
+            disposed = true
+        }
+    }, [])
+
+    return summary
+}
+
+export function withTripPrimaryPrice(Component): ComponentType {
+    return (props: any) => {
+        const summary = useTripDisplaySummary()
+        const value = toNumber(summary?.payable_price)
+        const text = value > 0 ? fmtINR(value) : "₹0"
+        return <Component {...props} text={text} children={text} />
+    }
+}
+
+export function withTripStrikePrice(Component): ComponentType {
+    return (props: any) => {
+        const summary = useTripDisplaySummary()
+        const base = toNumber(summary?.base_price)
+        const payable = toNumber(summary?.payable_price)
+        const hasDiscount = Boolean(summary?.has_discount) && base > payable && payable > 0
+        if (!hasDiscount) {
+            return <Component {...props} text="" style={{ ...(props.style || {}), display: "none" }} />
+        }
+        const text = fmtINR(base)
+        return (
+            <Component
+                {...props}
+                text={text}
+                children={text}
+                style={{
+                    ...(props.style || {}),
+                    display: "inline",
+                    opacity: 0.65,
+                    textDecoration: "line-through",
+                    textDecorationLine: "line-through",
+                    textDecorationThickness: "1px",
+                }}
+            />
+        )
+    }
+}
+
+export function withTripSaveBadge(Component): ComponentType {
+    return (props: any) => {
+        const summary = useTripDisplaySummary()
+        const save = toNumber(summary?.save_amount)
+        const hasDiscount = Boolean(summary?.has_discount) && save > 0
+        if (!hasDiscount) {
+            return <Component {...props} style={{ ...(props.style || {}), display: "none" }} />
+        }
+        const text = `Save ${fmtINR(save)}`
+        return <Component {...props} text={text} children={text} />
+    }
+}
+
+export function withTripHideWhenNoDiscount(Component): ComponentType {
+    return (props: any) => {
+        const summary = useTripDisplaySummary()
+        const hasDiscount = Boolean(summary?.has_discount) && toNumber(summary?.save_amount) > 0
+        if (!hasDiscount) {
+            return <Component {...props} style={{ ...(props.style || {}), display: "none" }} />
+        }
+        return <Component {...props} />
+    }
+}
+
+export function withTripStartsFromText(Component): ComponentType {
+    return (props: any) => {
+        const text = "Starts from"
+        return <Component {...props} text={text} children={text} />
     }
 }

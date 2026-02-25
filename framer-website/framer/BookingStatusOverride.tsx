@@ -58,7 +58,7 @@ interface BookingData {
     trip_id: string
     departure_date: string
     transport?: string
-    travellers: Array<{ name: string; sharing: string }>
+    travellers: Array<{ name: string; sharing: string; transport?: string; vehicle?: string }>
     payment_breakdown: Array<{ label: string; price: number; variant?: string; count?: number }>
     subtotal_amount?: number
     discount_amount?: number
@@ -150,6 +150,10 @@ function normalizeSharingLabel(value: string): string {
     if (!clean) return ""
     if (/\bsharing\b/i.test(clean)) return clean
     return `${clean} Sharing`
+}
+
+function joinMetaParts(parts: Array<string | undefined | null>): string {
+    return parts.map((part) => String(part || "").trim()).filter(Boolean).join(" · ")
 }
 
 // ═════════════════════════════════════════════════════════════
@@ -469,9 +473,9 @@ export function withTravellerList(Component): ComponentType {
 
                 const name = String(traveller?.name || "").trim() || `Traveller ${index + 1}`
                 const sharing = normalizeSharingLabel(String(traveller?.sharing || ""))
-                const sharingText = sharing || ""
-                const emailPart = index === 0 && data.email ? ` · ${data.email}` : ""
-                const metaText = `${sharingText}${emailPart}`.trim()
+                const vehicle = String(traveller?.vehicle || traveller?.transport || "").trim()
+                const email = index === 0 ? String(data.email || "").trim() : ""
+                const metaText = joinMetaParts([sharing, vehicle, email])
 
                 const nameNode =
                     textNodes.find((el) => /name/i.test(String(el.textContent || ""))) || textNodes[0]
