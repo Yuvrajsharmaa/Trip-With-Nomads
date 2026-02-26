@@ -1,6 +1,12 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2"
-
-const TAX_RATE = 0.02
+import {
+    buildPricingQuote,
+    computeBasePricing,
+    normalizeCouponCode,
+    normalizeSharing,
+    normalizeTravellers,
+    validateCouponAgainstSubtotal,
+} from "../_shared/pricing.ts"
 
 const corsHeaders = {
     "Access-Control-Allow-Origin": "*",
@@ -8,84 +14,11 @@ const corsHeaders = {
     "Access-Control-Allow-Methods": "POST, OPTIONS",
 }
 
-type TravellerInput = {
-    name?: string
-    sharing?: string
-    transport?: string
-}
-
-function round2(value: number): number {
-    return Math.round((Number(value) + Number.EPSILON) * 100) / 100
-}
-
-function getDateValue(row: any): string {
-    return row?.start_date || row?.departure_date || ""
-}
-
-function getVariantValue(row: any): string {
-    return row?.variant_name || row?.sharing || ""
-}
-
-function getTransportValue(row: any): string {
-    return row?.transport || "Seat in Coach"
-}
-
-function normalizeCode(raw: string): string {
-    return String(raw || "").trim().toUpperCase()
-}
-
-function normalizeTravellers(raw: any[]): TravellerInput[] {
-    if (!Array.isArray(raw)) return []
-
-    return raw.map((item) => ({
-        name: typeof item?.name === "string" ? item.name.trim() : "",
-        sharing: typeof item?.sharing === "string" ? item.sharing.trim() : "",
-        transport: typeof item?.transport === "string" ? item.transport.trim() : "",
-    }))
-}
-
 function json(payload: any, status = 200) {
     return new Response(JSON.stringify(payload), {
         status,
         headers: { ...corsHeaders, "Content-Type": "application/json" },
     })
-}
-
-function computeSubtotal(params: {
-    pricingRows: any[]
-    departureDate: string
-    fallbackTransport: string
-    travellers: TravellerInput[]
-}) {
-    const { pricingRows, departureDate, fallbackTransport, travellers } = params
-
-    let subtotal = 0
-    const missingSharings: string[] = []
-
-    for (const traveller of travellers) {
-        const sharing = String(traveller.sharing || "")
-        if (!sharing) continue
-
-        const rowsByDate = pricingRows.filter((row) => getDateValue(row) === departureDate)
-        const transport = String(traveller.transport || "").trim() || fallbackTransport || "Seat in Coach"
-        const rowByTransport = rowsByDate.find(
-            (row) => getTransportValue(row) === transport && getVariantValue(row) === sharing
-        )
-        const rowAnyTransport = rowsByDate.find((row) => getVariantValue(row) === sharing)
-        const row = rowByTransport || rowAnyTransport
-
-        if (!row) {
-            missingSharings.push(sharing)
-            continue
-        }
-
-        subtotal += Number(row.price || 0)
-    }
-
-    return {
-        subtotal: round2(subtotal),
-        missingSharings,
-    }
 }
 
 Deno.serve(async (req) => {
@@ -108,9 +41,9 @@ Deno.serve(async (req) => {
 
         const tripId = String(body?.trip_id || "").trim()
         const departureDate = String(body?.departure_date || "").trim()
-        const fallbackTransport = String(body?.transport || "").trim() || "Seat in Coach"
+        const fallbackTransport = String(body?.transport || "").trim()
         const email = String(body?.email || "").trim().toLowerCase()
-        const couponCode = normalizeCode(body?.coupon_code || "")
+        const couponCode = normalizeCouponCode(body?.coupon_code || "")
         const travellers = normalizeTravellers(body?.travellers || [])
 
         if (!tripId || !departureDate || !couponCode) {
@@ -125,7 +58,7 @@ Deno.serve(async (req) => {
 
         const { data: pricingRows, error: pricingError } = await supabase
             .from("trip_pricing")
-            .select("trip_id, start_date, departure_date, transport, variant_name, sharing, price")
+            .select("*")
             .eq("trip_id", tripId)
 
         if (pricingError) {
@@ -137,15 +70,31 @@ Deno.serve(async (req) => {
         if (pricing.length === 0) {
             return json({ valid: false, code: couponCode, message: "No pricing found for this trip" })
         }
+        const hasStructuredSharing = pricing.some((row: any) => Boolean(normalizeSharing(row?.sharing)))
+        if (!hasStructuredSharing) {
+            return json({
+                valid: false,
+                code: couponCode,
+                message: "Coupons are unavailable for invite-only trips.",
+            })
+        }
 
-        const subtotalResult = computeSubtotal({
+        const basePricing = computeBasePricing({
             pricingRows: pricing,
             departureDate,
             fallbackTransport,
             travellers,
         })
 
-        const subtotal = subtotalResult.subtotal
+        if (basePricing.missingSharings.length > 0) {
+            return json({
+                valid: false,
+                code: couponCode,
+                message: "Complete traveller sharing selection before applying coupon",
+            })
+        }
+
+        const subtotal = basePricing.subtotal
         if (subtotal <= 0) {
             return json({
                 valid: false,
@@ -154,120 +103,58 @@ Deno.serve(async (req) => {
             })
         }
 
-        const { data: couponRows, error: couponError } = await supabase
-            .from("coupons")
-            .select("*")
-            .ilike("code", couponCode)
-            .limit(1)
+        const couponResult = await validateCouponAgainstSubtotal({
+            supabase,
+            couponCode,
+            tripId,
+            subtotal,
+            email,
+        })
 
-        if (couponError) {
-            console.error("[validate-coupon] coupon fetch error", couponError)
-            return json({ valid: false, code: couponCode, message: "Could not validate coupon" }, 500)
-        }
-
-        const coupon = couponRows?.[0]
-        if (!coupon) {
-            return json({ valid: false, code: couponCode, message: "Invalid coupon code" })
-        }
-
-        if (!coupon.is_active) {
-            return json({ valid: false, code: coupon.code, message: "Coupon is inactive" })
-        }
-
-        const nowMs = Date.now()
-        if (coupon.starts_at && nowMs < Date.parse(coupon.starts_at)) {
-            return json({ valid: false, code: coupon.code, message: "Coupon is not active yet" })
-        }
-        if (coupon.ends_at && nowMs > Date.parse(coupon.ends_at)) {
-            return json({ valid: false, code: coupon.code, message: "Coupon has expired" })
-        }
-
-        const scopedTrips = Array.isArray(coupon.applicable_trip_ids)
-            ? coupon.applicable_trip_ids.map((v: any) => String(v))
-            : []
-
-        if (scopedTrips.length > 0 && !scopedTrips.includes(tripId)) {
-            return json({ valid: false, code: coupon.code, message: "Coupon is not applicable for this trip" })
-        }
-
-        const minSubtotal = Number(coupon.min_subtotal || 0)
-        if (subtotal < minSubtotal) {
+        if (!couponResult.valid) {
             return json({
                 valid: false,
-                code: coupon.code,
-                min_subtotal: minSubtotal,
-                message: `Minimum subtotal ${minSubtotal.toLocaleString("en-IN")} required`,
+                code: couponResult.code || couponCode,
+                min_subtotal: couponResult.min_subtotal,
+                message: couponResult.message || "Invalid coupon",
             })
         }
 
-        if (coupon.usage_limit_total) {
-            const { count, error } = await supabase
-                .from("bookings")
-                .select("id", { count: "exact", head: true })
-                .ilike("coupon_code", coupon.code)
-                .neq("payment_status", "failed")
+        const quote = buildPricingQuote({
+            baseSubtotal: subtotal,
+            earlyBirdDiscountAmount: basePricing.earlyBirdDiscountAmount,
+            couponResult,
+            lineItems: basePricing.lineItems,
+        })
 
-            if (error) {
-                console.error("[validate-coupon] usage limit total error", error)
-                return json({ valid: false, code: coupon.code, message: "Could not validate usage" }, 500)
-            }
-
-            if ((count || 0) >= Number(coupon.usage_limit_total)) {
-                return json({ valid: false, code: coupon.code, message: "Coupon usage limit reached" })
-            }
-        }
-
-        if (coupon.usage_limit_per_email && email) {
-            const { count, error } = await supabase
-                .from("bookings")
-                .select("id", { count: "exact", head: true })
-                .ilike("coupon_code", coupon.code)
-                .eq("email", email)
-                .neq("payment_status", "failed")
-
-            if (error) {
-                console.error("[validate-coupon] usage limit email error", error)
-                return json({ valid: false, code: coupon.code, message: "Could not validate email usage" }, 500)
-            }
-
-            if ((count || 0) >= Number(coupon.usage_limit_per_email)) {
-                return json({ valid: false, code: coupon.code, message: "Coupon usage limit reached for this email" })
-            }
-        }
-
-        const discountType = String(coupon.discount_type || "").toLowerCase()
-        const discountValue = Number(coupon.discount_value || 0)
-        const maxDiscount = coupon.max_discount != null ? Number(coupon.max_discount) : null
-
-        let discountAmount = 0
-        if (discountType === "percent") {
-            discountAmount = subtotal * (discountValue / 100)
-            if (maxDiscount != null) {
-                discountAmount = Math.min(discountAmount, maxDiscount)
-            }
-        } else {
-            discountAmount = discountValue
-        }
-
-        discountAmount = round2(Math.max(0, Math.min(discountAmount, subtotal)))
-
-        const discountedSubtotal = round2(subtotal - discountAmount)
-        const taxAmount = round2(discountedSubtotal * TAX_RATE)
-        const totalAmount = round2(discountedSubtotal + taxAmount)
+        const hasCoupon = quote.coupon_discount_amount > 0
+        const hasEarlyBird = quote.early_bird_discount_amount > 0
+        const message = hasCoupon
+            ? hasEarlyBird
+                ? `Coupon ${couponResult.code || couponCode} applied with Early Bird`
+                : `Coupon ${couponResult.code || couponCode} applied`
+            : couponResult.message || "Coupon evaluated"
 
         return json({
             valid: true,
-            code: String(coupon.code || couponCode).toUpperCase(),
-            discount_type: discountType,
-            discount_value: discountValue,
-            discount_amount: discountAmount,
-            min_subtotal: minSubtotal,
-            subtotal_amount: subtotal,
-            discounted_subtotal: discountedSubtotal,
-            taxable_amount: discountedSubtotal,
-            tax_amount: taxAmount,
-            total_amount: totalAmount,
-            message: `Coupon ${String(coupon.code || couponCode).toUpperCase()} applied`,
+            code: couponResult.code || couponCode,
+            discount_type: couponResult.discount_type,
+            discount_value: couponResult.discount_value,
+            discount_amount: couponResult.discount_amount || 0,
+            min_subtotal: couponResult.min_subtotal || 0,
+            coupon_wins: quote.coupon_wins,
+            final_applied_source: quote.applied_discount_source,
+            base_subtotal: quote.base_subtotal,
+            early_bird_discount_amount: quote.early_bird_discount_amount,
+            coupon_discount_amount: quote.coupon_discount_amount,
+            applied_discount_source: quote.applied_discount_source,
+            applied_discount_code: quote.applied_discount_code,
+            discount_amount_total: quote.discount_amount_total,
+            taxable_amount: quote.taxable_amount,
+            tax_amount: quote.tax_amount,
+            total_amount: quote.total_amount,
+            line_items: quote.line_items,
+            message,
         })
     } catch (err: any) {
         console.error("[validate-coupon] fatal", err)

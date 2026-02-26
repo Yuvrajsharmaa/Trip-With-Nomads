@@ -45,10 +45,64 @@ const { useEffect, useRef, useState } = React
 //
 // ─────────────────────────────────────────────────────────────
 
-// --- CONFIGURATION (same as BookingOverrides.tsx) ---
-const SUPABASE_URL = "https://jxozzvwvprmnhvafmpsa.supabase.co"
-const SUPABASE_KEY =
-    "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imp4b3p6dnd2cHJtbmh2YWZtcHNhIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjgwNTg2NjIsImV4cCI6MjA4MzYzNDY2Mn0.KpVa9dWlJEguL1TA00Tf4QDpziJ1mgA2I0f4_l-vlOk"
+type RuntimeEnv = "production" | "development"
+type RuntimeConfig = {
+    siteBaseUrl: string
+    supabaseUrl: string
+    supabaseAnonKey: string
+}
+
+const RUNTIME_CONFIG: Record<RuntimeEnv, RuntimeConfig> = {
+    production: {
+        siteBaseUrl: "https://tripwithnomads.com",
+        supabaseUrl: "https://jxozzvwvprmnhvafmpsa.supabase.co",
+        supabaseAnonKey:
+            "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imp4b3p6dnd2cHJtbmh2YWZtcHNhIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjgwNTg2NjIsImV4cCI6MjA4MzYzNDY2Mn0.KpVa9dWlJEguL1TA00Tf4QDpziJ1mgA2I0f4_l-vlOk",
+    },
+    development: {
+        siteBaseUrl: "https://maroon-aside-814100.framer.app",
+        supabaseUrl: "https://ieuwiinbvbdvjrdqqzlb.supabase.co",
+        supabaseAnonKey:
+            "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImlldXdpaW5idmJkdmpyZHFxemxiIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzIwNDYwMTksImV4cCI6MjA4NzYyMjAxOX0.UlTMeyvArixD7byDCrGwEDXsbc4LQfx6QXDL6Je3blE",
+    },
+}
+
+function normalizeBaseUrl(value: string): string {
+    return String(value || "").trim().replace(/\/+$/, "")
+}
+
+function resolveRuntimeEnv(): RuntimeEnv {
+    if (typeof window === "undefined") return "production"
+    const host = String(window.location.hostname || "").trim().toLowerCase()
+    if (host === "tripwithnomads.com" || host === "www.tripwithnomads.com") return "production"
+    if (
+        host === "maroon-aside-814100.framer.app" ||
+        host === "localhost" ||
+        host === "127.0.0.1"
+    ) {
+        return "development"
+    }
+    return "production"
+}
+
+function resolveRuntimeConfig(): RuntimeConfig {
+    const env = resolveRuntimeEnv()
+    const selected = RUNTIME_CONFIG[env]
+    const runtimeOverride =
+        typeof window !== "undefined" ? (window as any).__TWN_RUNTIME_CONFIG__ || {} : {}
+    return {
+        siteBaseUrl: normalizeBaseUrl(runtimeOverride.siteBaseUrl || selected.siteBaseUrl),
+        supabaseUrl: String(runtimeOverride.supabaseUrl || selected.supabaseUrl || "").trim(),
+        supabaseAnonKey: String(
+            runtimeOverride.supabaseAnonKey || selected.supabaseAnonKey || ""
+        ).trim(),
+    }
+}
+
+const CURRENT_RUNTIME = resolveRuntimeConfig()
+const SUPABASE_URL = CURRENT_RUNTIME.supabaseUrl
+const SUPABASE_KEY = CURRENT_RUNTIME.supabaseAnonKey
+const DOMESTIC_TRIPS_BASE_URL = `${CURRENT_RUNTIME.siteBaseUrl}/domestic-trips`
 
 
 // ─── TYPES ───────────────────────────────────────────────────
@@ -68,6 +122,12 @@ interface BookingData {
     total_amount: number
     currency: string
     payment_status: "pending" | "paid" | "failed"
+    payment_mode?: "full" | "partial_25"
+    payable_now_amount?: number
+    paid_amount?: number
+    due_amount?: number
+    settlement_status?: "pending" | "failed" | "partially_paid" | "fully_paid"
+    balance_due_note?: string | null
     payu_txnid: string
     name: string
     email: string
@@ -123,6 +183,47 @@ function subtotalBeforeDiscount(d: BookingData): number {
 
 function discountAmount(d: BookingData): number {
     return Math.max(0, toNumber((d as any).discount_amount))
+}
+
+function settlementStatus(d: BookingData): "pending" | "failed" | "partially_paid" | "fully_paid" {
+    const explicit = String((d as any)?.settlement_status || "").trim().toLowerCase()
+    if (
+        explicit === "pending" ||
+        explicit === "failed" ||
+        explicit === "partially_paid" ||
+        explicit === "fully_paid"
+    ) {
+        return explicit
+    }
+    if (d.payment_status === "failed") return "failed"
+    if (d.payment_status === "paid") {
+        const due = Math.max(0, toNumber((d as any)?.due_amount))
+        const mode = String((d as any)?.payment_mode || "").trim().toLowerCase()
+        if (mode === "partial_25" || due > 0) return "partially_paid"
+        return "fully_paid"
+    }
+    return "pending"
+}
+
+function dueAmount(d: BookingData): number {
+    const explicit = Math.max(0, toNumber((d as any)?.due_amount))
+    if (explicit > 0) return explicit
+    const status = settlementStatus(d)
+    if (status === "partially_paid") {
+        const total = Math.max(0, toNumber(d.total_amount))
+        const payableNow = Math.max(0, toNumber((d as any)?.payable_now_amount))
+        if (payableNow > 0) return Math.max(0, total - payableNow)
+    }
+    return 0
+}
+
+function paidAmount(d: BookingData): number {
+    const explicit = Math.max(0, toNumber((d as any)?.paid_amount))
+    if (explicit > 0) return explicit
+    const status = settlementStatus(d)
+    if (status === "fully_paid") return Math.max(0, toNumber(d.total_amount))
+    if (status === "partially_paid") return Math.max(0, toNumber((d as any)?.payable_now_amount))
+    return 0
 }
 
 function discountedSubtotal(d: BookingData): number {
@@ -361,21 +462,7 @@ export function withTravellerCount(Component): ComponentType {
 
 export function withBasePrice(Component): ComponentType {
     return textOverride((d) => {
-        const breakdown = (d.payment_breakdown || []).filter(
-            (item) => String(item?.variant || "").toLowerCase() !== "coupon"
-        )
-        if (breakdown.length === 0) return fmt(d.total_amount - d.tax_amount)
-        if (breakdown.length === 1) {
-            const b = breakdown[0]
-            const count = b.count || 1
-            return count > 1 ? `${fmt(b.price)} × ${count}` : fmt(b.price)
-        }
-        return breakdown
-            .map((b) => {
-                const count = b.count || 1
-                return count > 1 ? `${fmt(b.price)} × ${count}` : fmt(b.price)
-            })
-            .join(" + ")
+        return fmt(subtotalBeforeDiscount(d))
     })(Component)
 }
 
@@ -403,7 +490,24 @@ export function withTaxAmount(Component): ComponentType {
 }
 
 export function withTotalPaid(Component): ComponentType {
-    return textOverride((d) => fmt(d.total_amount))(Component)
+    return textOverride((d) => fmt(paidAmount(d)))(Component)
+}
+
+export function withPayableNowAmount(Component): ComponentType {
+    return textOverride((d) => fmt(Math.max(0, toNumber((d as any)?.payable_now_amount))))(Component)
+}
+
+export function withDueAmount(Component): ComponentType {
+    return textOverride((d) => fmt(dueAmount(d)))(Component)
+}
+
+export function withBalanceDueNote(Component): ComponentType {
+    return textOverride((d) => {
+        const due = dueAmount(d)
+        if (due <= 0) return ""
+        const explicit = String((d as any)?.balance_due_note || "").trim()
+        return explicit || `${fmt(due)} due on-site before trip departure.`
+    })(Component)
 }
 
 
@@ -417,18 +521,22 @@ export function withTotalPaid(Component): ComponentType {
 export function withStatusBadge(Component): ComponentType {
     return textOverride(
         (d) => {
-            if (d.payment_status === "paid") return "✓ Confirmed"
-            if (d.payment_status === "failed") return "✗ Failed"
-            return "⏳ Pending"
+            const status = settlementStatus(d)
+            if (status === "fully_paid") return "Confirmed"
+            if (status === "partially_paid") return "Confirmed · Balance Due"
+            if (d.payment_status === "failed") return "Failed"
+            return "Pending"
         },
-        "⏳ Loading…"
+        "Loading..."
     )(Component)
 }
 
 export function withPaymentBadge(Component): ComponentType {
     return textOverride(
         (d) => {
-            if (d.payment_status === "paid") return "Paid"
+            const status = settlementStatus(d)
+            if (status === "fully_paid") return "Paid in Full"
+            if (status === "partially_paid") return "Partially Paid"
             if (d.payment_status === "failed") return "Failed"
             return "Pending"
         },
@@ -484,7 +592,12 @@ export function withTravellerList(Component): ComponentType {
                     textNodes[1]
 
                 if (nameNode) nameNode.textContent = name
-                if (metaNode) metaNode.textContent = metaText
+                if (metaNode) {
+                    metaNode.textContent = metaText
+                    metaNode.style.whiteSpace = "normal"
+                    metaNode.style.overflowWrap = "anywhere"
+                    metaNode.style.wordBreak = "break-word"
+                }
 
                 // Remove any leftover placeholder nodes like "Sharing", "Email", bullets, etc.
                 textNodes.forEach((el) => {
@@ -559,7 +672,8 @@ export function withTravellerList(Component): ComponentType {
 export function withHeadingText(Component): ComponentType {
     const Wrapped = textOverride(
         (d) => {
-            if (d.payment_status === "paid") return "Booking Confirmed!"
+            const status = settlementStatus(d)
+            if (status === "fully_paid" || status === "partially_paid") return "Booking Confirmed!"
             if (d.payment_status === "failed") return "Payment Failed"
             return "Processing…"
         },
@@ -572,8 +686,13 @@ export function withHeadingText(Component): ComponentType {
 export function withSubheadingText(Component): ComponentType {
     const Wrapped = textOverride(
         (d) => {
-            if (d.payment_status === "paid")
+            const status = settlementStatus(d)
+            if (status === "fully_paid")
                 return "Your adventure awaits. Here's everything you need to know."
+            if (status === "partially_paid")
+                return `Booking confirmed. ${fmt(
+                    dueAmount(d)
+                )} is due on-site before trip departure.`
             if (d.payment_status === "failed")
                 return "Your payment didn't go through. Don't worry, you can try again."
             return "We're confirming your payment…"
@@ -659,9 +778,9 @@ export function withRetryButton(Component): ComponentType {
         const handleRetry = () => {
             // Navigate back to the trip page if we have a trip_id
             if (data.trip_id) {
-                window.location.href = `/domestic-trips/${data.trip_id}`
+                window.location.href = `${DOMESTIC_TRIPS_BASE_URL}/${data.trip_id}`
             } else {
-                window.location.href = "/domestic-trips"
+                window.location.href = DOMESTIC_TRIPS_BASE_URL
             }
         }
 
@@ -684,7 +803,7 @@ export function withRetryButton(Component): ComponentType {
                 onMouseEnter={(e) => { (e.target as HTMLElement).style.opacity = "0.85" }}
                 onMouseLeave={(e) => { (e.target as HTMLElement).style.opacity = "1" }}
             >
-                ← Try Again
+                Try Again
             </div>
         )
     }
@@ -699,6 +818,17 @@ export function withHideOnFailure(Component): ComponentType {
             return <Component {...props} style={{ ...props.style, display: "none" }} />
         }
 
+        return <Component {...props} />
+    }
+}
+
+// Hide element unless a due balance exists (for partial payment cards/rows).
+export function withHideWhenNoBalance(Component): ComponentType {
+    return (props: any) => {
+        const [data, state] = useBooking()
+        if (state === "ready" && data && dueAmount(data) <= 0) {
+            return <Component {...props} style={{ ...(props.style || {}), display: "none" }} />
+        }
         return <Component {...props} />
     }
 }

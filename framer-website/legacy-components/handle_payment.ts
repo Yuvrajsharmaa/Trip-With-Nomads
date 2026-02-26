@@ -119,8 +119,8 @@ serve(async (req) => {
 
         // 3. Redirect User to Framer (GET Request)
         // Adjust these URLs to your actual Framer pages
-        const framerSuccess = "https://twn2.framer.website/success"
-        const framerFailure = "https://twn2.framer.website/failure"
+        const framerSuccess = "https://tripwithnomads.com/success"
+        const framerFailure = "https://tripwithnomads.com/failure"
 
         const targetUrl = isSuccess ? framerSuccess : framerFailure
 

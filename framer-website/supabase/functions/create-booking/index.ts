@@ -1,19 +1,18 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts"
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2"
-
-const TAX_RATE = 0.02
+import {
+    buildPricingQuote,
+    computeBasePricing,
+    normalizeCouponCode,
+    normalizeSharing,
+    normalizeTravellers,
+    validateCouponAgainstSubtotal,
+} from "../_shared/pricing.ts"
 
 const corsHeaders = {
     "Access-Control-Allow-Origin": "*",
     "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
     "Access-Control-Allow-Methods": "POST, OPTIONS",
-}
-
-type TravellerInput = {
-    id?: number
-    name?: string
-    sharing?: string
-    transport?: string
 }
 
 function json(payload: Record<string, unknown>, status = 200) {
@@ -27,227 +26,13 @@ function round2(value: number): number {
     return Math.round((Number(value) + Number.EPSILON) * 100) / 100
 }
 
-function toNumber(value: any): number {
+function toNumber(value: unknown): number {
     const parsed = Number(value)
     return Number.isFinite(parsed) ? parsed : 0
 }
 
-function getDateValue(row: any): string {
-    return row?.start_date || row?.departure_date || ""
-}
-
-function getVariantValue(row: any): string {
-    return row?.variant_name || row?.sharing || ""
-}
-
-function getTransportValue(row: any): string {
-    return row?.transport || "Seat in Coach"
-}
-
-function normalizeCouponCode(raw: string): string {
-    return String(raw || "").trim().toUpperCase()
-}
-
-function normalizeTravellers(input: any[]): TravellerInput[] {
-    if (!Array.isArray(input)) return []
-
-    return input.map((item) => ({
-        id: Number(item?.id) || undefined,
-        name: typeof item?.name === "string" ? item.name.trim() : "",
-        sharing: typeof item?.sharing === "string" ? item.sharing.trim() : "",
-        transport: typeof item?.transport === "string" ? item.transport.trim() : "",
-    }))
-}
-
-function computePricing(params: {
-    pricingRows: any[]
-    departureDate: string
-    fallbackTransport: string
-    travellers: TravellerInput[]
-}) {
-    const { pricingRows, departureDate, fallbackTransport, travellers } = params
-
-    let subtotal = 0
-    const missingSharings: string[] = []
-    const groups: Record<string, { count: number; unit: number }> = {}
-
-    const rowsByDate = pricingRows.filter((row) => getDateValue(row) === departureDate)
-
-    for (const traveller of travellers) {
-        const sharing = String(traveller.sharing || "")
-        const transport =
-            String(traveller.transport || "").trim() || fallbackTransport || "Seat in Coach"
-        if (!sharing) {
-            missingSharings.push("<blank>")
-            continue
-        }
-
-        const rowByTransport = rowsByDate.find(
-            (row) => getTransportValue(row) === transport && getVariantValue(row) === sharing
-        )
-        const rowAnyTransport = rowsByDate.find((row) => getVariantValue(row) === sharing)
-        const row = rowByTransport || rowAnyTransport
-
-        if (!row) {
-            missingSharings.push(sharing)
-            continue
-        }
-
-        const unitPrice = toNumber(row.price)
-        if (unitPrice <= 0) {
-            missingSharings.push(sharing)
-            continue
-        }
-
-        subtotal += unitPrice
-        const key = `${transport}__${sharing}`
-        if (!groups[key]) groups[key] = { count: 0, unit: unitPrice }
-        groups[key].count += 1
-    }
-
-    const breakdown = Object.entries(groups).map(([key, data]) => {
-        const parts = key.split("__")
-        const transport = parts[0] || "Seat in Coach"
-        const variant = parts[1] || ""
-        return {
-            label: `${data.count}x Guest (${variant}${transport ? ` · ${transport}` : ""})`,
-            price: data.unit * data.count,
-            unit_price: data.unit,
-            count: data.count,
-            variant,
-            transport,
-        }
-    })
-
-    return {
-        subtotal: round2(subtotal),
-        missingSharings,
-        breakdown,
-    }
-}
-
-async function validateCoupon(params: {
-    supabase: any
-    couponCode: string
-    tripId: string
-    subtotal: number
-    email: string
-}) {
-    const { supabase, couponCode, tripId, subtotal, email } = params
-
-    if (!couponCode) {
-        return {
-            valid: true,
-            discountAmount: 0,
-            couponSnapshot: null,
-            code: null,
-        }
-    }
-
-    const { data: couponRows, error: couponError } = await supabase
-        .from("coupons")
-        .select("*")
-        .ilike("code", couponCode)
-        .limit(1)
-
-    if (couponError) {
-        throw new Error(`Coupon lookup failed: ${couponError.message}`)
-    }
-
-    const coupon = couponRows?.[0]
-    if (!coupon) {
-        return { valid: false, message: "Invalid coupon code" }
-    }
-
-    if (!coupon.is_active) {
-        return { valid: false, message: "Coupon is inactive" }
-    }
-
-    const now = Date.now()
-    if (coupon.starts_at && now < Date.parse(coupon.starts_at)) {
-        return { valid: false, message: "Coupon is not active yet" }
-    }
-    if (coupon.ends_at && now > Date.parse(coupon.ends_at)) {
-        return { valid: false, message: "Coupon has expired" }
-    }
-
-    const scopedTrips = Array.isArray(coupon.applicable_trip_ids)
-        ? coupon.applicable_trip_ids.map((v: any) => String(v))
-        : []
-
-    if (scopedTrips.length > 0 && !scopedTrips.includes(tripId)) {
-        return { valid: false, message: "Coupon is not applicable for this trip" }
-    }
-
-    const minSubtotal = toNumber(coupon.min_subtotal)
-    if (subtotal < minSubtotal) {
-        return {
-            valid: false,
-            message: `Minimum subtotal ${minSubtotal.toLocaleString("en-IN")} required`,
-        }
-    }
-
-    if (coupon.usage_limit_total) {
-        const { count, error } = await supabase
-            .from("bookings")
-            .select("id", { count: "exact", head: true })
-            .ilike("coupon_code", coupon.code)
-            .neq("payment_status", "failed")
-
-        if (error) {
-            throw new Error(`Coupon usage check failed: ${error.message}`)
-        }
-
-        if ((count || 0) >= Number(coupon.usage_limit_total)) {
-            return { valid: false, message: "Coupon usage limit reached" }
-        }
-    }
-
-    if (coupon.usage_limit_per_email && email) {
-        const { count, error } = await supabase
-            .from("bookings")
-            .select("id", { count: "exact", head: true })
-            .ilike("coupon_code", coupon.code)
-            .eq("email", email)
-            .neq("payment_status", "failed")
-
-        if (error) {
-            throw new Error(`Coupon usage check failed: ${error.message}`)
-        }
-
-        if ((count || 0) >= Number(coupon.usage_limit_per_email)) {
-            return { valid: false, message: "Coupon usage limit reached for this email" }
-        }
-    }
-
-    const discountType = String(coupon.discount_type || "").toLowerCase()
-    const discountValue = toNumber(coupon.discount_value)
-    const maxDiscount = coupon.max_discount != null ? toNumber(coupon.max_discount) : null
-
-    let discountAmount = 0
-    if (discountType === "percent") {
-        discountAmount = subtotal * (discountValue / 100)
-        if (maxDiscount != null) discountAmount = Math.min(discountAmount, maxDiscount)
-    } else {
-        discountAmount = discountValue
-    }
-
-    discountAmount = round2(Math.max(0, Math.min(discountAmount, subtotal)))
-
-    return {
-        valid: true,
-        code: String(coupon.code || couponCode).toUpperCase(),
-        discountAmount,
-        couponSnapshot: {
-            id: coupon.id,
-            code: String(coupon.code || couponCode).toUpperCase(),
-            discount_type: discountType,
-            discount_value: discountValue,
-            max_discount: maxDiscount,
-            min_subtotal: minSubtotal,
-            applicable_trip_ids: scopedTrips,
-        },
-    }
+function normalizePaymentMode(value: unknown): "full" | "partial_25" {
+    return String(value || "").trim().toLowerCase() === "partial_25" ? "partial_25" : "full"
 }
 
 function buildPricingMismatchErrors(pricingSnapshot: any, computed: any): string[] {
@@ -278,17 +63,49 @@ serve(async (req) => {
     }
 
     try {
-        const body = await req.json()
+        const contentType = String(req.headers.get("content-type") || "").toLowerCase()
+        let body: any = {}
+        if (contentType.includes("application/x-www-form-urlencoded")) {
+            const raw = await req.text()
+            const form = new URLSearchParams(raw)
+            let parsedTravellers: any[] = []
+            let parsedPricingSnapshot: Record<string, unknown> | null = null
+            try {
+                parsedTravellers = JSON.parse(form.get("travellers") || "[]")
+            } catch {
+                parsedTravellers = []
+            }
+            try {
+                parsedPricingSnapshot = JSON.parse(form.get("pricing_snapshot") || "null")
+            } catch {
+                parsedPricingSnapshot = null
+            }
+            body = {
+                trip_id: form.get("trip_id"),
+                departure_date: form.get("departure_date") || form.get("date"),
+                transport: form.get("transport"),
+                travellers: parsedTravellers,
+                coupon_code: form.get("coupon_code"),
+                pricing_snapshot: parsedPricingSnapshot,
+                name: form.get("name"),
+                email: form.get("email"),
+                phone: form.get("phone"),
+                payment_mode: form.get("payment_mode"),
+            }
+        } else {
+            body = await req.json()
+        }
 
         const tripId = String(body?.trip_id || "").trim()
         const departureDate = String(body?.departure_date || "").trim()
-        const fallbackTransport = String(body?.transport || "").trim() || "Seat in Coach"
+        const fallbackTransport = String(body?.transport || "").trim()
         const travellers = normalizeTravellers(body?.travellers || [])
         const couponCode = normalizeCouponCode(body?.coupon_code || "")
+        const paymentMode = normalizePaymentMode(body?.payment_mode)
         const pricingSnapshot = body?.pricing_snapshot
 
         const name = String(body?.name || "").trim()
-        const email = String(body?.email || "").trim()
+        const email = String(body?.email || "").trim().toLowerCase()
         const phone = String(body?.phone || "").trim()
 
         if (!tripId || !departureDate || travellers.length === 0 || !name || !email) {
@@ -323,7 +140,7 @@ serve(async (req) => {
 
         const { data: pricingRows, error: pricingError } = await supabase
             .from("trip_pricing")
-            .select("trip_id, start_date, departure_date, transport, variant_name, sharing, price")
+            .select("*")
             .eq("trip_id", tripId)
 
         if (pricingError) {
@@ -335,30 +152,37 @@ serve(async (req) => {
         if (pricing.length === 0) {
             return json({ error: "No pricing found for selected trip" }, 400)
         }
+        const hasStructuredSharing = pricing.some((row: any) => Boolean(normalizeSharing(row?.sharing)))
+        if (!hasStructuredSharing) {
+            return json(
+                { error: "This trip is invite-only. Online checkout is unavailable." },
+                403
+            )
+        }
 
-        const pricingResult = computePricing({
+        const basePricing = computeBasePricing({
             pricingRows: pricing,
             departureDate,
             fallbackTransport,
             travellers,
         })
 
-        if (pricingResult.missingSharings.length > 0) {
+        if (basePricing.missingSharings.length > 0) {
             return json(
                 {
                     error: "Some traveller sharing options could not be priced",
-                    missing: pricingResult.missingSharings,
+                    missing: basePricing.missingSharings,
                 },
                 400
             )
         }
 
-        const subtotalAmount = pricingResult.subtotal
+        const subtotalAmount = round2(basePricing.subtotal)
         if (subtotalAmount <= 0) {
             return json({ error: "Subtotal is zero. Please complete traveller details" }, 400)
         }
 
-        const couponResult = await validateCoupon({
+        const couponResult = await validateCouponAgainstSubtotal({
             supabase,
             couponCode,
             tripId,
@@ -370,17 +194,33 @@ serve(async (req) => {
             return json({ error: couponResult.message || "Invalid coupon" }, 400)
         }
 
-        const discountAmount = round2(toNumber(couponResult.discountAmount || 0))
-        const discountedSubtotal = round2(Math.max(0, subtotalAmount - discountAmount))
-        const taxAmount = round2(discountedSubtotal * TAX_RATE)
-        const totalAmount = round2(discountedSubtotal + taxAmount)
+        const quote = buildPricingQuote({
+            baseSubtotal: subtotalAmount,
+            earlyBirdDiscountAmount: basePricing.earlyBirdDiscountAmount,
+            couponResult,
+            lineItems: basePricing.lineItems.map((item) => ({
+                traveller_id: item.traveller_id,
+                sharing: item.sharing,
+                transport: item.transport,
+                unit_price: item.unit_price,
+            })),
+        })
 
         const computedPricing = {
-            subtotal_amount: subtotalAmount,
-            discount_amount: discountAmount,
-            tax_amount: taxAmount,
-            total_amount: totalAmount,
+            subtotal_amount: quote.base_subtotal,
+            discount_amount: quote.discount_amount_total,
+            tax_amount: quote.tax_amount,
+            total_amount: quote.total_amount,
         }
+
+        const partialBaseDeposit = round2(quote.base_subtotal * 0.25)
+        const payableNowAmount =
+            paymentMode === "partial_25"
+                ? round2(Math.min(Math.max(0, partialBaseDeposit), quote.total_amount))
+                : round2(quote.total_amount)
+        const dueAmount = round2(Math.max(0, quote.total_amount - payableNowAmount))
+        const settlementStatusPreview =
+            paymentMode === "partial_25" ? "partially_paid" : "fully_paid"
 
         const mismatchErrors = buildPricingMismatchErrors(pricingSnapshot, computedPricing)
         if (mismatchErrors.length > 0) {
@@ -393,19 +233,33 @@ serve(async (req) => {
             )
         }
 
-        const paymentBreakdown = [...pricingResult.breakdown]
-        if (discountAmount > 0 && couponResult.code) {
+        const paymentBreakdown = [...basePricing.paymentBreakdown]
+        if (quote.early_bird_discount_amount > 0) {
             paymentBreakdown.push({
-                label: `Coupon (${couponResult.code})`,
-                price: -discountAmount,
-                unit_price: -discountAmount,
+                label: "Early Bird Discount",
+                price: -quote.early_bird_discount_amount,
+                unit_price: -quote.early_bird_discount_amount,
+                count: 1,
+                variant: "early_bird",
+                transport: fallbackTransport || "",
+            })
+        }
+        if (quote.coupon_discount_amount > 0 && quote.applied_discount_code) {
+            paymentBreakdown.push({
+                label: `Coupon (${quote.applied_discount_code})`,
+                price: -quote.coupon_discount_amount,
+                unit_price: -quote.coupon_discount_amount,
                 count: 1,
                 variant: "coupon",
+                transport: fallbackTransport || "",
             })
         }
 
         const txnid =
             "txn_" + Date.now().toString().slice(-10) + Math.floor(Math.random() * 10000).toString()
+
+        const selectedCouponSnapshot =
+            quote.coupon_discount_amount > 0 ? couponResult.couponSnapshot || null : null
 
         const { data: booking, error: insertError } = await supabase
             .from("bookings")
@@ -415,12 +269,12 @@ serve(async (req) => {
                 transport: fallbackTransport,
                 travellers,
                 payment_breakdown: paymentBreakdown,
-                subtotal_amount: subtotalAmount,
-                discount_amount: discountAmount,
-                tax_amount: taxAmount,
-                total_amount: totalAmount,
-                coupon_code: couponResult.code || null,
-                coupon_snapshot: couponResult.couponSnapshot,
+                subtotal_amount: quote.base_subtotal,
+                discount_amount: quote.discount_amount_total,
+                tax_amount: quote.tax_amount,
+                total_amount: quote.total_amount,
+                coupon_code: quote.coupon_discount_amount > 0 ? quote.applied_discount_code : null,
+                coupon_snapshot: selectedCouponSnapshot,
                 name,
                 email,
                 phone,
@@ -439,7 +293,7 @@ serve(async (req) => {
         const productinfo = "Trip Booking"
         const firstname = name.split(" ")[0] || name
         const udf1 = booking.id
-        const amountString = totalAmount.toFixed(2)
+        const amountString = payableNowAmount.toFixed(2)
 
         const hashString = `${PAYU_KEY}|${txnid}|${amountString}|${productinfo}|${firstname}|${email}|${udf1}||||||||||${PAYU_SALT}`
 
@@ -452,19 +306,33 @@ serve(async (req) => {
 
         return json({
             booking_id: booking.id,
-            applied_coupon: couponResult.code
-                ? {
-                      code: couponResult.code,
-                      discount_amount: discountAmount,
-                      discount_type: couponResult.couponSnapshot?.discount_type,
-                      discount_value: couponResult.couponSnapshot?.discount_value,
-                  }
-                : null,
+            payment_mode: paymentMode,
+            payable_now_amount: payableNowAmount,
+            due_amount: dueAmount,
+            settlement_status_preview: settlementStatusPreview,
+            applied_coupon:
+                quote.coupon_discount_amount > 0 && quote.applied_discount_code
+                    ? {
+                          code: quote.applied_discount_code,
+                          discount_amount: quote.coupon_discount_amount,
+                          discount_type: couponResult.discount_type,
+                          discount_value: couponResult.discount_value,
+                      }
+                    : null,
             pricing_summary: {
-                subtotal_amount: subtotalAmount,
-                discount_amount: discountAmount,
-                tax_amount: taxAmount,
-                total_amount: totalAmount,
+                subtotal_amount: quote.base_subtotal,
+                early_bird_discount_amount: quote.early_bird_discount_amount,
+                coupon_discount_amount: quote.coupon_discount_amount,
+                discount_amount: quote.discount_amount_total,
+                applied_discount_source: quote.applied_discount_source,
+                applied_discount_code: quote.applied_discount_code,
+                taxable_amount: quote.taxable_amount,
+                tax_amount: quote.tax_amount,
+                total_amount: quote.total_amount,
+                payable_now_amount: payableNowAmount,
+                due_amount: dueAmount,
+                payment_mode: paymentMode,
+                line_items: quote.line_items,
                 transport: fallbackTransport,
                 departure_date: departureDate,
             },

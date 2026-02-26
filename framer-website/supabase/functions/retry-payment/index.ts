@@ -15,15 +15,20 @@ Deno.serve(async (req) => {
     try {
         const supabaseUrl = Deno.env.get('SUPABASE_URL')
         const supabaseKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')
-        const payuKey = Deno.env.get('PAYU_KEY')
-        const payuSalt = Deno.env.get('PAYU_SALT')
+        const isTestMode = Deno.env.get('PAYU_TEST_MODE') === 'true'
+        const payuKey = isTestMode
+            ? (Deno.env.get('PAYU_TEST_KEY') || Deno.env.get('PAYU_KEY'))
+            : (Deno.env.get('PAYU_LIVE_KEY') || Deno.env.get('PAYU_KEY'))
+        const payuSalt = isTestMode
+            ? (Deno.env.get('PAYU_TEST_SALT') || Deno.env.get('PAYU_SALT'))
+            : (Deno.env.get('PAYU_LIVE_SALT') || Deno.env.get('PAYU_SALT'))
 
         // Validate Secrets
         if (!supabaseUrl || !supabaseKey) {
             throw new Error("Missing Supabase Secrets (URL/RoleKey)")
         }
         if (!payuKey || !payuSalt) {
-            throw new Error("Missing PayU Secrets (PAYU_KEY/PAYU_SALT)")
+            throw new Error("Missing PayU Secrets for selected mode (test/live)")
         }
 
         const { booking_id } = await req.json()
@@ -54,7 +59,9 @@ Deno.serve(async (req) => {
         const hashBuffer = await crypto.subtle.digest("SHA-512", new TextEncoder().encode(hashString))
         const hash = Array.from(new Uint8Array(hashBuffer)).map(b => b.toString(16).padStart(2, '0')).join('')
 
-        const payuBase = "https://secure.payu.in/_payment"
+        const payuBase = isTestMode
+            ? "https://test.payu.in/_payment"
+            : "https://secure.payu.in/_payment"
 
         return new Response(
             JSON.stringify({
@@ -78,8 +85,8 @@ Deno.serve(async (req) => {
                 status: 200,
             }
         )
-    } catch (error) {
-        return new Response(JSON.stringify({ error: error.message }), {
+    } catch (error: any) {
+        return new Response(JSON.stringify({ error: error?.message || "Unknown error" }), {
             headers: { ...corsHeaders, 'Content-Type': 'application/json' },
             status: 400,
         })

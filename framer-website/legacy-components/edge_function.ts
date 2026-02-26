@@ -120,8 +120,8 @@ serve(async (req) => {
                     phone: phone || "",
                     // IMPORTANT: Point these to your NEW 'handle-payment' Edge Function URL
                     // Example: https://<project-ref>.supabase.co/functions/v1/handle-payment
-                    surl: Deno.env.get("PAYMENT_CALLBACK_URL") || "https://twn2.framer.website/success",
-                    furl: Deno.env.get("PAYMENT_CALLBACK_URL") || "https://twn2.framer.website/failure",
+                    surl: Deno.env.get("PAYMENT_CALLBACK_URL") || "https://tripwithnomads.com/success",
+                    furl: Deno.env.get("PAYMENT_CALLBACK_URL") || "https://tripwithnomads.com/failure",
                     hash: hash,
                     udf1: udf1, // Frontend must submit this!
                     action: actionUrl

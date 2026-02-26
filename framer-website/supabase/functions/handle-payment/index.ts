@@ -30,9 +30,12 @@ serve(async (req) => {
         )
 
         const IS_TEST = Deno.env.get("PAYU_TEST_MODE") === "true"
-        let PAYU_SALT = IS_TEST
+        const PAYU_SALT = IS_TEST
             ? (Deno.env.get("PAYU_TEST_SALT") || Deno.env.get("PAYU_SALT"))
             : (Deno.env.get("PAYU_LIVE_SALT") || Deno.env.get("PAYU_SALT"))
+        if (!PAYU_SALT) {
+            throw new Error("Missing PayU salt configuration for current environment")
+        }
 
         let bookingId = udf1
         let booking: any = null
@@ -90,7 +93,9 @@ serve(async (req) => {
                 .eq("id", bookingId)
         }
 
-        const framerBase = (Deno.env.get("FRAMER_BASE_URL") || "https://twn2.framer.website").replace(/\/+$/, "")
+        const framerBase = (
+            Deno.env.get("FRAMER_BASE_URL") || "https://tripwithnomads.com"
+        ).replace(/\/+$/, "")
         const targetPage = isSuccess ? "payment-success" : "payment-failed"
         const query = new URLSearchParams()
         if (bookingId) query.set("booking_id", bookingId)
