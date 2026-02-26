@@ -1,0 +1,114 @@
+{
+  "supabase_inserts": [
+    {
+      "id": "ea5aaef9-5982-4dc1-b2fb-71effcb83e84",
+      "title": "4x4 Summer Spiti Expedition (6N7D)",
+      "slug": "4x4-summer-spiti-expedition-6n7d"
+    },
+    {
+      "id": "5d4ebd01-2814-4f2f-9110-b461bf2b82e0",
+      "title": "Thailand Songkran Festival",
+      "slug": "thailand-songkran-festival"
+    }
+  ],
+  "framer_drafts": [
+    {
+      "title": "4x4 Summer Spiti Expedition (6N7D)",
+      "slug": "4x4-summer-spiti-expedition-6n7d",
+      "trip_id": "ea5aaef9-5982-4dc1-b2fb-71effcb83e84"
+    },
+    {
+      "title": "Spiti Biking",
+      "slug": "spiti-biking",
+      "trip_id": "67f214ed-0655-47d5-8aff-d2c485d3ad01"
+    },
+    {
+      "title": "Manali with Chandrataal (Delhi-Delhi)",
+      "slug": "manali-with-chandrataal-delhi-delhi",
+      "trip_id": "59d33497-0929-47b1-be3a-7b4d8a363b0b"
+    },
+    {
+      "title": "Teen Taal with Gombo Ranjan",
+      "slug": "teen-taal-with-gombo-ranjan",
+      "trip_id": "4cb2a09e-2838-4941-ad84-c66f9c414ff3"
+    },
+    {
+      "title": "Zanskar Valley 6N7D (Tempo Traveller)",
+      "slug": "zanskar-valley-6n7d-tempo-traveller",
+      "trip_id": "f0e16792-b0f5-4c45-9dcd-609ac7e9e62a"
+    },
+    {
+      "title": "Leh-Leh with Turtuk 5N6D",
+      "slug": "leh-leh-with-turtuk-5n6d",
+      "trip_id": "89b17e7f-1a26-4398-816f-32686cf7b2ae"
+    },
+    {
+      "title": "Leh-Leh with Turtuk 6N7D",
+      "slug": "leh-leh-with-turtuk-6n7d",
+      "trip_id": "a878285e-799f-41e2-9295-6fa4fa672c65"
+    },
+    {
+      "title": "Bali 8N9D",
+      "slug": "bali-8n9d",
+      "trip_id": "4596d76a-c3bf-4555-97b4-656636225f98"
+    }
+  ],
+  "framer_sync_ids": [
+    {
+      "title": "Summer Spiti",
+      "supabase_id": "1f80ad9b-ffe2-40c2-8f63-e9e228646ffc"
+    },
+    {
+      "title": "Teen taal",
+      "supabase_id": "bc006aec-a940-47cc-93c8-a56c6bcba83b"
+    },
+    {
+      "title": "Kedarnath Yatra",
+      "supabase_id": "2f0ea5c3-f8d4-4c2f-9156-b2ad011fca7d"
+    },
+    {
+      "title": "Leh to Leh with Umling La, Hanle & Tso Moriri",
+      "supabase_id": "7b8b17de-5691-4eed-ae76-b834b52100ec"
+    },
+    {
+      "title": "Winter Spiti Expedition",
+      "supabase_id": "a1b86c67-45e9-4193-a645-ea1a74d0af09"
+    },
+    {
+      "title": "Spiti Valley with sangla holi",
+      "supabase_id": "e0615ffb-27d0-48c8-9cf7-0acbb16204a0"
+    },
+    {
+      "title": "Sangla Holi Special",
+      "supabase_id": "23fc4e0e-40e3-4767-81c8-9dc6bdcd7608"
+    },
+    {
+      "title": "Ladakh Apricot Blossom",
+      "supabase_id": "56bd2126-f80e-45f3-9f09-588e3931f55b"
+    },
+    {
+      "title": "Thailand Songkran Festival",
+      "supabase_id": "5d4ebd01-2814-4f2f-9110-b461bf2b82e0"
+    },
+    {
+      "title": "Thailand full moon party",
+      "supabase_id": "fae90e04-3c77-4878-9b6b-a5f1e7e37fa7"
+    },
+    {
+      "title": "Almaty",
+      "supabase_id": "670992ff-24ac-43fe-a0a3-5a4c2c19ed53"
+    },
+    {
+      "title": "Sri Lanka",
+      "supabase_id": "45fb8007-1088-436c-8472-10783002f7a9"
+    },
+    {
+      "title": "Dubai",
+      "supabase_id": "5a220162-dffa-43ab-8d3c-42e9959189b6"
+    },
+    {
+      "title": "Japan",
+      "supabase_id": "7a6903f0-ff2a-4816-9b66-a2b337d0fba6"
+    }
+  ]
+}

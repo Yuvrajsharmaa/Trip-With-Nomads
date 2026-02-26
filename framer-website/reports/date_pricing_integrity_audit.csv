@@ -1,0 +1,4 @@
+check,status,details
+date_format,PASS,invalid_rows=0
+duplicate_slug_date_variant_with_different_prices,WARN,conflicting_keys=1
+conflict_detail,WARN,winter-spiti-expedition | 2026-03-21 | Triple Sharing | prices=1;18499

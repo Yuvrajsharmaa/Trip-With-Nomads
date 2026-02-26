@@ -23,6 +23,14 @@ The Admin Dashboard is used to:
 
 The dashboard connects directly to the same **Supabase** instance used by the Framer website.
 
+## 🔐 Environment Setup
+
+- Use `env.production.example` and `env.development.example` as templates.
+- `VITE_SITE_BASE_URL` controls public trip links in the CMS browser.
+- For script execution, load env explicitly:
+  - `node --env-file=env.production.example scripts/<script>.mjs`
+  - `node --env-file=env.development.example scripts/<script>.mjs`
+
 ---
 
 ### Shared with Framer Website

@@ -1,0 +1,200 @@
+[
+  {
+    "id": "beb600b6-ba94-4175-9d54-e40a5858d5e9",
+    "title": "Summer Spiti",
+    "active": true,
+    "created_at": "2026-02-25T05:18:02.009326+00:00",
+    "slug": "summer-spiti",
+    "duration_text": null,
+    "image_url": null
+  },
+  {
+    "id": "34cca5ba-6c43-4e0d-8e46-ea71e2f92ad5",
+    "title": "4x4 Summer Spiti Expedition (6N7D)",
+    "active": true,
+    "created_at": "2026-02-25T05:18:02.069376+00:00",
+    "slug": "4x4-summer-spiti-expedition-6n7d",
+    "duration_text": null,
+    "image_url": null
+  },
+  {
+    "id": "e3dc182c-c7af-4b8d-9dee-93fbe45e3e6d",
+    "title": "Spiti Biking",
+    "active": true,
+    "created_at": "2026-02-25T05:18:02.120251+00:00",
+    "slug": "spiti-biking",
+    "duration_text": null,
+    "image_url": null
+  },
+  {
+    "id": "47662a86-692c-4bde-ae87-36836ff6661c",
+    "title": "Manali with Chandrataal (Delhi-Delhi)",
+    "active": true,
+    "created_at": "2026-02-25T05:18:02.172227+00:00",
+    "slug": "manali-with-chandrataal-delhi-delhi",
+    "duration_text": null,
+    "image_url": null
+  },
+  {
+    "id": "275f6339-b224-4724-91ec-73b168eb46e9",
+    "title": "Teen Taal (Delhi-Delhi)",
+    "active": true,
+    "created_at": "2026-02-25T05:18:02.548235+00:00",
+    "slug": "teen-taal",
+    "duration_text": null,
+    "image_url": null
+  },
+  {
+    "id": "8ef02e1d-7674-45d9-83f5-798ca544a4a6",
+    "title": "Teen Taal With Gombo Ranjan",
+    "active": true,
+    "created_at": "2026-02-25T05:18:02.605866+00:00",
+    "slug": "teen-taal-with-gombo-ranjan",
+    "duration_text": null,
+    "image_url": null
+  },
+  {
+    "id": "af703852-3359-4b06-9dd0-0a8beaf98777",
+    "title": "Zanskar Valley 6N7D (Tempo Traveller)",
+    "active": true,
+    "created_at": "2026-02-25T05:18:03.053244+00:00",
+    "slug": "zanskar-valley-6n7d-tempo-traveller",
+    "duration_text": null,
+    "image_url": null
+  },
+  {
+    "id": "524b7861-dd99-438e-b216-d5795d7a6488",
+    "title": "Kedarnath Yatra",
+    "active": true,
+    "created_at": "2026-02-25T05:18:03.10853+00:00",
+    "slug": "kedarnath-yatra",
+    "duration_text": null,
+    "image_url": null
+  },
+  {
+    "id": "a482be60-64c3-4018-95d3-7e1b798b4f20",
+    "title": "Leh-Leh With Turtuk 5N6D",
+    "active": true,
+    "created_at": "2026-02-25T05:18:03.157124+00:00",
+    "slug": "ladakh-leh-to-leh-with-turtuk",
+    "duration_text": null,
+    "image_url": null
+  },
+  {
+    "id": "977228fc-bbe9-4bf1-afe4-b1600683f041",
+    "title": "Leh-Leh with Turtuk 6N7D",
+    "active": true,
+    "created_at": "2026-02-25T05:18:03.219509+00:00",
+    "slug": "leh-leh-with-turtuk-6n7d",
+    "duration_text": null,
+    "image_url": null
+  },
+  {
+    "id": "0cece9bf-b3e2-41d0-b15c-922bed9f9148",
+    "title": "Leh to Leh with Umling La, Hanle & Tso Moriri",
+    "active": true,
+    "created_at": "2026-02-25T05:18:03.385431+00:00",
+    "slug": "leh-to-leh-with-umling-la-hanle-tso-moriri",
+    "duration_text": null,
+    "image_url": null
+  },
+  {
+    "id": "8fd361e4-5e8f-44b7-9782-4ebda1df09a5",
+    "title": "Winter Spiti Expedition",
+    "active": true,
+    "created_at": "2026-02-25T05:18:03.434114+00:00",
+    "slug": "winter-spiti-expedition",
+    "duration_text": null,
+    "image_url": null
+  },
+  {
+    "id": "c2fb1c7e-8b51-44ec-acd6-ce8cba39fe0b",
+    "title": "Spiti Valley with sangla holi",
+    "active": true,
+    "created_at": "2026-02-25T05:18:03.483105+00:00",
+    "slug": "spiti-valley-with-sangla-holi",
+    "duration_text": null,
+    "image_url": null
+  },
+  {
+    "id": "983847ab-c3c5-4e0d-832f-e77455bbe048",
+    "title": "Sangla Holi Special",
+    "active": true,
+    "created_at": "2026-02-25T05:18:03.532709+00:00",
+    "slug": "sangla-holi-special",
+    "duration_text": null,
+    "image_url": null
+  },
+  {
+    "id": "7cb3d6f0-8e24-47c4-9d1f-58b90d49ccd1",
+    "title": "Ladakh Apricot Blossom",
+    "active": true,
+    "created_at": "2026-02-25T05:18:03.58109+00:00",
+    "slug": "ladakh-apricot-blossom",
+    "duration_text": null,
+    "image_url": null
+  },
+  {
+    "id": "b88e7f52-3204-4411-bded-8fc36fa1d85f",
+    "title": "Bali with Nusa & Gili T",
+    "active": true,
+    "created_at": "2026-02-25T05:18:03.787666+00:00",
+    "slug": "bali-with-nusa-gili-t",
+    "duration_text": null,
+    "image_url": null
+  },
+  {
+    "id": "143d52f7-c64c-4554-8b46-041d0b43105f",
+    "title": "Thailand Songkran Festival",
+    "active": true,
+    "created_at": "2026-02-25T05:18:03.920431+00:00",
+    "slug": "thailand-songkran-festival",
+    "duration_text": null,
+    "image_url": null
+  },
+  {
+    "id": "0700ee34-e629-4a5c-846b-1d1c90f0183d",
+    "title": "Thailand full moon party",
+    "active": true,
+    "created_at": "2026-02-25T05:18:03.968513+00:00",
+    "slug": "thailand-full-moon-party",
+    "duration_text": null,
+    "image_url": null
+  },
+  {
+    "id": "e9f4c119-28aa-41d8-84ed-8607b9f99627",
+    "title": "Almaty",
+    "active": true,
+    "created_at": "2026-02-25T05:18:04.045247+00:00",
+    "slug": "almaty",
+    "duration_text": null,
+    "image_url": null
+  },
+  {
+    "id": "5f72df04-63af-46b0-82d3-f119558a6495",
+    "title": "Sri Lanka",
+    "active": true,
+    "created_at": "2026-02-25T05:18:04.097028+00:00",
+    "slug": "sri-lanka",
+    "duration_text": null,
+    "image_url": null
+  },
+  {
+    "id": "1dc36c53-845f-4191-9874-760c4cb7b403",
+    "title": "Dubai",
+    "active": true,
+    "created_at": "2026-02-25T05:18:04.158137+00:00",
+    "slug": "dubai",
+    "duration_text": null,
+    "image_url": null
+  },
+  {
+    "id": "84c41d57-719e-4027-b418-64e6da678025",
+    "title": "Japan",
+    "active": true,
+    "created_at": "2026-02-25T05:18:04.211321+00:00",
+    "slug": "japan",
+    "duration_text": null,
+    "image_url": null
+  }
+]

@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Payment Failed Prototype</title>
+  <style>
+    body { margin: 0; font-family: Manrope, "DM Sans", -apple-system, sans-serif; background: #f5f5f5; color: #1f1f1f; }
+    .wrap { max-width: 860px; margin: 36px auto; padding: 0 16px; }
+    .card { background: #fff; border: 1px solid #e8e8e8; border-radius: 24px; padding: 28px; }
+    .bad { display:inline-flex; background:#ffe8e6; color:#b42318; border-radius:10px; padding:8px 12px; font-weight:700; }
+    h1 { margin: 14px 0 8px; font-size: 42px; }
+    .muted { color:#646464; }
+    .grid { display:grid; gap:12px; margin-top:18px; }
+    .row { display:flex; justify-content:space-between; gap:12px; }
+    .cta { margin-top:18px; display:inline-flex; text-decoration:none; border-radius:12px; padding:12px 18px; font-weight:700; border:1px solid #1b91c9; color:#1b91c9; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="card">
+      <div class="bad">Payment failed</div>
+      <h1>Payment Failed</h1>
+      <div class="muted">The transaction did not complete. You can retry immediately.</div>
+      <div class="grid">
+        <div class="row"><span>Trip</span><strong id="tripName">—</strong></div>
+        <div class="row"><span>Attempted mode</span><strong id="modeText">—</strong></div>
+        <div class="row"><span>Attempted amount</span><strong id="attempted">₹0</strong></div>
+        <div class="row"><span>Balance due</span><strong id="dueAmount">₹0</strong></div>
+      </div>
+      <a id="retryLink" class="cta" href="./checkout-part-payment-prototype.html">Try Again</a>
+    </div>
+  </div>
+  <script>
+    const q = new URLSearchParams(location.search)
+    const mode = (q.get("mode") || "full").toLowerCase()
+    const payableNow = Number(q.get("payable_now") || 0)
+    const due = Number(q.get("due") || 0)
+    const trip = q.get("trip") || "Trip"
+    const fmt = (n) => "₹" + Number(n || 0).toLocaleString("en-IN", { maximumFractionDigits: 2 })
+
+    document.getElementById("tripName").textContent = trip
+    document.getElementById("modeText").textContent = mode === "partial_25" ? "Pay 25% now" : "Full payment"
+    document.getElementById("attempted").textContent = fmt(payableNow)
+    document.getElementById("dueAmount").textContent = fmt(Math.max(0, due))
+    document.getElementById("retryLink").href = `./checkout-part-payment-prototype.html?trip=${encodeURIComponent(trip)}`
+  </script>
+</body>
+</html>

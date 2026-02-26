@@ -3,7 +3,6 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2"
 
 serve(async (req) => {
     try {
-        // PayU sends data as Form Data (application/x-www-form-urlencoded)
         const formData = await req.formData()
         const data: any = {}
         for (const [key, value] of formData.entries()) {
@@ -19,7 +18,7 @@ serve(async (req) => {
             productinfo,
             firstname,
             email,
-            udf1, // This is our Booking UUID
+            udf1,
             mihpayid,
             hash: receivedHash,
             key,
@@ -30,24 +29,38 @@ serve(async (req) => {
             Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!
         )
 
-        // Setup Salt
         const IS_TEST = Deno.env.get("PAYU_TEST_MODE") === "true"
-        let PAYU_SALT = IS_TEST
+        const PAYU_SALT = IS_TEST
             ? (Deno.env.get("PAYU_TEST_SALT") || Deno.env.get("PAYU_SALT"))
             : (Deno.env.get("PAYU_LIVE_SALT") || Deno.env.get("PAYU_SALT"))
+        if (!PAYU_SALT) {
+            throw new Error("Missing PayU salt configuration for current environment")
+        }
 
-        // Fetch booking to verify info
         let bookingId = udf1
-        const { data: booking } = await supabase
-            .from("bookings")
-            .select("email, name, total_amount")
-            .eq("id", bookingId)
-            .single()
+        let booking: any = null
 
-        // Reverse Hash Formula: SHA512(SALT|status|udf10|udf9|...|udf1|email|firstname|productinfo|amount|txnid|key)
-        // Since we only used udf1, we need 9 empty pipes before udf1.
-        // Actually, the standard PayU reverse hash is: 
-        // SALT|status||||||||||udf1|email|firstname|productinfo|amount|txnid|key
+        if (bookingId) {
+            const bookingById = await supabase
+                .from("bookings")
+                .select("id, email, name, total_amount")
+                .eq("id", bookingId)
+                .single()
+            booking = bookingById.data
+        }
+
+        // Fallback lookup by txnid when udf1 is missing in gateway callback.
+        if (!bookingId && txnid) {
+            const bookingByTxn = await supabase
+                .from("bookings")
+                .select("id, email, name, total_amount")
+                .eq("payu_txnid", txnid)
+                .order("created_at", { ascending: false })
+                .limit(1)
+                .maybeSingle()
+            booking = bookingByTxn.data
+            if (booking?.id) bookingId = booking.id
+        }
 
         const safeUdf1 = udf1 || ""
         const safeEmail = email || booking?.email || ""
@@ -80,10 +93,14 @@ serve(async (req) => {
                 .eq("id", bookingId)
         }
 
-        // Redirect with booking_id parameter
-        const framerBase = "https://twn2.framer.website"
-        const targetPage = isSuccess ? "success" : "payment-failed"
-        const redirectUrl = `${framerBase}/${targetPage}?booking_id=${bookingId}`
+        const framerBase = (
+            Deno.env.get("FRAMER_BASE_URL") || "https://tripwithnomads.com"
+        ).replace(/\/+$/, "")
+        const targetPage = isSuccess ? "payment-success" : "payment-failed"
+        const query = new URLSearchParams()
+        if (bookingId) query.set("booking_id", bookingId)
+        if (txnid) query.set("txnid", txnid)
+        const redirectUrl = `${framerBase}/${targetPage}?${query.toString()}`
 
         console.log(`🚀 Redirecting to: ${redirectUrl}`)
         return Response.redirect(redirectUrl, 303)

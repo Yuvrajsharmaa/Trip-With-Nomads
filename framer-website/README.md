@@ -5,11 +5,12 @@ This project contains all the code and assets related to the **Trip with Nomads*
 ## 📂 Structure
 
 - **`framer/`**: The core TypeScript/React components added as Code Overrides in the Framer editor.
-  - `BookingOverrides.tsx`: The main 3-step booking flow.
+  - `CheckoutPageOverrides.tsx`: The active checkout page flow (`/checkout`) with travellers, vehicle, coupon, and payment wiring.
   - `BookingStatusOverride.tsx`: Handles payment success/failure display.
+  - `EmailPopupOverride.tsx`: Delayed email popup behavior.
 - **`scripts/`**: Automation scripts for syncing data between the local environment, Supabase, and Framer CMS.
   - `framer_cms_sync.mjs`: Syncs trip data to Framer.
-  - `push_booking_overrides.mjs`: Utility to manage overrides.
+  - Push helpers for active overrides are temporary MCP scripts during local debugging.
 - **`supabase/`**: Shared backend infrastructure (migrations and Edge Functions).
 - **`app/` & `components/`**: A Next.js clone of the Framer site (used for prototyping and reference).
 - **`prototypes/`**: HTML prototypes for testing specific logic (e.g., payment redirections).
@@ -24,6 +25,14 @@ This project relies heavily on the **Supabase** backend for:
 3. **Edge Functions**: Handling PayU hash generation and payment callbacks.
 
 Check `IMPLEMENTATION_PLAN.md` for the full technical roadmap.
+
+## 🔐 Environment Setup
+
+- Use `env.production.example` and `env.development.example` as templates.
+- For script execution, load env explicitly:
+  - `node --env-file=env.production.example scripts/<script>.mjs`
+  - `node --env-file=env.development.example scripts/<script>.mjs`
+- Edge Function secrets should mirror the same environment split (`production` vs `development`).
 
 ---
 

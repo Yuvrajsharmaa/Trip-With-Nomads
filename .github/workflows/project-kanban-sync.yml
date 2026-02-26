@@ -1,0 +1,282 @@
+name: Project Kanban Sync
+
+on:
+  issues:
+    types: [opened, reopened, closed]
+  pull_request:
+    types: [opened, reopened, synchronize, closed]
+
+permissions:
+  contents: read
+  issues: read
+  pull-requests: read
+
+jobs:
+  issue-sync:
+    if: github.event_name == 'issues'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Sync issue status to project
+        uses: actions/github-script@v7
+        env:
+          PROJECT_ID: PVT_kwHOB_crJc4BP9l8
+          STATUS_FIELD_ID: PVTSSF_lAHOB_crJc4BP9l8zg-OBYI
+          TODO_OPTION_ID: f75ad846
+          IN_PROGRESS_OPTION_ID: 47fc9ee4
+          DONE_OPTION_ID: 98236657
+        with:
+          github-token: ${{ secrets.PROJECT_PAT || github.token }}
+          script: |
+            const projectId = process.env.PROJECT_ID
+            const statusFieldId = process.env.STATUS_FIELD_ID
+            const optionIds = {
+              TODO: process.env.TODO_OPTION_ID,
+              IN_PROGRESS: process.env.IN_PROGRESS_OPTION_ID,
+              DONE: process.env.DONE_OPTION_ID,
+            }
+
+            async function findItemByIssueId(issueNodeId) {
+              let hasNextPage = true
+              let after = null
+
+              while (hasNextPage) {
+                const query = `
+                  query ($projectId: ID!, $after: String) {
+                    node(id: $projectId) {
+                      ... on ProjectV2 {
+                        items(first: 100, after: $after) {
+                          nodes {
+                            id
+                            content {
+                              __typename
+                              ... on Issue { id }
+                            }
+                          }
+                          pageInfo {
+                            hasNextPage
+                            endCursor
+                          }
+                        }
+                      }
+                    }
+                  }
+                `
+
+                const res = await github.graphql(query, { projectId, after })
+                const items = res.node.items.nodes
+                const match = items.find((n) => n.content?.__typename === 'Issue' && n.content.id === issueNodeId)
+                if (match) return match.id
+
+                hasNextPage = res.node.items.pageInfo.hasNextPage
+                after = res.node.items.pageInfo.endCursor
+              }
+
+              return null
+            }
+
+            async function ensureItem(issueNodeId) {
+              const addMutation = `
+                mutation ($projectId: ID!, $contentId: ID!) {
+                  addProjectV2ItemById(input: { projectId: $projectId, contentId: $contentId }) {
+                    item { id }
+                  }
+                }
+              `
+
+              try {
+                const added = await github.graphql(addMutation, {
+                  projectId,
+                  contentId: issueNodeId,
+                })
+                return added.addProjectV2ItemById.item.id
+              } catch (err) {
+                const existing = await findItemByIssueId(issueNodeId)
+                if (existing) return existing
+                throw err
+              }
+            }
+
+            async function setStatus(itemId, optionId) {
+              const mutation = `
+                mutation ($projectId: ID!, $itemId: ID!, $fieldId: ID!, $optionId: String!) {
+                  updateProjectV2ItemFieldValue(input: {
+                    projectId: $projectId,
+                    itemId: $itemId,
+                    fieldId: $fieldId,
+                    value: { singleSelectOptionId: $optionId }
+                  }) {
+                    projectV2Item { id }
+                  }
+                }
+              `
+
+              await github.graphql(mutation, {
+                projectId,
+                itemId,
+                fieldId: statusFieldId,
+                optionId,
+              })
+            }
+
+            const issueNodeId = context.payload.issue.node_id
+            const action = context.payload.action
+
+            const itemId = await ensureItem(issueNodeId)
+
+            if (action === 'opened' || action === 'reopened') {
+              await setStatus(itemId, optionIds.TODO)
+            }
+
+            if (action === 'closed') {
+              await setStatus(itemId, optionIds.DONE)
+            }
+
+  pr-sync:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Sync linked issue status from pull request lifecycle
+        uses: actions/github-script@v7
+        env:
+          PROJECT_ID: PVT_kwHOB_crJc4BP9l8
+          STATUS_FIELD_ID: PVTSSF_lAHOB_crJc4BP9l8zg-OBYI
+          IN_PROGRESS_OPTION_ID: 47fc9ee4
+          DONE_OPTION_ID: 98236657
+        with:
+          github-token: ${{ secrets.PROJECT_PAT || github.token }}
+          script: |
+            const projectId = process.env.PROJECT_ID
+            const statusFieldId = process.env.STATUS_FIELD_ID
+            const inProgressOptionId = process.env.IN_PROGRESS_OPTION_ID
+            const doneOptionId = process.env.DONE_OPTION_ID
+
+            async function findItemByIssueId(issueNodeId) {
+              let hasNextPage = true
+              let after = null
+
+              while (hasNextPage) {
+                const query = `
+                  query ($projectId: ID!, $after: String) {
+                    node(id: $projectId) {
+                      ... on ProjectV2 {
+                        items(first: 100, after: $after) {
+                          nodes {
+                            id
+                            content {
+                              __typename
+                              ... on Issue { id }
+                            }
+                          }
+                          pageInfo {
+                            hasNextPage
+                            endCursor
+                          }
+                        }
+                      }
+                    }
+                  }
+                `
+
+                const res = await github.graphql(query, { projectId, after })
+                const items = res.node.items.nodes
+                const match = items.find((n) => n.content?.__typename === 'Issue' && n.content.id === issueNodeId)
+                if (match) return match.id
+
+                hasNextPage = res.node.items.pageInfo.hasNextPage
+                after = res.node.items.pageInfo.endCursor
+              }
+
+              return null
+            }
+
+            async function ensureItem(issueNodeId) {
+              const addMutation = `
+                mutation ($projectId: ID!, $contentId: ID!) {
+                  addProjectV2ItemById(input: { projectId: $projectId, contentId: $contentId }) {
+                    item { id }
+                  }
+                }
+              `
+
+              try {
+                const added = await github.graphql(addMutation, {
+                  projectId,
+                  contentId: issueNodeId,
+                })
+                return added.addProjectV2ItemById.item.id
+              } catch (err) {
+                const existing = await findItemByIssueId(issueNodeId)
+                if (existing) return existing
+                throw err
+              }
+            }
+
+            async function setStatus(itemId, optionId) {
+              const mutation = `
+                mutation ($projectId: ID!, $itemId: ID!, $fieldId: ID!, $optionId: String!) {
+                  updateProjectV2ItemFieldValue(input: {
+                    projectId: $projectId,
+                    itemId: $itemId,
+                    fieldId: $fieldId,
+                    value: { singleSelectOptionId: $optionId }
+                  }) {
+                    projectV2Item { id }
+                  }
+                }
+              `
+
+              await github.graphql(mutation, {
+                projectId,
+                itemId,
+                fieldId: statusFieldId,
+                optionId,
+              })
+            }
+
+            const owner = context.repo.owner
+            const repo = context.repo.repo
+            const pullNumber = context.payload.pull_request.number
+            const action = context.payload.action
+            const merged = Boolean(context.payload.pull_request.merged)
+
+            const details = await github.graphql(
+              `
+              query ($owner: String!, $repo: String!, $number: Int!) {
+                repository(owner: $owner, name: $repo) {
+                  pullRequest(number: $number) {
+                    closingIssuesReferences(first: 50) {
+                      nodes {
+                        id
+                        number
+                        state
+                      }
+                    }
+                  }
+                }
+              }
+              `,
+              { owner, repo, number: pullNumber }
+            )
+
+            const linked = details.repository.pullRequest.closingIssuesReferences.nodes || []
+            if (linked.length === 0) {
+              core.info('No linked closing issues found for this PR')
+              return
+            }
+
+            for (const issue of linked) {
+              const itemId = await ensureItem(issue.id)
+
+              if (action === 'opened' || action === 'reopened' || action === 'synchronize') {
+                await setStatus(itemId, inProgressOptionId)
+                continue
+              }
+
+              if (action === 'closed' && merged) {
+                if (issue.state === 'CLOSED') {
+                  await setStatus(itemId, doneOptionId)
+                } else {
+                  await setStatus(itemId, inProgressOptionId)
+                }
+              }
+            }

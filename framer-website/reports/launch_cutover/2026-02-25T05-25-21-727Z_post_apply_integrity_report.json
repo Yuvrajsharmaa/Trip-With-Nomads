@@ -1,0 +1,308 @@
+{
+  "stamp": "2026-02-25T05-25-21-727Z",
+  "trips_total": 22,
+  "pricing_total": 1383,
+  "non_launch_trips": 0,
+  "non_launch_pricing": 0,
+  "bad_sharing_rows": 0,
+  "bad_vehicle_rows": 0,
+  "invalid_price_rows": 0,
+  "duplicate_key_count": 0,
+  "per_trip": {
+    "summer-spiti": {
+      "trip_id": "beb600b6-ba94-4175-9d54-e40a5858d5e9",
+      "title": "Summer Spiti",
+      "type": "domestic",
+      "rows": 72,
+      "dates": 24,
+      "vehicles": [],
+      "sharings": [
+        "Double",
+        "Quad",
+        "Triple"
+      ],
+      "min_payable": 16499
+    },
+    "4x4-summer-spiti-expedition-6n7d": {
+      "trip_id": "34cca5ba-6c43-4e0d-8e46-ea71e2f92ad5",
+      "title": "4x4 Summer Spiti Expedition (6N7D)",
+      "type": "domestic",
+      "rows": 4,
+      "dates": 1,
+      "vehicles": [
+        "Fortuner/Hilux",
+        "SUV - Innova Crysta/Jimny/Thar/Scorpio N"
+      ],
+      "sharings": [
+        "Double",
+        "Triple"
+      ],
+      "min_payable": 29999
+    },
+    "spiti-biking": {
+      "trip_id": "e3dc182c-c7af-4b8d-9dee-93fbe45e3e6d",
+      "title": "Spiti Biking",
+      "type": "domestic",
+      "rows": 192,
+      "dates": 24,
+      "vehicles": [
+        "RE Himalayan (Dual Rider)",
+        "RE Himalayan (Solo Rider)",
+        "SIC (Seat in Coach)",
+        "Self Bike"
+      ],
+      "sharings": [
+        "Double",
+        "Triple"
+      ],
+      "min_payable": 18999
+    },
+    "manali-with-chandrataal-delhi-delhi": {
+      "trip_id": "47662a86-692c-4bde-ae87-36836ff6661c",
+      "title": "Manali with Chandrataal (Delhi-Delhi)",
+      "type": "domestic",
+      "rows": 42,
+      "dates": 21,
+      "vehicles": [],
+      "sharings": [
+        "Double",
+        "Triple"
+      ],
+      "min_payable": 9999
+    },
+    "teen-taal": {
+      "trip_id": "275f6339-b224-4724-91ec-73b168eb46e9",
+      "title": "Teen Taal (Delhi-Delhi)",
+      "type": "domestic",
+      "rows": 42,
+      "dates": 21,
+      "vehicles": [],
+      "sharings": [
+        "Double",
+        "Triple"
+      ],
+      "min_payable": 13999
+    },
+    "teen-taal-with-gombo-ranjan": {
+      "trip_id": "8ef02e1d-7674-45d9-83f5-798ca544a4a6",
+      "title": "Teen Taal With Gombo Ranjan",
+      "type": "domestic",
+      "rows": 42,
+      "dates": 21,
+      "vehicles": [],
+      "sharings": [
+        "Double",
+        "Triple"
+      ],
+      "min_payable": 15500
+    },
+    "zanskar-valley-6n7d-tempo-traveller": {
+      "trip_id": "af703852-3359-4b06-9dd0-0a8beaf98777",
+      "title": "Zanskar Valley 6N7D (Tempo Traveller)",
+      "type": "domestic",
+      "rows": 44,
+      "dates": 22,
+      "vehicles": [],
+      "sharings": [
+        "Double",
+        "Triple"
+      ],
+      "min_payable": 23999
+    },
+    "kedarnath-yatra": {
+      "trip_id": "524b7861-dd99-438e-b216-d5795d7a6488",
+      "title": "Kedarnath Yatra",
+      "type": "domestic",
+      "rows": 78,
+      "dates": 26,
+      "vehicles": [],
+      "sharings": [
+        "Double",
+        "Quad",
+        "Triple"
+      ],
+      "min_payable": 9999
+    },
+    "ladakh-leh-to-leh-with-turtuk": {
+      "trip_id": "a482be60-64c3-4018-95d3-7e1b798b4f20",
+      "title": "Leh-Leh With Turtuk 5N6D",
+      "type": "domestic",
+      "rows": 306,
+      "dates": 51,
+      "vehicles": [
+        "RE Himalayan (Pillion)",
+        "RE Himalayan (Solo)",
+        "SIC (Seat in Coach)"
+      ],
+      "sharings": [
+        "Double",
+        "Triple"
+      ],
+      "min_payable": 16999
+    },
+    "leh-leh-with-turtuk-6n7d": {
+      "trip_id": "977228fc-bbe9-4bf1-afe4-b1600683f041",
+      "title": "Leh-Leh with Turtuk 6N7D",
+      "type": "domestic",
+      "rows": 258,
+      "dates": 43,
+      "vehicles": [
+        "RE Himalayan (Pillion)",
+        "RE Himalayan (Solo)",
+        "SIC (Seat in Coach)"
+      ],
+      "sharings": [
+        "Double",
+        "Triple"
+      ],
+      "min_payable": 18999
+    },
+    "leh-to-leh-with-umling-la-hanle-tso-moriri": {
+      "trip_id": "0cece9bf-b3e2-41d0-b15c-922bed9f9148",
+      "title": "Leh to Leh with Umling La, Hanle & Tso Moriri",
+      "type": "domestic",
+      "rows": 180,
+      "dates": 30,
+      "vehicles": [
+        "RE Himalayan (Pillion)",
+        "RE Himalayan (Solo)",
+        "SIC (Seat in Coach)"
+      ],
+      "sharings": [
+        "Double",
+        "Triple"
+      ],
+      "min_payable": 26999
+    },
+    "winter-spiti-expedition": {
+      "trip_id": "8fd361e4-5e8f-44b7-9782-4ebda1df09a5",
+      "title": "Winter Spiti Expedition",
+      "type": "domestic",
+      "rows": 51,
+      "dates": 17,
+      "vehicles": [],
+      "sharings": [
+        "Double",
+        "Quad",
+        "Triple"
+      ],
+      "min_payable": 16999
+    },
+    "spiti-valley-with-sangla-holi": {
+      "trip_id": "c2fb1c7e-8b51-44ec-acd6-ce8cba39fe0b",
+      "title": "Spiti Valley with sangla holi",
+      "type": "domestic",
+      "rows": 2,
+      "dates": 1,
+      "vehicles": [],
+      "sharings": [
+        "Double",
+        "Triple"
+      ],
+      "min_payable": 18999
+    },
+    "sangla-holi-special": {
+      "trip_id": "983847ab-c3c5-4e0d-832f-e77455bbe048",
+      "title": "Sangla Holi Special",
+      "type": "domestic",
+      "rows": 3,
+      "dates": 1,
+      "vehicles": [],
+      "sharings": [
+        "Double",
+        "Quad",
+        "Triple"
+      ],
+      "min_payable": 12999
+    },
+    "ladakh-apricot-blossom": {
+      "trip_id": "7cb3d6f0-8e24-47c4-9d1f-58b90d49ccd1",
+      "title": "Ladakh Apricot Blossom",
+      "type": "domestic",
+      "rows": 60,
+      "dates": 6,
+      "vehicles": [
+        "RE Himalayan 411 (Dual Rider)",
+        "RE Himalayan 411 (Solo Rider)",
+        "RE Himalayan 450 (Dual Rider)",
+        "RE Himalayan 450 (Solo Rider)",
+        "SIT (Sit on Coach)"
+      ],
+      "sharings": [
+        "Double",
+        "Triple"
+      ],
+      "min_payable": 20999
+    },
+    "bali-with-nusa-gili-t": {
+      "trip_id": "b88e7f52-3204-4411-bded-8fc36fa1d85f",
+      "title": "Bali with Nusa & Gili T",
+      "type": "international",
+      "rows": 1,
+      "dates": 0,
+      "vehicles": [],
+      "sharings": [],
+      "min_payable": 69999
+    },
+    "thailand-songkran-festival": {
+      "trip_id": "143d52f7-c64c-4554-8b46-041d0b43105f",
+      "title": "Thailand Songkran Festival",
+      "type": "international",
+      "rows": 1,
+      "dates": 0,
+      "vehicles": [],
+      "sharings": [],
+      "min_payable": 52999
+    },
+    "thailand-full-moon-party": {
+      "trip_id": "0700ee34-e629-4a5c-846b-1d1c90f0183d",
+      "title": "Thailand full moon party",
+      "type": "international",
+      "rows": 1,
+      "dates": 0,
+      "vehicles": [],
+      "sharings": [],
+      "min_payable": 52999
+    },
+    "almaty": {
+      "trip_id": "e9f4c119-28aa-41d8-84ed-8607b9f99627",
+      "title": "Almaty",
+      "type": "international",
+      "rows": 1,
+      "dates": 0,
+      "vehicles": [],
+      "sharings": [],
+      "min_payable": 52999
+    },
+    "sri-lanka": {
+      "trip_id": "5f72df04-63af-46b0-82d3-f119558a6495",
+      "title": "Sri Lanka",
+      "type": "international",
+      "rows": 1,
+      "dates": 0,
+      "vehicles": [],
+      "sharings": [],
+      "min_payable": 58499
+    },
+    "dubai": {
+      "trip_id": "1dc36c53-845f-4191-9874-760c4cb7b403",
+      "title": "Dubai",
+      "type": "international",
+      "rows": 1,
+      "dates": 0,
+      "vehicles": [],
+      "sharings": [],
+      "min_payable": 72499
+    },
+    "japan": {
+      "trip_id": "84c41d57-719e-4027-b418-64e6da678025",
+      "title": "Japan",
+      "type": "international",
+      "rows": 1,
+      "dates": 0,
+      "vehicles": [],
+      "sharings": [],
+      "min_payable": 174999
+    }
+  }
+}

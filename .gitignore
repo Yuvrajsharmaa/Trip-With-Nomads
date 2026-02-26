@@ -38,3 +38,12 @@ Thumbs.db
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
+
+# Framer MCP / local debug artifacts
+framer-website/.tmp*
+framer-website/tmp_project.xml
+framer-website/backups/
+framer-website/BOOKING_STEP2_DEBUG_HANDOFF.md
+framer-website/framer/BookingOverrides.baseline-working.tsx
+framer-website/scripts/mcp_debug_selected.mjs
+framer-website/scripts/mcp_get_node_checkout.mjs

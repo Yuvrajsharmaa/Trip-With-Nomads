@@ -1,0 +1,88 @@
+BEGIN;
+
+ALTER TABLE public.trip_pricing
+    ADD COLUMN IF NOT EXISTS sharing TEXT,
+    ADD COLUMN IF NOT EXISTS vehicle TEXT;
+
+DO $$
+DECLARE
+    has_transport BOOLEAN := EXISTS (
+        SELECT 1
+        FROM information_schema.columns
+        WHERE table_schema = 'public'
+          AND table_name = 'trip_pricing'
+          AND column_name = 'transport'
+    );
+    update_sql TEXT;
+BEGIN
+    update_sql := $q$
+        UPDATE public.trip_pricing
+        SET
+            sharing = COALESCE(
+                NULLIF(TRIM(sharing), ''),
+                CASE
+                    WHEN POSITION(' - ' IN COALESCE(variant_name, '')) > 0
+                        THEN TRIM(REGEXP_REPLACE(variant_name, '^.*\\s-\\s', ''))
+                    ELSE TRIM(COALESCE(variant_name, ''))
+                END
+            ),
+            vehicle = COALESCE(
+                NULLIF(TRIM(vehicle), ''),
+    $q$;
+
+    IF has_transport THEN
+        update_sql := update_sql || 'NULLIF(TRIM(transport), ''''),';
+    ELSE
+        update_sql := update_sql || 'NULL,';
+    END IF;
+
+    update_sql := update_sql || $q$
+                CASE
+                    WHEN POSITION(' - ' IN COALESCE(variant_name, '')) > 0
+                        THEN NULLIF(TRIM(REGEXP_REPLACE(variant_name, '\\s-\\s[^-]+$', '')), '')
+                    ELSE NULL
+                END
+            )
+        WHERE
+            (sharing IS NULL OR TRIM(sharing) = '' OR vehicle IS NULL OR TRIM(COALESCE(vehicle, '')) = '');
+    $q$;
+
+    EXECUTE update_sql;
+END $$;
+
+UPDATE public.trip_pricing
+SET sharing = CASE
+    WHEN sharing IS NULL OR TRIM(sharing) = '' THEN NULL
+    WHEN LOWER(TRIM(sharing)) LIKE '%quad%' THEN 'Quad Sharing'
+    WHEN LOWER(TRIM(sharing)) LIKE '%triple%' THEN 'Triple Sharing'
+    WHEN LOWER(TRIM(sharing)) LIKE '%double%' THEN 'Double Sharing'
+    ELSE TRIM(sharing)
+END;
+
+DO $$
+BEGIN
+    IF EXISTS (
+        SELECT 1
+        FROM information_schema.columns
+        WHERE table_schema = 'public'
+          AND table_name = 'trip_pricing'
+          AND column_name = 'start_date'
+    ) THEN
+        EXECUTE 'CREATE INDEX IF NOT EXISTS idx_trip_pricing_trip_date_sharing_vehicle
+                 ON public.trip_pricing (trip_id, start_date, sharing, COALESCE(vehicle, ''''))';
+    ELSIF EXISTS (
+        SELECT 1
+        FROM information_schema.columns
+        WHERE table_schema = 'public'
+          AND table_name = 'trip_pricing'
+          AND column_name = 'departure_date'
+    ) THEN
+        EXECUTE 'CREATE INDEX IF NOT EXISTS idx_trip_pricing_trip_date_sharing_vehicle
+                 ON public.trip_pricing (trip_id, departure_date, sharing, COALESCE(vehicle, ''''))';
+    ELSE
+        EXECUTE 'CREATE INDEX IF NOT EXISTS idx_trip_pricing_trip_sharing_vehicle
+                 ON public.trip_pricing (trip_id, sharing, COALESCE(vehicle, ''''))';
+    END IF;
+END $$;
+
+COMMIT;

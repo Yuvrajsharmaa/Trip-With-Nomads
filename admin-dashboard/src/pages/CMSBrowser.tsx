@@ -16,6 +16,7 @@ export default function CMSBrowser() {
     const [error, setError] = useState('');
     const [deleting, setDeleting] = useState<string | null>(null);
     const [search, setSearch] = useState('');
+    const siteBaseUrl = String(import.meta.env.VITE_SITE_BASE_URL || 'https://tripwithnomads.com').replace(/\/+$/, '');
 
     const load = async () => {
         setLoading(true);
@@ -144,7 +145,7 @@ export default function CMSBrowser() {
                                         </td>
                                         <td>
                                             <div style={{ fontSize: '0.75rem', fontFamily: 'monospace', color: 'var(--text-muted)' }}>
-                                                <a href={`https://twn2.framer.website/domestic-trips/${item.slug}`} target="_blank" rel="noreferrer"
+                                                <a href={`${siteBaseUrl}/domestic-trips/${item.slug}`} target="_blank" rel="noreferrer"
                                                     style={{ color: 'var(--primary)' }}>
                                                     /{item.slug} ↗
                                                 </a>

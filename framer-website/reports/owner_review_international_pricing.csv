@@ -1,0 +1,11 @@
+slug,trip_title,variant_name,departures_count,first_departure,last_departure,price_values_inr
+almaty,Almaty,Double Sharing,2,2026-03-12,2026-04-02,64999
+baku-without-shahdag,Baku without Shahdag,With Shahdag,4,2026-03-24,2026-05-29,57999
+baku-without-shahdag,Baku without Shahdag,Without Shahdag,4,2026-03-24,2026-05-29,52999
+dubai,Dubai,Double Sharing,1,2026-03-28,2026-03-28,72499
+georgia,georgia,Double Sharing,5,2026-04-18,2026-06-27,64999
+japan,Japan,Double Sharing,2,2026-03-18,2026-04-02,169999
+sri-lanka,Sri Lanka,Double Sharing,3,2026-03-14,2026-04-14,69999
+thailand-songkran-festival,Thailand  Songkaran,Double Sharing,1,2026-04-12,2026-04-12,59999
+thailand-full-moon-party,Thailand Full Moon,Double Sharing,3,2026-03-01,2026-04-29,52999
+vietnam,Veitnam,Double Sharing,2,2026-03-07,2026-03-21,59999

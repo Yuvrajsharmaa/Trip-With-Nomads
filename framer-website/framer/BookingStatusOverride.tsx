@@ -8,7 +8,9 @@ const { useEffect, useRef, useState } = React
 //
 // HOW IT WORKS:
 //   1. handle-payment Edge Function redirects BOTH success
-//      and failure to: /payment-success?booking_id=<UUID>
+//      and failure to:
+//         /payment-success?booking_id=<UUID> or
+//         /payment-failed?booking_id=<UUID>
 //   2. withBookingStatus reads `booking_id` from URL.
 //   3. Fetches the full booking row from Supabase.
 //   4. All overrides adapt based on `payment_status`.
@@ -43,10 +45,64 @@ const { useEffect, useRef, useState } = React
 //
 // ─────────────────────────────────────────────────────────────
 
-// --- CONFIGURATION (same as BookingOverrides.tsx) ---
-const SUPABASE_URL = "https://jxozzvwvprmnhvafmpsa.supabase.co"
-const SUPABASE_KEY =
-    "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imp4b3p6dnd2cHJtbmh2YWZtcHNhIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjgwNTg2NjIsImV4cCI6MjA4MzYzNDY2Mn0.KpVa9dWlJEguL1TA00Tf4QDpziJ1mgA2I0f4_l-vlOk"
+type RuntimeEnv = "production" | "development"
+type RuntimeConfig = {
+    siteBaseUrl: string
+    supabaseUrl: string
+    supabaseAnonKey: string
+}
+
+const RUNTIME_CONFIG: Record<RuntimeEnv, RuntimeConfig> = {
+    production: {
+        siteBaseUrl: "https://tripwithnomads.com",
+        supabaseUrl: "https://jxozzvwvprmnhvafmpsa.supabase.co",
+        supabaseAnonKey:
+            "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imp4b3p6dnd2cHJtbmh2YWZtcHNhIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjgwNTg2NjIsImV4cCI6MjA4MzYzNDY2Mn0.KpVa9dWlJEguL1TA00Tf4QDpziJ1mgA2I0f4_l-vlOk",
+    },
+    development: {
+        siteBaseUrl: "https://maroon-aside-814100.framer.app",
+        supabaseUrl: "https://ieuwiinbvbdvjrdqqzlb.supabase.co",
+        supabaseAnonKey:
+            "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImlldXdpaW5idmJkdmpyZHFxemxiIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzIwNDYwMTksImV4cCI6MjA4NzYyMjAxOX0.UlTMeyvArixD7byDCrGwEDXsbc4LQfx6QXDL6Je3blE",
+    },
+}
+
+function normalizeBaseUrl(value: string): string {
+    return String(value || "").trim().replace(/\/+$/, "")
+}
+
+function resolveRuntimeEnv(): RuntimeEnv {
+    if (typeof window === "undefined") return "production"
+    const host = String(window.location.hostname || "").trim().toLowerCase()
+    if (host === "tripwithnomads.com" || host === "www.tripwithnomads.com") return "production"
+    if (
+        host === "maroon-aside-814100.framer.app" ||
+        host === "localhost" ||
+        host === "127.0.0.1"
+    ) {
+        return "development"
+    }
+    return "production"
+}
+
+function resolveRuntimeConfig(): RuntimeConfig {
+    const env = resolveRuntimeEnv()
+    const selected = RUNTIME_CONFIG[env]
+    const runtimeOverride =
+        typeof window !== "undefined" ? (window as any).__TWN_RUNTIME_CONFIG__ || {} : {}
+    return {
+        siteBaseUrl: normalizeBaseUrl(runtimeOverride.siteBaseUrl || selected.siteBaseUrl),
+        supabaseUrl: String(runtimeOverride.supabaseUrl || selected.supabaseUrl || "").trim(),
+        supabaseAnonKey: String(
+            runtimeOverride.supabaseAnonKey || selected.supabaseAnonKey || ""
+        ).trim(),
+    }
+}
+
+const CURRENT_RUNTIME = resolveRuntimeConfig()
+const SUPABASE_URL = CURRENT_RUNTIME.supabaseUrl
+const SUPABASE_KEY = CURRENT_RUNTIME.supabaseAnonKey
+const DOMESTIC_TRIPS_BASE_URL = `${CURRENT_RUNTIME.siteBaseUrl}/domestic-trips`
 
 
 // ─── TYPES ───────────────────────────────────────────────────
@@ -55,12 +111,23 @@ interface BookingData {
     id: string
     trip_id: string
     departure_date: string
-    travellers: Array<{ name: string; sharing: string }>
+    transport?: string
+    travellers: Array<{ name: string; sharing: string; transport?: string; vehicle?: string }>
     payment_breakdown: Array<{ label: string; price: number; variant?: string; count?: number }>
+    subtotal_amount?: number
+    discount_amount?: number
+    coupon_code?: string | null
+    coupon_snapshot?: any
     tax_amount: number
     total_amount: number
     currency: string
     payment_status: "pending" | "paid" | "failed"
+    payment_mode?: "full" | "partial_25"
+    payable_now_amount?: number
+    paid_amount?: number
+    due_amount?: number
+    settlement_status?: "pending" | "failed" | "partially_paid" | "fully_paid"
+    balance_due_note?: string | null
     payu_txnid: string
     name: string
     email: string
@@ -100,20 +167,95 @@ function fmt(amount: number): string {
     return "₹" + amount.toLocaleString("en-IN")
 }
 
+function toNumber(value: any): number {
+    const parsed = Number(value)
+    return Number.isFinite(parsed) ? parsed : 0
+}
+
+function subtotalBeforeDiscount(d: BookingData): number {
+    const explicit = toNumber((d as any).subtotal_amount)
+    if (explicit > 0) return explicit
+
+    const fallbackDiscounted = toNumber(d.total_amount) - toNumber(d.tax_amount)
+    const discount = Math.max(0, toNumber((d as any).discount_amount))
+    return Math.max(0, fallbackDiscounted + discount)
+}
+
+function discountAmount(d: BookingData): number {
+    return Math.max(0, toNumber((d as any).discount_amount))
+}
+
+function settlementStatus(d: BookingData): "pending" | "failed" | "partially_paid" | "fully_paid" {
+    const explicit = String((d as any)?.settlement_status || "").trim().toLowerCase()
+    if (
+        explicit === "pending" ||
+        explicit === "failed" ||
+        explicit === "partially_paid" ||
+        explicit === "fully_paid"
+    ) {
+        return explicit
+    }
+    if (d.payment_status === "failed") return "failed"
+    if (d.payment_status === "paid") {
+        const due = Math.max(0, toNumber((d as any)?.due_amount))
+        const mode = String((d as any)?.payment_mode || "").trim().toLowerCase()
+        if (mode === "partial_25" || due > 0) return "partially_paid"
+        return "fully_paid"
+    }
+    return "pending"
+}
+
+function dueAmount(d: BookingData): number {
+    const explicit = Math.max(0, toNumber((d as any)?.due_amount))
+    if (explicit > 0) return explicit
+    const status = settlementStatus(d)
+    if (status === "partially_paid") {
+        const total = Math.max(0, toNumber(d.total_amount))
+        const payableNow = Math.max(0, toNumber((d as any)?.payable_now_amount))
+        if (payableNow > 0) return Math.max(0, total - payableNow)
+    }
+    return 0
+}
+
+function paidAmount(d: BookingData): number {
+    const explicit = Math.max(0, toNumber((d as any)?.paid_amount))
+    if (explicit > 0) return explicit
+    const status = settlementStatus(d)
+    if (status === "fully_paid") return Math.max(0, toNumber(d.total_amount))
+    if (status === "partially_paid") return Math.max(0, toNumber((d as any)?.payable_now_amount))
+    return 0
+}
+
+function discountedSubtotal(d: BookingData): number {
+    return Math.max(0, subtotalBeforeDiscount(d) - discountAmount(d))
+}
+
 function bookingRef(data: any): string {
+    if (!data) return "#—"
     if (data.booking_ref) return "#" + data.booking_ref
     if (!data.id) return "#—"
+    // Fallback: Generate a clean reference from the UUID
     return "#TWN-" + data.id.replace(/-/g, "").slice(0, 8).toUpperCase()
 }
 
-function initials(name: string): string {
-    if (!name) return "?"
-    const parts = name.trim().split(/\s+/)
-    return parts.length === 1
-        ? parts[0][0].toUpperCase()
-        : (parts[0][0] + parts[parts.length - 1][0]).toUpperCase()
+function nodeText(node: any): string {
+    if (typeof node === "string") return node
+    if (typeof node === "number") return String(node)
+    if (Array.isArray(node)) return node.map((n) => nodeText(n)).join(" ")
+    if (React.isValidElement(node)) return nodeText((node as any).props?.children)
+    return ""
 }
 
+function normalizeSharingLabel(value: string): string {
+    const clean = String(value || "").trim().replace(/\s+/g, " ")
+    if (!clean) return ""
+    if (/\bsharing\b/i.test(clean)) return clean
+    return `${clean} Sharing`
+}
+
+function joinMetaParts(parts: Array<string | undefined | null>): string {
+    return parts.map((part) => String(part || "").trim()).filter(Boolean).join(" · ")
+}
 
 // ═════════════════════════════════════════════════════════════
 // 1. PAGE-LEVEL: withBookingStatus
@@ -131,6 +273,7 @@ export function withBookingStatus(Component): ComponentType {
                 if (!bookingId) return { error: "No booking_id" }
 
                 try {
+                    // First fetch the booking
                     const res = await fetch(
                         `${SUPABASE_URL}/rest/v1/bookings?id=eq.${bookingId}&select=*`,
                         {
@@ -143,7 +286,33 @@ export function withBookingStatus(Component): ComponentType {
                     if (!res.ok) return { error: "HTTP " + res.status }
                     const rows = await res.json()
                     if (!rows?.length) return { error: "Not found" }
-                    return { data: rows[0] }
+
+                    const booking = rows[0]
+
+                    // Then fetch the trip details since there is no foreign key relation
+                    if (booking.trip_id) {
+                        try {
+                            const tripRes = await fetch(
+                                `${SUPABASE_URL}/rest/v1/trips?id=eq.${booking.trip_id}&select=title`,
+                                {
+                                    headers: {
+                                        apikey: SUPABASE_KEY,
+                                        Authorization: `Bearer ${SUPABASE_KEY}`,
+                                    },
+                                }
+                            )
+                            if (tripRes.ok) {
+                                const tripRows = await tripRes.json()
+                                if (tripRows?.length) {
+                                    booking.trip_title = tripRows[0].title
+                                }
+                            }
+                        } catch (tripErr) {
+                            console.warn("Could not fetch trip details:", tripErr)
+                        }
+                    }
+
+                    return { data: booking }
                 } catch (err) {
                     return { error: String(err) }
                 }
@@ -205,7 +374,8 @@ export function withBookingStatus(Component): ComponentType {
                         if (newStatus !== _data.payment_status) {
                             console.log("[BookingStatus] Status changed:", newStatus)
                             _data = result.data
-                            if (_data.trip_title) result.data.trip_title = _data.trip_title // preserve title
+                            // Ensure trip_title is preserved
+                            if (result.data.trip_title) _data.trip_title = result.data.trip_title
                             notify()
                         }
 
@@ -220,44 +390,6 @@ export function withBookingStatus(Component): ComponentType {
         return <Component {...props} />
     }
 }
-
-// ═════════════════════════════════════════════════════════════
-// DEBUG: View Raw Data
-// ═════════════════════════════════════════════════════════════
-
-export function withDebugOverlay(Component): ComponentType {
-    return (props: any) => {
-        const [data, state] = useBooking()
-        if (!data) return <Component {...props} />
-
-        return (
-            <div style={{ position: "relative" }}>
-                <Component {...props} />
-                <div style={{
-                    position: "fixed",
-                    bottom: 10,
-                    right: 10,
-                    background: "rgba(0,0,0,0.8)",
-                    color: "#0f0",
-                    padding: 10,
-                    fontSize: 10,
-                    zIndex: 9999,
-                    pointerEvents: "none",
-                    maxWidth: 300,
-                    overflow: "hidden"
-                }}>
-                    <pre>{JSON.stringify({
-                        id: data.id?.slice(0, 4),
-                        status: data.payment_status,
-                        ref: data.booking_ref,
-                        amount: data.total_amount
-                    }, null, 2)}</pre>
-                </div>
-            </div>
-        )
-    }
-}
-
 
 // ═════════════════════════════════════════════════════════════
 // 2. TEXT OVERRIDES
@@ -302,7 +434,7 @@ function textOverride(getter: (d: BookingData) => string, fallback = "—") {
 // --- BOOKING DETAILS CARD ---
 
 export function withBookingId(Component): ComponentType {
-    return textOverride((d) => bookingRef(d.id))(Component)
+    return textOverride((d) => bookingRef(d))(Component)
 }
 
 export function withTripName(Component): ComponentType {
@@ -311,6 +443,10 @@ export function withTripName(Component): ComponentType {
 
 export function withDepartureDate(Component): ComponentType {
     return textOverride((d) => d.departure_date || "—")(Component)
+}
+
+export function withTransportOption(Component): ComponentType {
+    return textOverride((d) => (d.transport ? d.transport : "Seat in Coach"))(Component)
 }
 
 // --- TRAVELLER COUNT BADGE ---
@@ -326,25 +462,27 @@ export function withTravellerCount(Component): ComponentType {
 
 export function withBasePrice(Component): ComponentType {
     return textOverride((d) => {
-        const breakdown = d.payment_breakdown || []
-        if (breakdown.length === 0) return fmt(d.total_amount - d.tax_amount)
-        const totalItems = breakdown.reduce((sum, b) => sum + (b.count || 1), 0)
-        if (breakdown.length === 1) {
-            const b = breakdown[0]
-            const count = b.count || 1
-            return count > 1 ? `${fmt(b.price)} × ${count}` : fmt(b.price)
-        }
-        return breakdown
-            .map((b) => {
-                const count = b.count || 1
-                return count > 1 ? `${fmt(b.price)} × ${count}` : fmt(b.price)
-            })
-            .join(" + ")
+        return fmt(subtotalBeforeDiscount(d))
     })(Component)
 }
 
 export function withSubtotal(Component): ComponentType {
-    return textOverride((d) => fmt(d.total_amount - d.tax_amount))(Component)
+    return textOverride((d) => fmt(discountedSubtotal(d)))(Component)
+}
+
+export function withSubtotalBeforeDiscount(Component): ComponentType {
+    return textOverride((d) => fmt(subtotalBeforeDiscount(d)))(Component)
+}
+
+export function withDiscountAmount(Component): ComponentType {
+    return textOverride((d) => `- ${fmt(discountAmount(d))}`)(Component)
+}
+
+export function withCouponCode(Component): ComponentType {
+    return textOverride((d) => {
+        const code = (d as any).coupon_code
+        return code ? String(code).toUpperCase() : ""
+    })(Component)
 }
 
 export function withTaxAmount(Component): ComponentType {
@@ -352,7 +490,24 @@ export function withTaxAmount(Component): ComponentType {
 }
 
 export function withTotalPaid(Component): ComponentType {
-    return textOverride((d) => fmt(d.total_amount))(Component)
+    return textOverride((d) => fmt(paidAmount(d)))(Component)
+}
+
+export function withPayableNowAmount(Component): ComponentType {
+    return textOverride((d) => fmt(Math.max(0, toNumber((d as any)?.payable_now_amount))))(Component)
+}
+
+export function withDueAmount(Component): ComponentType {
+    return textOverride((d) => fmt(dueAmount(d)))(Component)
+}
+
+export function withBalanceDueNote(Component): ComponentType {
+    return textOverride((d) => {
+        const due = dueAmount(d)
+        if (due <= 0) return ""
+        const explicit = String((d as any)?.balance_due_note || "").trim()
+        return explicit || `${fmt(due)} due on-site before trip departure.`
+    })(Component)
 }
 
 
@@ -366,18 +521,22 @@ export function withTotalPaid(Component): ComponentType {
 export function withStatusBadge(Component): ComponentType {
     return textOverride(
         (d) => {
-            if (d.payment_status === "paid") return "✓ Confirmed"
-            if (d.payment_status === "failed") return "✗ Failed"
-            return "⏳ Pending"
+            const status = settlementStatus(d)
+            if (status === "fully_paid") return "Confirmed"
+            if (status === "partially_paid") return "Confirmed · Balance Due"
+            if (d.payment_status === "failed") return "Failed"
+            return "Pending"
         },
-        "⏳ Loading…"
+        "Loading..."
     )(Component)
 }
 
 export function withPaymentBadge(Component): ComponentType {
     return textOverride(
         (d) => {
-            if (d.payment_status === "paid") return "Paid"
+            const status = settlementStatus(d)
+            if (status === "fully_paid") return "Paid in Full"
+            if (status === "partially_paid") return "Partially Paid"
             if (d.payment_status === "failed") return "Failed"
             return "Pending"
         },
@@ -396,61 +555,100 @@ export function withPaymentBadge(Component): ComponentType {
 export function withTravellerList(Component): ComponentType {
     return (props: any) => {
         const [data, state] = useBooking()
-        const ref = useRef<HTMLDivElement>(null)
+        const travellers = data?.travellers || []
+        const rowRefs = useRef<Array<HTMLDivElement | null>>([])
+        const childrenArray = React.Children.toArray(props.children)
+        const template =
+            (childrenArray.find((child) => {
+                if (!React.isValidElement(child)) return false
+                const text = nodeText((child as any).props?.children).toLowerCase()
+                return text.includes("name") || text.includes("sharing") || text.includes("email")
+            }) as React.ReactElement | undefined) ||
+            (childrenArray.find((child) => React.isValidElement(child)) as React.ReactElement | undefined)
 
         useEffect(() => {
-            if (state !== "ready" || !data || !ref.current) return
+            if (state !== "ready" || !data || !template || travellers.length === 0) return
 
-            const container = ref.current
-            const travellers = data.travellers || []
+            travellers.forEach((traveller, index) => {
+                const row = rowRefs.current[index]
+                if (!row) return
 
-            // Clear Framer placeholder content
-            container.innerHTML = ""
+                const textNodes = Array.from(
+                    row.querySelectorAll<HTMLElement>("p, span, h1, h2, h3, h4, h5, h6")
+                ).filter((el) => String(el.textContent || "").trim().length > 0)
 
-            if (travellers.length === 0) {
-                container.innerHTML = `
-                    <div style="color:#999; font-size:14px; padding:8px 0;">
-                        No traveller details recorded.
-                    </div>
-                `
-                return
-            }
+                if (textNodes.length === 0) return
 
-            // Inject styles once
-            const style = document.createElement("style")
-            style.textContent = `
-                .twn-t { display:flex; align-items:center; gap:12px; padding:12px 0; border-bottom:1px solid #eee; }
-                .twn-t:last-child { border-bottom:none; }
-                .twn-av { width:36px; height:36px; border-radius:50%; background:linear-gradient(135deg,#6366f1,#a855f7); display:flex; align-items:center; justify-content:center; font-size:13px; font-weight:700; color:#fff; flex-shrink:0; }
-                .twn-ti { flex:1; }
-                .twn-tn { font-size:14px; font-weight:600; color:#1a1a1a; margin:0; }
-                .twn-td { font-size:13px; color:#888; margin:2px 0 0 0; }
-            `
-            container.appendChild(style)
+                const name = String(traveller?.name || "").trim() || `Traveller ${index + 1}`
+                const sharing = normalizeSharingLabel(String(traveller?.sharing || ""))
+                const vehicle = String(traveller?.vehicle || traveller?.transport || "").trim()
+                const email = index === 0 ? String(data.email || "").trim() : ""
+                const metaText = joinMetaParts([sharing, vehicle, email])
 
-            // Build traveller rows
-            travellers.forEach((t, i) => {
-                const name = t.name || `Traveller ${i + 1}`
-                const sharing = (t.sharing || "—").charAt(0).toUpperCase() + (t.sharing || "—").slice(1)
-                const emailPart = i === 0 && data.email ? ` · ${data.email}` : ""
+                const nameNode =
+                    textNodes.find((el) => /name/i.test(String(el.textContent || ""))) || textNodes[0]
+                const metaNode =
+                    textNodes.find((el) => /sharing|email/i.test(String(el.textContent || ""))) ||
+                    textNodes[1]
 
-                const row = document.createElement("div")
-                row.className = "twn-t"
-                row.innerHTML = `
-                    <div class="twn-av">${initials(name)}</div>
-                    <div class="twn-ti">
-                        <p class="twn-tn">${name}</p>
-                        <p class="twn-td">${sharing} Sharing${emailPart}</p>
-                    </div>
-                `
-                container.appendChild(row)
+                if (nameNode) nameNode.textContent = name
+                if (metaNode) {
+                    metaNode.textContent = metaText
+                    metaNode.style.whiteSpace = "normal"
+                    metaNode.style.overflowWrap = "anywhere"
+                    metaNode.style.wordBreak = "break-word"
+                }
+
+                // Remove any leftover placeholder nodes like "Sharing", "Email", bullets, etc.
+                textNodes.forEach((el) => {
+                    if (el === nameNode || el === metaNode) return
+                    const lower = String(el.textContent || "").trim().toLowerCase()
+                    if (
+                        lower === "name" ||
+                        lower === "·" ||
+                        /\bsharing\b/i.test(lower) ||
+                        /\bemail\b/i.test(lower)
+                    ) {
+                        el.textContent = ""
+                        ;(el as HTMLElement).style.display = "none"
+                    }
+                })
             })
-        }, [data, state])
+        }, [state, data, template, travellers])
+
+        if (state !== "ready" || !data || !template || travellers.length === 0) {
+            return <Component {...props} />
+        }
 
         return (
-            <div ref={ref} style={{ width: "100%", minHeight: "20px" }}>
-                <Component {...props} />
-            </div>
+            <Component
+                {...props}
+                style={{
+                    ...(props.style || {}),
+                    display: "flex",
+                    flexDirection: "column",
+                    gap: "12px",
+                }}
+            >
+                {travellers.map((_, index) => (
+                    <div
+                        key={`status-traveller-row-${index}`}
+                        ref={(el) => {
+                            rowRefs.current[index] = el
+                        }}
+                        style={{ width: "100%" }}
+                    >
+                        {React.cloneElement(template, {
+                            key: `status-traveller-template-${index}`,
+                            style: {
+                                ...((template.props as any)?.style || {}),
+                                width: "100%",
+                                position: "relative",
+                            },
+                        })}
+                    </div>
+                ))}
+            </Component>
         )
     }
 }
@@ -474,7 +672,8 @@ export function withTravellerList(Component): ComponentType {
 export function withHeadingText(Component): ComponentType {
     const Wrapped = textOverride(
         (d) => {
-            if (d.payment_status === "paid") return "Booking Confirmed!"
+            const status = settlementStatus(d)
+            if (status === "fully_paid" || status === "partially_paid") return "Booking Confirmed!"
             if (d.payment_status === "failed") return "Payment Failed"
             return "Processing…"
         },
@@ -487,8 +686,13 @@ export function withHeadingText(Component): ComponentType {
 export function withSubheadingText(Component): ComponentType {
     const Wrapped = textOverride(
         (d) => {
-            if (d.payment_status === "paid")
+            const status = settlementStatus(d)
+            if (status === "fully_paid")
                 return "Your adventure awaits. Here's everything you need to know."
+            if (status === "partially_paid")
+                return `Booking confirmed. ${fmt(
+                    dueAmount(d)
+                )} is due on-site before trip departure.`
             if (d.payment_status === "failed")
                 return "Your payment didn't go through. Don't worry, you can try again."
             return "We're confirming your payment…"
@@ -574,9 +778,9 @@ export function withRetryButton(Component): ComponentType {
         const handleRetry = () => {
             // Navigate back to the trip page if we have a trip_id
             if (data.trip_id) {
-                window.location.href = `/domestic-trips/${data.trip_id}`
+                window.location.href = `${DOMESTIC_TRIPS_BASE_URL}/${data.trip_id}`
             } else {
-                window.location.href = "/domestic-trips"
+                window.location.href = DOMESTIC_TRIPS_BASE_URL
             }
         }
 
@@ -599,7 +803,7 @@ export function withRetryButton(Component): ComponentType {
                 onMouseEnter={(e) => { (e.target as HTMLElement).style.opacity = "0.85" }}
                 onMouseLeave={(e) => { (e.target as HTMLElement).style.opacity = "1" }}
             >
-                ← Try Again
+                Try Again
             </div>
         )
     }
@@ -618,3 +822,39 @@ export function withHideOnFailure(Component): ComponentType {
     }
 }
 
+// Hide element unless a due balance exists (for partial payment cards/rows).
+export function withHideWhenNoBalance(Component): ComponentType {
+    return (props: any) => {
+        const [data, state] = useBooking()
+        if (state === "ready" && data && dueAmount(data) <= 0) {
+            return <Component {...props} style={{ ...(props.style || {}), display: "none" }} />
+        }
+        return <Component {...props} />
+    }
+}
+
+// Hide coupon-related layers when no coupon is applied.
+export function withHideWhenNoCoupon(Component): ComponentType {
+    return (props: any) => {
+        const [data, state] = useBooking()
+        const hasCoupon = Boolean(String((data as any)?.coupon_code || "").trim())
+
+        if (state === "ready" && !hasCoupon) {
+            return <Component {...props} style={{ ...(props.style || {}), display: "none" }} />
+        }
+        return <Component {...props} />
+    }
+}
+
+// Hide discount rows when discount amount is zero.
+export function withHideWhenNoDiscount(Component): ComponentType {
+    return (props: any) => {
+        const [data, state] = useBooking()
+        const discount = data ? discountAmount(data) : 0
+
+        if (state === "ready" && discount <= 0) {
+            return <Component {...props} style={{ ...(props.style || {}), display: "none" }} />
+        }
+        return <Component {...props} />
+    }
+}

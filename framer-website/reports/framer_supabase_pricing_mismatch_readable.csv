@@ -1,0 +1,20 @@
+status,framer_slug,framer_title,framer_trip_id,framer_base_price,supabase_trip_slug,supabase_trip_title,supabase_min_price,notes
+invalid_trip_id,teen-taal-with-gombo-ranjan,Teen Taal With Gombo Ranjan,1234567890,14500,,,,trip_id not found in Supabase trips
+mismatch,ladakh-leh-to-leh-with-turtuk,Leh-Leh With Turtuk 5N6D,89b17e7f-1a26-4398-816f-32686cf7b2ae,18000,leh-to-leh-with-turtuk-5n,Leh to Leh with Turtuk 5N,19000,slug mismatch; base_price != supabase min(price)
+invalid_trip_id,manali-with-chandratal,Manali with Chandratal,1234567890,10500,,,,trip_id not found in Supabase trips
+invalid_trip_id,spiti-biking,Spiti Biking	,1234567890,24000,,,,trip_id not found in Supabase trips
+mismatch,leh-to-leh-with-umling-la-hanle-tso-moriri,"Leh to Leh with Umling La, Hanle & Tso Moriri",7b8b17de-5691-4eed-ae76-b834b52100ec,28500,leh-to-leh-with-umling-la-hanle-tso-moriri,"Leh to Leh with Umling La, Hanle & Tso Moriri",29000,base_price != supabase min(price)
+mismatch,kedarnath-yatra,Kedarnath Yatra,2f0ea5c3-f8d4-4c2f-9156-b2ad011fca7d,13500,kedarnath-yatra,Kedarnath 3N,,no pricing rows in supabase
+mismatch,do-dhaam,Do Dhaam,74497b7e-8d3d-49dc-afd5-c09c268d048d,16000,do-dhaam,Kedarnath With Badrinath 4N,18000,base_price != supabase min(price)
+mismatch,ladakh-apricot-blossom,Ladakh Apricot Blossom,56bd2126-f80e-45f3-9f09-588e3931f55b,20999,ladakh-apricot-blossom,Ladakh apricot blossom,29999,base_price != supabase min(price)
+mismatch,baku-with-shahdag,Baku with Shahdag,1d081900-96e7-491d-b30e-0f637476b40d,57999,baku-without-shahdag,Baku without Shahdag,52999,slug mismatch; base_price != supabase min(price)
+mismatch,sangla-holi-special,Sangla Holi Special,23fc4e0e-40e3-4767-81c8-9dc6bdcd7608,24999,sangla-holi-special,Sangla Holi 3N 4D,14000,base_price != supabase min(price)
+mismatch,spiti-valley-with-sangla-holi,Spiti Valley with sangla holi,e0615ffb-27d0-48c8-9cf7-0acbb16204a0,13999,spiti-valley-with-sangla-holi,Spiti With Sangla 6N 7D,19999,base_price != supabase min(price)
+invalid_trip_id,the-great-kashmir,The Great Kashmir,1234,39999,,,,trip_id not found in Supabase trips
+mismatch,thailand-full-moon-party,Thailand full moon party,fae90e04-3c77-4878-9b6b-a5f1e7e37fa7,24999,thailand-full-moon-party,Thailand Full Moon,52999,base_price != supabase min(price)
+mismatch,summer-spiti,Summer Spiti,1f80ad9b-ffe2-40c2-8f63-e9e228646ffc,24999,summer-spiti,Summer Spiti,17500,base_price != supabase min(price)
+mismatch,4x4-summer-spiti-expedition-6n7d,4x4 Summer Spiti Expedition (6N7D),ea5aaef9-5982-4dc1-b2fb-71effcb83e84,24999,4x4-summer-spiti-expedition-6n7d,4x4 Summer Spiti Expedition (6N7D),,no pricing rows in supabase
+mismatch,manali-with-chandrataal-delhi-delhi,Manali with Chandrataal (Delhi-Delhi),59d33497-0929-47b1-be3a-7b4d8a363b0b,24999,manali-with-chandrataal-2n,Manali With Chandrataal 2N,10500,slug mismatch; base_price != supabase min(price)
+mismatch,zanskar-valley-6n7d-tempo-traveller,Zanskar Valley 6N7D (Tempo Traveller),f0e16792-b0f5-4c45-9dcd-609ac7e9e62a,24999,zanskar-6n,Zanskar 6N,22999,slug mismatch; base_price != supabase min(price)
+mismatch,leh-leh-with-turtuk-6n7d,Leh-Leh with Turtuk 6N7D,a878285e-799f-41e2-9295-6fa4fa672c65,24999,leh-to-leh-with-turtuk-6n,Leh to Leh with Turtuk 6N,22000,slug mismatch; base_price != supabase min(price)
+mismatch,bali-8n9d,Bali 8N9D,4596d76a-c3bf-4555-97b4-656636225f98,24999,bali,Bali,,slug mismatch; no pricing rows in supabase

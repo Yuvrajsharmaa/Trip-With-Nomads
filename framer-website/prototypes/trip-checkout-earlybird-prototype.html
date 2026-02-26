@@ -1,0 +1,508 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>TWN Trip + Checkout Prototype</title>
+  <style>
+    :root{
+      --bg:#f4f4f5;
+      --card:#efefef;
+      --text:#111318;
+      --muted:#6b7280;
+      --line:#d9d9d9;
+      --brand:#1b91c9;
+      --ok:#15803d;
+      --ok-bg:#dcfce7;
+    }
+    *{box-sizing:border-box}
+    body{
+      margin:0;
+      background:var(--bg);
+      color:var(--text);
+      font-family:Manrope, "DM Sans", system-ui, -apple-system, sans-serif;
+    }
+    .topbar{
+      background:#128bc0;
+      color:#fff;
+      padding:10px 18px;
+      font-size:14px;
+      display:flex;
+      justify-content:space-between;
+      gap:10px;
+      flex-wrap:wrap;
+    }
+    .hero{
+      min-height:300px;
+      color:#fff;
+      position:relative;
+      background:
+        linear-gradient(rgba(0,0,0,.45),rgba(0,0,0,.45)),
+        url("https://images.unsplash.com/photo-1518684079-3c830dcef090?auto=format&fit=crop&w=1600&q=80")
+        center/cover no-repeat;
+      display:flex;
+      align-items:flex-end;
+      padding:42px 24px;
+    }
+    .hero h1{margin:0 0 8px;font-size:52px;line-height:1.02}
+    .hero p{margin:0;color:#f3f4f6;font-size:24px}
+    .shell{
+      max-width:1200px;
+      margin:26px auto;
+      padding:0 16px 40px;
+    }
+    .grid{
+      display:grid;
+      grid-template-columns:1.9fr 1fr;
+      gap:24px;
+    }
+    .card{
+      background:var(--card);
+      border:1px solid var(--line);
+      border-radius:20px;
+      padding:24px;
+    }
+    .trip-price{
+      display:flex;
+      align-items:center;
+      gap:14px;
+      flex-wrap:wrap;
+      margin:6px 0 12px;
+    }
+    .trip-price .now{font-size:66px;font-weight:800;line-height:1}
+    .trip-price .old{
+      font-size:52px;
+      color:#667085;
+      text-decoration:line-through;
+    }
+    .save{
+      background:var(--ok-bg);
+      color:var(--ok);
+      border-radius:10px;
+      padding:8px 14px;
+      font-size:40px;
+      font-weight:700;
+      line-height:1.1;
+    }
+    .tax-note{
+      margin:0;
+      color:#374151;
+      font-size:44px;
+      font-weight:500;
+    }
+    .row{display:flex;justify-content:space-between;gap:16px;align-items:center}
+    .kv{display:flex;justify-content:space-between;gap:10px;margin:8px 0}
+    .btn{
+      border:none;
+      border-radius:12px;
+      padding:13px 18px;
+      font-size:18px;
+      cursor:pointer;
+      font-weight:600;
+    }
+    .btn.primary{background:var(--brand);color:#fff;box-shadow:0 10px 24px rgba(27,145,201,.25)}
+    .btn.secondary{background:#fff;border:1px solid #ccd4db;color:#1f2937}
+    .checkout{
+      margin-top:26px;
+      display:grid;
+      grid-template-columns:1.5fr 1fr;
+      gap:24px;
+    }
+    h2{margin:0 0 10px;font-size:42px}
+    h3{margin:0 0 14px;font-size:36px}
+    .field{display:flex;flex-direction:column;gap:8px;margin:10px 0}
+    label{font-size:16px;color:#374151}
+    input,select{
+      height:46px;
+      border:1px solid #d3d8de;
+      border-radius:10px;
+      padding:0 12px;
+      font-size:18px;
+      background:#fff;
+    }
+    .traveller{
+      border:1px solid #d7dbe0;
+      border-radius:14px;
+      padding:14px;
+      margin-top:10px;
+      background:#f5f5f5;
+    }
+    .traveller .head{
+      display:flex;justify-content:space-between;align-items:center;
+      font-size:15px;font-weight:800;letter-spacing:.04em;
+    }
+    .remove{
+      color:#dc2626;
+      cursor:pointer;
+      font-weight:700;
+      border:none;
+      background:none;
+      font-size:15px;
+    }
+    .split{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+    .coupon-row{display:grid;grid-template-columns:1fr auto;gap:10px}
+    .summary-line{display:flex;justify-content:space-between;gap:14px;margin:8px 0;font-size:18px}
+    .summary-divider{height:1px;background:#d8dce1;margin:10px 0}
+    .total{font-size:34px;font-weight:800}
+    .muted{color:var(--muted)}
+    .help{font-size:14px;min-height:20px}
+    .small{font-size:14px}
+    @media (max-width: 960px){
+      .hero h1{font-size:38px}
+      .hero p{font-size:20px}
+      .grid,.checkout{grid-template-columns:1fr}
+      .trip-price .now{font-size:48px}
+      .trip-price .old{font-size:38px}
+      .save{font-size:28px}
+      .tax-note{font-size:30px}
+      h2{font-size:34px}
+      h3{font-size:28px}
+    }
+  </style>
+</head>
+<body>
+  <div class="topbar">
+    <div>info@tripwithnomads.com</div>
+    <div>+91 - 9318405401 · +91 - 9899905970</div>
+  </div>
+
+  <section class="hero">
+    <div>
+      <h1>Winter Spiti Expedition</h1>
+      <p>Duration: 6 Nights · 7 Days</p>
+    </div>
+  </section>
+
+  <main class="shell">
+    <div class="grid">
+      <article class="card">
+        <h2>Overview</h2>
+        <p class="muted">
+          Winter Spiti Valley is a 6 Nights / 7 Days adventure journey starting from Delhi.
+          This prototype shows dynamic early-bird + coupon best-price behavior and checkout parity.
+        </p>
+      </article>
+
+      <aside class="card">
+        <h3>Book This Tour</h3>
+        <div class="trip-price">
+          <span class="now" id="trip-now">₹56,999</span>
+          <span class="old" id="trip-old">₹59,999</span>
+          <span class="save" id="trip-save">Save ₹3,000</span>
+        </div>
+        <p class="tax-note">+ tax as applicable</p>
+        <div class="small muted" id="trip-context"></div>
+        <div style="margin-top:16px" class="row">
+          <button class="btn primary" id="goto-checkout">Book now</button>
+        </div>
+      </aside>
+    </div>
+
+    <section class="checkout" id="checkout">
+      <div>
+        <div class="card">
+          <h3>Checkout for winter spiti expedition</h3>
+          <div class="field">
+            <label>Departure details</label>
+            <select id="date"></select>
+          </div>
+        </div>
+
+        <div class="card" style="margin-top:18px">
+          <div class="row">
+            <h3>Traveller details</h3>
+            <div id="traveller-count" class="small muted"></div>
+          </div>
+          <div id="travellers"></div>
+          <button class="btn secondary" style="width:100%;margin-top:14px" id="add-guest">Add Guests</button>
+        </div>
+      </div>
+
+      <div class="card">
+        <h3>Payment Summary</h3>
+        <div class="field">
+          <label>Apply Discount Code</label>
+          <div class="coupon-row">
+            <input id="coupon" placeholder="Enter coupon code" />
+            <button class="btn primary" id="apply-coupon">Apply</button>
+          </div>
+          <div id="coupon-help" class="help muted"></div>
+        </div>
+        <div id="line-items"></div>
+        <div class="summary-divider"></div>
+        <div class="summary-line">
+          <span id="discount-label">Discount</span>
+          <span id="discount-value">- ₹0</span>
+        </div>
+        <div class="summary-line"><span>Tax (2%)</span><span id="tax">₹0</span></div>
+        <div class="summary-divider"></div>
+        <div class="summary-line total"><span>Total Price</span><span id="total">₹0</span></div>
+        <button class="btn primary" style="width:100%;margin-top:14px">Pay now</button>
+      </div>
+    </section>
+  </main>
+
+  <script>
+    const PRICING = [
+      { date: "2026-02-07", transport: "Seat in Coach", sharing: "Double Sharing", price: 19499, early: { type: "flat", value: 1500, start: "2026-01-01", end: "2026-02-01" } },
+      { date: "2026-02-07", transport: "Seat in Coach", sharing: "Triple Sharing", price: 18499, early: { type: "flat", value: 1000, start: "2026-01-01", end: "2026-02-01" } },
+      { date: "2026-02-07", transport: "RE Himalayan Solo", sharing: "Rider Solo", price: 28999, early: { type: "percent", value: 5, start: "2026-01-01", end: "2026-02-15" } },
+      { date: "2026-02-07", transport: "RE Himalayan Double", sharing: "Rider + Pillion", price: 24999, early: { type: "flat", value: 1800, start: "2026-01-01", end: "2026-02-15" } },
+      { date: "2026-03-21", transport: "Seat in Coach", sharing: "Double Sharing", price: 21499, early: null },
+      { date: "2026-03-21", transport: "Seat in Coach", sharing: "Triple Sharing", price: 20499, early: null },
+    ];
+
+    const COUPONS = {
+      TWN3000: { type: "flat", value: 3000, minSubtotal: 30000 },
+      WINTER7: { type: "percent", value: 7, minSubtotal: 18000, max: 4500 }
+    };
+
+    const state = {
+      date: "2026-02-07",
+      travellers: [{ id: 1, name: "", sharing: "Double Sharing", transport: "Seat in Coach" }],
+      couponCode: "",
+      couponApplied: null
+    };
+
+    const el = {
+      date: document.getElementById("date"),
+      travellers: document.getElementById("travellers"),
+      travellerCount: document.getElementById("traveller-count"),
+      addGuest: document.getElementById("add-guest"),
+      coupon: document.getElementById("coupon"),
+      applyCoupon: document.getElementById("apply-coupon"),
+      couponHelp: document.getElementById("coupon-help"),
+      lineItems: document.getElementById("line-items"),
+      discountLabel: document.getElementById("discount-label"),
+      discountValue: document.getElementById("discount-value"),
+      tax: document.getElementById("tax"),
+      total: document.getElementById("total"),
+      tripNow: document.getElementById("trip-now"),
+      tripOld: document.getElementById("trip-old"),
+      tripSave: document.getElementById("trip-save"),
+      tripContext: document.getElementById("trip-context"),
+      gotoCheckout: document.getElementById("goto-checkout")
+    };
+
+    const fmt = (n) => "₹" + Number(n || 0).toLocaleString("en-IN");
+    const round2 = (n) => Math.round((Number(n) + Number.EPSILON) * 100) / 100;
+    const nowMs = Date.parse("2026-01-20T10:00:00Z");
+
+    function getDates() {
+      return [...new Set(PRICING.map(p => p.date))].sort();
+    }
+    function rowsByDate(date) {
+      return PRICING.filter(p => p.date === date);
+    }
+    function sharingOptions(date, transport) {
+      return rowsByDate(date).filter(r => r.transport === transport).map(r => r.sharing);
+    }
+    function transportOptions(date) {
+      return [...new Set(rowsByDate(date).map(r => r.transport))];
+    }
+    function priceRow(date, transport, sharing) {
+      return rowsByDate(date).find(r => r.transport === transport && r.sharing === sharing) ||
+        rowsByDate(date).find(r => r.sharing === sharing) || null;
+    }
+    function earlyBird(row) {
+      if (!row || !row.early) return 0;
+      const e = row.early;
+      const start = Date.parse(e.start + "T00:00:00Z");
+      const end = Date.parse(e.end + "T23:59:59Z");
+      if (nowMs < start || nowMs > end) return 0;
+      const base = Number(row.price);
+      let d = e.type === "percent" ? base * (Number(e.value) / 100) : Number(e.value);
+      return round2(Math.max(0, Math.min(d, base)));
+    }
+    function couponDiscount(subtotal) {
+      const code = (state.couponApplied || "").toUpperCase().trim();
+      const c = COUPONS[code];
+      if (!c) return { amount: 0, label: "Discount", source: "none" };
+      if (subtotal < Number(c.minSubtotal || 0)) return { amount: 0, label: "Discount", source: "none" };
+      let d = c.type === "percent" ? subtotal * (Number(c.value) / 100) : Number(c.value);
+      if (c.max != null) d = Math.min(d, Number(c.max));
+      d = round2(Math.max(0, Math.min(d, subtotal)));
+      return { amount: d, label: "Coupon (" + code + ")", source: "coupon" };
+    }
+
+    function compute() {
+      const lines = [];
+      let subtotal = 0;
+      let early = 0;
+      for (const t of state.travellers) {
+        const row = priceRow(state.date, t.transport, t.sharing);
+        if (!row) continue;
+        const p = Number(row.price || 0);
+        subtotal += p;
+        early += earlyBird(row);
+        lines.push({ variant: t.sharing, transport: t.transport, unit: p });
+      }
+      const c = couponDiscount(subtotal);
+      const source = c.amount > early ? "coupon" : early > 0 ? "early_bird" : c.amount > 0 ? "coupon" : "none";
+      const discount = source === "coupon" ? c.amount : source === "early_bird" ? early : 0;
+      const label = source === "coupon" ? c.label : source === "early_bird" ? "Early Bird" : "Discount";
+      const taxable = round2(Math.max(0, subtotal - discount));
+      const tax = round2(taxable * 0.02);
+      const total = round2(taxable + tax);
+      return { lines, subtotal, early, coupon: c.amount, source, discount, label, tax, total };
+    }
+
+    function renderTripPrice() {
+      let best = { payable: Infinity, base: 0, save: 0, ctx: "" };
+      for (const row of PRICING) {
+        const b = Number(row.price || 0);
+        const s = earlyBird(row);
+        const p = b - s;
+        if (p < best.payable) {
+          best = { payable: p, base: b, save: s, ctx: `${row.date} · ${row.transport} · ${row.sharing}` };
+        }
+      }
+      el.tripNow.textContent = fmt(best.payable);
+      el.tripOld.textContent = fmt(best.base);
+      el.tripSave.textContent = "Save " + fmt(best.save);
+      el.tripOld.style.display = best.save > 0 ? "inline" : "none";
+      el.tripSave.style.display = best.save > 0 ? "inline-block" : "none";
+      el.tripContext.textContent = "Dynamic display from active pricing: " + best.ctx;
+    }
+
+    function renderTravellers() {
+      el.travellerCount.textContent = `${state.travellers.length} Traveller${state.travellers.length > 1 ? "s" : ""}`;
+      el.travellers.innerHTML = "";
+      state.travellers.forEach((t, i) => {
+        const tWrap = document.createElement("div");
+        tWrap.className = "traveller";
+        const tOpts = transportOptions(state.date);
+        if (!tOpts.includes(t.transport)) t.transport = tOpts[0] || "Seat in Coach";
+        const sOpts = sharingOptions(state.date, t.transport);
+        if (!sOpts.includes(t.sharing)) t.sharing = sOpts[0] || "";
+
+        tWrap.innerHTML = `
+          <div class="head">
+            <span>TRAVELLER ${i + 1}</span>
+            ${i === 0 ? "" : `<button class="remove" data-remove="${t.id}">REMOVE</button>`}
+          </div>
+          <div class="split">
+            <div class="field"><label>Name</label><input data-name="${t.id}" value="${t.name || ""}" placeholder="Guest Name"></div>
+            <div class="field"><label>Select sharing</label><select data-sharing="${t.id}">${sOpts.map(o => `<option ${o===t.sharing?"selected":""}>${o}</option>`).join("")}</select></div>
+          </div>
+          <div class="field">
+            <label>Vehicle selection</label>
+            <select data-transport="${t.id}">
+              ${tOpts.map(o => `<option ${o===t.transport?"selected":""}>${o}</option>`).join("")}
+            </select>
+          </div>
+        `;
+        el.travellers.appendChild(tWrap);
+      });
+    }
+
+    function renderSummary() {
+      const c = compute();
+      el.couponHelp.textContent =
+        c.source === "coupon"
+          ? "Coupon applied: best price selected."
+          : c.source === "early_bird"
+            ? state.couponApplied ? "Early-bird is better than coupon for current selection." : "Early-bird applied."
+            : "Enter a coupon code and tap Apply.";
+
+      el.lineItems.innerHTML = "";
+      const grouped = {};
+      c.lines.forEach(l => {
+        const key = `${l.variant}__${l.transport}__${l.unit}`;
+        if (!grouped[key]) grouped[key] = { count:0, unit:l.unit, variant:l.variant, transport:l.transport };
+        grouped[key].count += 1;
+      });
+      Object.values(grouped).forEach(g => {
+        const row = document.createElement("div");
+        row.className = "summary-line";
+        row.innerHTML = `<span>${g.count} × ${g.variant}</span><span>${fmt(g.count * g.unit)}</span>`;
+        el.lineItems.appendChild(row);
+      });
+      if (!Object.keys(grouped).length) {
+        el.lineItems.innerHTML = `<div class="summary-line"><span class="muted">No priced travellers yet</span><span>${fmt(0)}</span></div>`;
+      }
+
+      el.discountLabel.textContent = c.label;
+      el.discountValue.textContent = "- " + fmt(c.discount);
+      el.tax.textContent = fmt(c.tax);
+      el.total.textContent = fmt(c.total);
+    }
+
+    function renderDateSelect() {
+      const dates = getDates();
+      el.date.innerHTML = dates.map(d => `<option ${d===state.date?"selected":""}>${d}</option>`).join("");
+    }
+
+    function renderAll() {
+      renderDateSelect();
+      renderTravellers();
+      renderSummary();
+      renderTripPrice();
+    }
+
+    document.addEventListener("click", (e) => {
+      const rm = e.target.closest("[data-remove]");
+      if (rm) {
+        const id = Number(rm.getAttribute("data-remove"));
+        state.travellers = state.travellers.filter(t => t.id !== id);
+        renderAll();
+      }
+    });
+    document.addEventListener("input", (e) => {
+      const name = e.target.getAttribute("data-name");
+      if (name) {
+        const t = state.travellers.find(x => x.id === Number(name));
+        if (t) t.name = e.target.value;
+      }
+    });
+    document.addEventListener("change", (e) => {
+      const s = e.target.getAttribute("data-sharing");
+      const tr = e.target.getAttribute("data-transport");
+      if (s) {
+        const t = state.travellers.find(x => x.id === Number(s));
+        if (t) t.sharing = e.target.value;
+      }
+      if (tr) {
+        const t = state.travellers.find(x => x.id === Number(tr));
+        if (t) {
+          t.transport = e.target.value;
+          const opts = sharingOptions(state.date, t.transport);
+          if (!opts.includes(t.sharing)) t.sharing = opts[0] || "";
+        }
+      }
+      if (e.target === el.date) {
+        state.date = el.date.value;
+        state.travellers = state.travellers.map(t => {
+          const transports = transportOptions(state.date);
+          if (!transports.includes(t.transport)) t.transport = transports[0] || "Seat in Coach";
+          const options = sharingOptions(state.date, t.transport);
+          if (!options.includes(t.sharing)) t.sharing = options[0] || "";
+          return t;
+        });
+      }
+      renderAll();
+    });
+
+    el.addGuest.addEventListener("click", () => {
+      const id = Math.max(0, ...state.travellers.map(t => t.id)) + 1;
+      const t = transportOptions(state.date)[0] || "Seat in Coach";
+      const s = sharingOptions(state.date, t)[0] || "";
+      state.travellers.push({ id, name: "", sharing: s, transport: t });
+      renderAll();
+    });
+
+    el.applyCoupon.addEventListener("click", () => {
+      const code = (el.coupon.value || "").trim().toUpperCase();
+      state.couponApplied = code || null;
+      renderSummary();
+    });
+
+    el.gotoCheckout.addEventListener("click", () => {
+      document.getElementById("checkout").scrollIntoView({ behavior: "smooth", block: "start" });
+    });
+
+    renderAll();
+  </script>
+</body>
+</html>
+

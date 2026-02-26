@@ -8,7 +8,7 @@ I have consolidated the entire ecosystem into a single root folder: `Trip-With-N
 
 1.  **`framer-website/`**: 
     - **Purpose**: Core logic for the production Framer site.
-    - **Key Files**: `BookingOverrides.tsx` (3-step flow), `edge-functions/` (PayU integration).
+    - **Key Files**: `CheckoutPageOverrides.tsx` (checkout page flow), `BookingStatusOverride.tsx`, `edge-functions/` (PayU integration).
     - **Data**: All trip/pricing source JSONs and CSVs are in `data/`.
 2.  **`admin-dashboard/`**: 
     - **Purpose**: Internal management tool (React/Vite).
@@ -23,8 +23,8 @@ The primary objective is to finalize the **Supabase + PayU Booking Flow**.
 ### Current Progress:
 - [x] Reorganized code into clean directories.
 - [x] Consolidated shared context (Implementation Plan, Scripts, Data).
-- [ ] **Next Step**: Update the `create-booking` Edge Function to handle the multi-traveller payload.
-- [ ] **Next Step**: Update `BookingOverrides.tsx` to collect email/phone on Step 2.
+- [x] Checkout page migration is active (`/checkout`) and popup flow is retired.
+- [x] `create-booking` Edge Function accepts and processes multi-traveller payloads.
 
 ## 🔑 Critical Environment Info
 
