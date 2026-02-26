@@ -57,6 +57,7 @@ function resolveRuntimeConfig(): RuntimeConfig {
 
 const CURRENT_RUNTIME = resolveRuntimeConfig()
 const SUPABASE_URL = CURRENT_RUNTIME.supabaseUrl
+const SUPABASE_KEY = CURRENT_RUNTIME.supabaseAnonKey
 
 const cache = new Map<string, { ts: number; data: any }>()
 const inFlight = new Map<string, Promise<any | null>>()
@@ -159,6 +160,10 @@ async function fetchTripDisplayPrice(params: { slug?: string; tripId?: string })
 
     const request = fetch(`${SUPABASE_URL}/functions/v1/get-trip-display-price?${query.toString()}`, {
         method: "GET",
+        headers: {
+            apikey: SUPABASE_KEY,
+            Authorization: `Bearer ${SUPABASE_KEY}`,
+        },
     })
         .then(async (res) => {
             if (!res.ok) return null

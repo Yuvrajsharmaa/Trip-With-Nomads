@@ -936,6 +936,10 @@ async function fetchTripDisplayPrice(params: { slug?: string; tripId?: string })
 
     const request = fetch(`${SUPABASE_URL}/functions/v1/get-trip-display-price?${query.toString()}`, {
         method: "GET",
+        headers: {
+            apikey: SUPABASE_KEY,
+            Authorization: `Bearer ${SUPABASE_KEY}`,
+        },
     })
         .then(async (res) => {
             if (!res.ok) return null
