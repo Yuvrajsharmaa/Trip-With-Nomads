@@ -27,8 +27,7 @@ Check `IMPLEMENTATION_PLAN.md` for the full technical roadmap.
 
 ---
 
-### Shared with Admin Dashboard
-The following folders are kept in sync with the `admin-dashboard` project for context:
+### Core Shared Runtime Folders
 - `supabase/`: Database schema and edge function logic.
 - `scripts/`: Data management utilities.
 - `data/`: Source of truth for trips.
