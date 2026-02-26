@@ -39,19 +39,75 @@ function resolveRuntimeEnv(): RuntimeEnv {
     return "production"
 }
 
+function extractProjectRefFromSupabaseUrl(url: string): string {
+    const match = String(url || "")
+        .trim()
+        .match(/^https:\/\/([a-z0-9-]+)\.supabase\.co(?:\/|$)/i)
+    return String(match?.[1] || "").trim().toLowerCase()
+}
+
+function decodeBase64Url(value: string): string {
+    const normalized = String(value || "")
+        .trim()
+        .replace(/-/g, "+")
+        .replace(/_/g, "/")
+    if (!normalized) return ""
+    const padded = normalized + "=".repeat((4 - (normalized.length % 4 || 4)) % 4)
+    try {
+        if (typeof atob === "function") return atob(padded)
+    } catch (_) {}
+    try {
+        // @ts-ignore Framer runtime may expose Buffer in some contexts.
+        if (typeof Buffer !== "undefined") return Buffer.from(padded, "base64").toString("utf8")
+    } catch (_) {}
+    return ""
+}
+
+function extractProjectRefFromAnonKey(key: string): string {
+    const parts = String(key || "").trim().split(".")
+    if (parts.length < 2) return ""
+    const payloadRaw = decodeBase64Url(parts[1])
+    if (!payloadRaw) return ""
+    try {
+        const payload = JSON.parse(payloadRaw)
+        return String(payload?.ref || "").trim().toLowerCase()
+    } catch (_) {
+        return ""
+    }
+}
+
+function pickSupabaseAnonKey(url: string, overrideKey: string, selectedKey: string): string {
+    const targetRef = extractProjectRefFromSupabaseUrl(url)
+    const cleanOverride = String(overrideKey || "").trim()
+    const cleanSelected = String(selectedKey || "").trim()
+    if (!targetRef) return cleanOverride || cleanSelected
+
+    const overrideRef = extractProjectRefFromAnonKey(cleanOverride)
+    if (cleanOverride && overrideRef === targetRef) return cleanOverride
+
+    const selectedRef = extractProjectRefFromAnonKey(cleanSelected)
+    if (cleanSelected && selectedRef === targetRef) return cleanSelected
+
+    return cleanOverride || cleanSelected
+}
+
 function resolveRuntimeConfig(): RuntimeConfig {
     const env = resolveRuntimeEnv()
     const selected = RUNTIME_CONFIG[env]
     const runtimeOverride =
         typeof window !== "undefined" ? (window as any).__TWN_RUNTIME_CONFIG__ || {} : {}
+    const resolvedSupabaseUrl = String(runtimeOverride.supabaseUrl || selected.supabaseUrl || "").trim()
+    const resolvedSupabaseAnonKey = pickSupabaseAnonKey(
+        resolvedSupabaseUrl,
+        String(runtimeOverride.supabaseAnonKey || ""),
+        String(selected.supabaseAnonKey || "")
+    )
     return {
         siteBaseUrl: String(runtimeOverride.siteBaseUrl || selected.siteBaseUrl || "")
             .trim()
             .replace(/\/+$/, ""),
-        supabaseUrl: String(runtimeOverride.supabaseUrl || selected.supabaseUrl || "").trim(),
-        supabaseAnonKey: String(
-            runtimeOverride.supabaseAnonKey || selected.supabaseAnonKey || ""
-        ).trim(),
+        supabaseUrl: resolvedSupabaseUrl,
+        supabaseAnonKey: resolvedSupabaseAnonKey,
     }
 }
 
