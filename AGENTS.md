@@ -5,6 +5,7 @@ This repo is **staging-first**. Agents must follow the workflow docs and scripts
 ## Source of Truth
 - `/Users/yuvrajsharma/Desktop/Trip-With-Nomads/docs/GLOBAL_AGENT_WORKFLOW.md`
 - `/Users/yuvrajsharma/Desktop/Trip-With-Nomads/docs/AGENT_SELF_RULES.md`
+- `/Users/yuvrajsharma/Desktop/Trip-With-Nomads/docs/WORKING_WITH_YUVRAJ.md`
 
 ## Required Task Flow
 1. `scripts/ops/start-task.sh <issue> <slug>`
@@ -19,5 +20,10 @@ This repo is **staging-first**. Agents must follow the workflow docs and scripts
 - No production testing for new features.
 - Every change must land in `staging` first.
 - Use PR template fields and include staging QA evidence.
+- **No Unframer MCP** for this repo; use Framer API with env vars.
+
+## Global Policy
+- Always read local project rules first.
+- If missing, create `docs/WORKING_WITH_<owner>.md` with UX‑friendly guidance.
 
 If you are unsure, stop and ask before proceeding.
