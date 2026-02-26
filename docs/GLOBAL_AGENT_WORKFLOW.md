@@ -74,3 +74,31 @@ Hotfix PRs to `main` are allowed only when:
 - No testing new features in production first.
 - No mixed-scope commits in one PR.
 - No skipping rollback plan or QA evidence.
+
+## Codex Config Quick Reference
+Paste into `config.toml` (global agent config):
+
+```toml
+model = "gpt-5.2-codex"
+model_reasoning_effort = "high"
+
+# Trip With Nomads – global collaboration defaults
+[collaboration]
+# Explain in plain language with a short technical summary
+explanation_style = "balanced"
+
+[framer]
+# Use Framer API directly; do not use Unframer MCP
+use_direct_api = true
+require_env = ["FRAMER_TOKEN", "FRAMER_PROJECT_ID"]
+
+[workflow]
+# Staging-first for Trip With Nomads
+staging_first = true
+# Human reference docs (repo source of truth):
+# - /Users/yuvrajsharma/Desktop/Trip-With-Nomads/docs/GLOBAL_AGENT_WORKFLOW.md
+# - /Users/yuvrajsharma/Desktop/Trip-With-Nomads/docs/WORKING_WITH_YUVRAJ.md
+# Required flow:
+# 1) start-task.sh -> 2) work in codex/<issue>-<slug> -> 3) finish-task.sh (PR to staging)
+# 4) staging QA -> 5) promote-staging-to-main.sh -> 6) end-task.sh
+```
