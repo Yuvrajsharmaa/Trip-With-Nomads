@@ -35,6 +35,13 @@ function normalizePaymentMode(value: unknown): "full" | "partial_25" {
     return String(value || "").trim().toLowerCase() === "partial_25" ? "partial_25" : "full"
 }
 
+function shouldEnforcePricingSnapshot(): boolean {
+    const raw = String(Deno.env.get("ENFORCE_PRICING_SNAPSHOT") || "")
+        .trim()
+        .toLowerCase()
+    return raw === "1" || raw === "true" || raw === "yes"
+}
+
 function buildPricingMismatchErrors(pricingSnapshot: any, computed: any): string[] {
     const errors: string[] = []
     if (!pricingSnapshot || typeof pricingSnapshot !== "object") return errors
@@ -223,14 +230,23 @@ serve(async (req) => {
             paymentMode === "partial_25" ? "partially_paid" : "fully_paid"
 
         const mismatchErrors = buildPricingMismatchErrors(pricingSnapshot, computedPricing)
+        const enforcePricingSnapshot = shouldEnforcePricingSnapshot()
         if (mismatchErrors.length > 0) {
-            return json(
-                {
-                    error: "Pricing mismatch. Please refresh checkout and try again.",
-                    server_pricing: computedPricing,
-                },
-                409
-            )
+            console.warn("[create-booking] pricing snapshot mismatch", {
+                mismatchErrors,
+                enforcePricingSnapshot,
+                clientSnapshot: pricingSnapshot,
+                serverPricing: computedPricing,
+            })
+            if (enforcePricingSnapshot) {
+                return json(
+                    {
+                        error: "Pricing mismatch. Please refresh checkout and try again.",
+                        server_pricing: computedPricing,
+                    },
+                    409
+                )
+            }
         }
 
         const paymentBreakdown = [...basePricing.paymentBreakdown]
