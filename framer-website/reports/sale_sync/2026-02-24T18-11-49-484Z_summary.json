@@ -1,0 +1,35 @@
+{
+  "apply": true,
+  "sheetTrips": 15,
+  "allowedSlugs": [
+    "summer-spiti",
+    "4x4-summer-spiti-expedition-6n7d",
+    "spiti-biking",
+    "manali-with-chandrataal-delhi-delhi",
+    "teen-taal",
+    "teen-taal-with-gombo-ranjan",
+    "zanskar-valley-6n7d-tempo-traveller",
+    "kedarnath-yatra",
+    "ladakh-leh-to-leh-with-turtuk",
+    "leh-leh-with-turtuk-6n7d",
+    "leh-to-leh-with-umling-la-hanle-tso-moriri",
+    "winter-spiti-expedition",
+    "spiti-valley-with-sangla-holi",
+    "sangla-holi-special",
+    "ladakh-apricot-blossom",
+    "baku-without-shahdag",
+    "baku-with-shahdag"
+  ],
+  "actions": {
+    "createSupabaseTrips": 0,
+    "updateSupabaseTrips": 0,
+    "createSupabasePricing": 632,
+    "updateSupabasePricing": 256,
+    "deleteSupabasePricing": 0,
+    "deleteSupabaseTrips": 0,
+    "updateFramerItems": 16,
+    "createFramerItems": 0,
+    "moveFramerToDraft": 12,
+    "errors": 0
+  }
+}

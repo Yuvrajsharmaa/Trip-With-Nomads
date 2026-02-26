@@ -26,6 +26,14 @@ This project relies heavily on the **Supabase** backend for:
 
 Check `IMPLEMENTATION_PLAN.md` for the full technical roadmap.
 
+## 🔐 Environment Setup
+
+- Use `env.production.example` and `env.development.example` as templates.
+- For script execution, load env explicitly:
+  - `node --env-file=env.production.example scripts/<script>.mjs`
+  - `node --env-file=env.development.example scripts/<script>.mjs`
+- Edge Function secrets should mirror the same environment split (`production` vs `development`).
+
 ---
 
 ### Shared with Admin Dashboard

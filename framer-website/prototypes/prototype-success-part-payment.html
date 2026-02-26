@@ -1,0 +1,63 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Payment Success Prototype</title>
+  <style>
+    body { margin: 0; font-family: Manrope, "DM Sans", -apple-system, sans-serif; background: #f5f5f5; color: #1f1f1f; }
+    .wrap { max-width: 860px; margin: 36px auto; padding: 0 16px; }
+    .card { background: #fff; border: 1px solid #e8e8e8; border-radius: 24px; padding: 28px; }
+    .ok { display:inline-flex; background:#d7f5dc; color:#0f5f2a; border-radius:10px; padding:8px 12px; font-weight:700; }
+    h1 { margin: 14px 0 8px; font-size: 42px; }
+    .muted { color:#646464; }
+    .grid { display:grid; gap:12px; margin-top:18px; }
+    .row { display:flex; justify-content:space-between; gap:12px; }
+    .divider { border-top:1px solid #ececec; margin: 8px 0; }
+    .due { margin-top:16px; background:#fff8eb; border:1px solid #f7ddac; border-radius:12px; padding:14px; }
+    a { display:inline-block; margin-top:18px; color:#1b91c9; text-decoration:none; font-weight:700; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="card">
+      <div class="ok">Booking confirmed</div>
+      <h1 id="heading">Booking Confirmed!</h1>
+      <div class="muted" id="subheading">Your payment is successful.</div>
+      <div class="grid">
+        <div class="row"><span>Trip</span><strong id="tripName">—</strong></div>
+        <div class="row"><span>Payment mode</span><strong id="modeText">—</strong></div>
+        <div class="row"><span>Paid now</span><strong id="paidNow">₹0</strong></div>
+        <div class="row"><span>Final total</span><strong id="finalTotal">₹0</strong></div>
+      </div>
+      <div id="dueCard" class="due" style="display:none">
+        <strong>Balance due:</strong> <span id="dueAmount">₹0</span><br />
+        <span class="muted">Remaining amount is collected on-site before trip departure.</span>
+      </div>
+      <a id="backLink" href="./checkout-part-payment-prototype.html">← Back to checkout prototype</a>
+    </div>
+  </div>
+  <script>
+    const q = new URLSearchParams(location.search)
+    const mode = (q.get("mode") || "full").toLowerCase()
+    const payableNow = Number(q.get("payable_now") || 0)
+    const due = Number(q.get("due") || 0)
+    const total = Number(q.get("total") || 0)
+    const trip = q.get("trip") || "Trip"
+    const fmt = (n) => "₹" + Number(n || 0).toLocaleString("en-IN", { maximumFractionDigits: 2 })
+
+    document.getElementById("tripName").textContent = trip
+    document.getElementById("paidNow").textContent = fmt(payableNow)
+    document.getElementById("finalTotal").textContent = fmt(total)
+    document.getElementById("modeText").textContent = mode === "partial_25" ? "Pay 25% now" : "Full payment"
+
+    if (mode === "partial_25" && due > 0) {
+      document.getElementById("subheading").textContent = "Booking is confirmed with part payment."
+      document.getElementById("dueCard").style.display = "block"
+      document.getElementById("dueAmount").textContent = fmt(due)
+    } else {
+      document.getElementById("subheading").textContent = "Paid in full. You're all set."
+    }
+  </script>
+</body>
+</html>

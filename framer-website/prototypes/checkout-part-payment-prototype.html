@@ -1,0 +1,241 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>TWN Checkout Prototype (Part Payment)</title>
+  <style>
+    :root {
+      --bg: #f5f5f5;
+      --card: #ffffff;
+      --text: #1f1f1f;
+      --muted: #666;
+      --line: #e8e8e8;
+      --primary: #1b91c9;
+      --ok-bg: #d7f5dc;
+      --ok-text: #0f5f2a;
+      --danger: #d93025;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--text);
+      font-family: Manrope, "DM Sans", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+    .wrap { max-width: 1200px; margin: 32px auto; padding: 0 20px; }
+    .header { margin-bottom: 20px; }
+    .header h1 { margin: 8px 0 0; font-size: 44px; }
+    .grid { display: grid; grid-template-columns: 1.15fr 0.85fr; gap: 20px; }
+    .card {
+      background: var(--card);
+      border: 1px solid var(--line);
+      border-radius: 24px;
+      padding: 24px;
+    }
+    .stack { display: grid; gap: 20px; }
+    h2 { margin: 0 0 16px; font-size: 42px; }
+    h3 { margin: 0 0 16px; font-size: 22px; }
+    .rows { display: grid; gap: 12px; }
+    .row { display: flex; justify-content: space-between; align-items: center; gap: 12px; }
+    .muted { color: var(--muted); }
+    .pill {
+      display: inline-flex;
+      border-radius: 999px;
+      padding: 8px 14px;
+      background: #edf7ff;
+      border: 1px solid #b7e3fa;
+      font-weight: 700;
+      font-size: 13px;
+    }
+    .mode {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 8px;
+      margin-bottom: 18px;
+    }
+    .mode button {
+      border: 1px solid var(--line);
+      background: #fff;
+      color: var(--text);
+      border-radius: 12px;
+      padding: 12px;
+      font-weight: 700;
+      cursor: pointer;
+    }
+    .mode button.active {
+      background: #eaf6ff;
+      border-color: #a8dbf5;
+      color: #096693;
+    }
+    .kv {
+      background: #fafafa;
+      border: 1px solid var(--line);
+      border-radius: 16px;
+      padding: 16px;
+      display: grid;
+      gap: 12px;
+    }
+    .divider { border-top: 1px solid var(--line); margin: 2px 0; }
+    .total { font-size: 38px; font-weight: 800; }
+    .amount { font-weight: 700; }
+    .success-chip {
+      display: inline-flex;
+      align-items: center;
+      border-radius: 10px;
+      padding: 6px 10px;
+      font-size: 14px;
+      font-weight: 700;
+      background: var(--ok-bg);
+      color: var(--ok-text);
+    }
+    .help { font-size: 13px; color: var(--muted); line-height: 1.5; }
+    .help.strong { color: #2d2d2d; font-weight: 600; }
+    .cta {
+      width: 100%;
+      border: none;
+      border-radius: 12px;
+      padding: 14px;
+      font-size: 22px;
+      background: var(--primary);
+      color: #fff;
+      box-shadow: 0 8px 20px rgba(27,145,201,.25);
+      cursor: pointer;
+      margin-top: 14px;
+    }
+    .cta.fail {
+      background: #fff;
+      color: var(--danger);
+      border: 1px solid #f5c5c2;
+      box-shadow: none;
+    }
+    .badge-amount {
+      background: #f4fbff;
+      color: #0f6d99;
+      border: 1px solid #d0edf9;
+      border-radius: 10px;
+      padding: 8px 12px;
+      font-weight: 700;
+    }
+    @media (max-width: 900px) {
+      .grid { grid-template-columns: 1fr; }
+      .header h1 { font-size: 34px; }
+      h2 { font-size: 34px; }
+      .sticky-mobile {
+        position: sticky;
+        bottom: 0;
+        background: rgba(245,245,245,.96);
+        border-top: 1px solid var(--line);
+        padding-top: 10px;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="header">
+      <div class="muted">Prototype</div>
+      <h2>Checkout for Summer Spiti</h2>
+    </div>
+    <div class="grid">
+      <div class="stack">
+        <div class="card">
+          <h3>Traveller details</h3>
+          <div class="row">
+            <span class="muted">2 travellers selected</span>
+            <span class="pill">1 × Double, 1 × Triple</span>
+          </div>
+        </div>
+        <div class="card">
+          <h3>Payment mode</h3>
+          <div class="mode">
+            <button id="fullBtn" class="active" data-mode="full">Full Payment</button>
+            <button id="partialBtn" data-mode="partial_25">Pay 25% Now</button>
+          </div>
+          <div class="help strong" id="modeHint">Pay full amount now for instant paid-in-full confirmation.</div>
+        </div>
+      </div>
+      <div class="card sticky-mobile">
+        <h3>Payment Summary</h3>
+        <div class="rows">
+          <div class="row"><span id="lineItems">1 × Double + 1 × Triple</span><span class="amount" id="baseSubtotal">₹0</span></div>
+          <div class="row"><span id="discountLabel">Early Bird</span><span class="amount" id="discountAmount">- ₹0</span></div>
+          <div class="row"><span>Tax (2%)</span><span class="amount" id="taxAmount">₹0</span></div>
+          <div class="divider"></div>
+          <div class="row"><span>Final Total</span><span class="amount" id="finalTotal">₹0</span></div>
+          <div class="row"><span>Pay Now</span><span class="badge-amount" id="payableNow">₹0</span></div>
+          <div class="row"><span>Balance Due</span><span class="amount" id="dueAmount">₹0</span></div>
+        </div>
+        <div style="margin-top:10px" class="success-chip" id="ruleChip">Best discount auto-applied</div>
+        <button id="paySuccess" class="cta">Pay ₹0 now</button>
+        <button id="payFail" class="cta fail">Simulate Failed Payment</button>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const taxRate = 0.02
+    const baseSubtotal = 38998
+    const earlyBirdDiscount = 998
+    const coupon = { code: "NOMADS", amount: 1500 }
+    let paymentMode = "full"
+    let couponApplied = false
+
+    const fmt = (n) => "₹" + Number(n || 0).toLocaleString("en-IN", { minimumFractionDigits: 0, maximumFractionDigits: 2 })
+    const round2 = (n) => Math.round((Number(n) + Number.EPSILON) * 100) / 100
+
+    function compute() {
+      const couponDiscount = couponApplied ? coupon.amount : 0
+      const discount = Math.max(earlyBirdDiscount, couponDiscount)
+      const discountLabel = discount === couponDiscount && couponDiscount > 0 ? `Coupon (${coupon.code})` : "Early Bird"
+      const taxable = round2(Math.max(0, baseSubtotal - discount))
+      const tax = round2(taxable * taxRate)
+      const finalTotal = round2(taxable + tax)
+      const partialDeposit = round2(baseSubtotal * 0.25)
+      const payableNow = paymentMode === "partial_25" ? round2(Math.min(partialDeposit, finalTotal)) : finalTotal
+      const due = round2(Math.max(0, finalTotal - payableNow))
+      return { discount, discountLabel, taxable, tax, finalTotal, payableNow, due }
+    }
+
+    function render() {
+      const c = compute()
+      document.getElementById("baseSubtotal").textContent = fmt(baseSubtotal)
+      document.getElementById("discountLabel").textContent = c.discount > 0 ? c.discountLabel : "Discount"
+      document.getElementById("discountAmount").textContent = "- " + fmt(c.discount)
+      document.getElementById("taxAmount").textContent = fmt(c.tax)
+      document.getElementById("finalTotal").textContent = fmt(c.finalTotal)
+      document.getElementById("payableNow").textContent = fmt(c.payableNow)
+      document.getElementById("dueAmount").textContent = fmt(c.due)
+      document.getElementById("paySuccess").textContent = `Pay ${fmt(c.payableNow)} now`
+      document.getElementById("modeHint").textContent =
+        paymentMode === "partial_25"
+          ? `Pay ${fmt(c.payableNow)} now. Remaining ${fmt(c.due)} is collected on-site before departure.`
+          : "Pay full amount now for instant paid-in-full confirmation."
+      document.getElementById("fullBtn").classList.toggle("active", paymentMode === "full")
+      document.getElementById("partialBtn").classList.toggle("active", paymentMode === "partial_25")
+    }
+
+    document.getElementById("fullBtn").addEventListener("click", () => { paymentMode = "full"; render() })
+    document.getElementById("partialBtn").addEventListener("click", () => { paymentMode = "partial_25"; render() })
+    document.getElementById("ruleChip").addEventListener("click", () => { couponApplied = !couponApplied; render() })
+
+    function go(status) {
+      const c = compute()
+      const q = new URLSearchParams({
+        mode: paymentMode,
+        payable_now: String(c.payableNow),
+        due: String(c.due),
+        total: String(c.finalTotal),
+        trip: "Summer Spiti",
+      })
+      window.location.href = status === "success"
+        ? `./prototype-success-part-payment.html?${q.toString()}`
+        : `./prototype-failed-part-payment.html?${q.toString()}`
+    }
+    document.getElementById("paySuccess").addEventListener("click", () => go("success"))
+    document.getElementById("payFail").addEventListener("click", () => go("failed"))
+
+    render()
+  </script>
+</body>
+</html>

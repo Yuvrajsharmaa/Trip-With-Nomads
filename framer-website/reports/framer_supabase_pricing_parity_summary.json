@@ -1,0 +1,10 @@
+{
+  "timestamp": "2026-02-25T06:51:26.278Z",
+  "framer_items": 28,
+  "supabase_trips": 22,
+  "supabase_pricing_rows": 1000,
+  "mismatches": 15,
+  "missing_trip_id": 0,
+  "invalid_trip_id": 6,
+  "ok": 7
+}

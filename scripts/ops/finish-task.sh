@@ -1,22 +1,59 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-if [[ $# -lt 4 ]]; then
-  echo "Usage: $0 <issue-number> <type> <area> <summary>"
-  echo "Example: $0 4 feat checkout \"add coupon validation flow\""
+usage() {
+  echo "Usage: $0 [--base staging] <issue-number> <type> <area> \"<summary>\""
+  echo "Example: $0 42 feat checkout \"add coupon validation\""
+}
+
+BASE_BRANCH="staging"
+ARGS=()
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --base)
+      BASE_BRANCH="$2"
+      shift 2
+      ;;
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    *)
+      ARGS+=("$1")
+      shift
+      ;;
+  esac
+done
+
+if [[ ${#ARGS[@]} -lt 4 ]]; then
+  usage
   exit 1
 fi
 
-ISSUE_NUMBER="$1"
-TYPE="$2"
-AREA="$3"
-SUMMARY="$4"
+ISSUE_NUMBER="${ARGS[0]}"
+TYPE="${ARGS[1]}"
+AREA="${ARGS[2]}"
+SUMMARY="${ARGS[3]}"
 REPO="Yuvrajsharmaa/Trip-With-Nomads"
 
+if ! gh issue view "$ISSUE_NUMBER" -R "$REPO" >/dev/null 2>&1; then
+  echo "Issue #$ISSUE_NUMBER not found in $REPO"
+  exit 1
+fi
+
 CURRENT_BRANCH=$(git branch --show-current)
-if [[ ! "$CURRENT_BRANCH" =~ ^codex/${ISSUE_NUMBER}- ]]; then
-  echo "Current branch '$CURRENT_BRANCH' does not match codex/${ISSUE_NUMBER}-*"
-  echo "Switch to the task branch first."
+if [[ ! "$CURRENT_BRANCH" =~ ^codex/${ISSUE_NUMBER}-[a-z0-9-]+$ ]]; then
+  echo "Current branch '$CURRENT_BRANCH' does not match codex/${ISSUE_NUMBER}-<slug>"
+  exit 1
+fi
+
+if [[ ! "$TYPE" =~ ^(feat|fix|chore|refactor|docs|test|perf)$ ]]; then
+  echo "Invalid commit type '$TYPE'. Use: feat|fix|chore|refactor|docs|test|perf"
+  exit 1
+fi
+
+if [[ ! "$AREA" =~ ^[a-z0-9_-]+$ ]]; then
+  echo "Invalid area '$AREA'. Use lowercase letters/numbers/_/-"
   exit 1
 fi
 
@@ -31,22 +68,48 @@ fi
 
 git push -u origin "$CURRENT_BRANCH"
 
-if gh pr view -R "$REPO" "$CURRENT_BRANCH" >/dev/null 2>&1; then
-  echo "PR already exists for branch $CURRENT_BRANCH"
-else
-  gh pr create \
-    -R "$REPO" \
-    --base main \
-    --head "$CURRENT_BRANCH" \
-    --title "$COMMIT_MESSAGE" \
-    --body "Closes #${ISSUE_NUMBER}
+PR_BODY_FILE=$(mktemp)
+cat > "$PR_BODY_FILE" <<PRBODY
+## Target Env
+- [x] staging
+- [ ] main (hotfix only)
 
 ## Summary
 - ${SUMMARY}
 
-## Testing
-- [ ] Added/updated tests
-- [ ] Manually validated behavior"
+## Linked Issue
+Closes #${ISSUE_NUMBER}
+
+## Staging QA Evidence (Required)
+- Staging URL:
+- Test steps:
+- Screenshots/logs:
+
+## Risk Level
+- [ ] Low
+- [ ] Medium
+- [ ] High
+
+## Rollback Plan (Required)
+- Revert PR:
+- Data rollback notes:
+
+## Data / Migration Impact
+- [ ] None
+- [ ] Yes (describe)
+PRBODY
+
+if gh pr view -R "$REPO" "$CURRENT_BRANCH" >/dev/null 2>&1; then
+  echo "PR already exists for $CURRENT_BRANCH"
+else
+  gh pr create \
+    -R "$REPO" \
+    --base "$BASE_BRANCH" \
+    --head "$CURRENT_BRANCH" \
+    --title "$COMMIT_MESSAGE" \
+    --body-file "$PR_BODY_FILE"
 fi
 
-echo "Done: pushed branch and ensured PR exists for issue #$ISSUE_NUMBER"
+rm -f "$PR_BODY_FILE"
+
+echo "Done: pushed branch and ensured PR exists for issue #$ISSUE_NUMBER -> base '$BASE_BRANCH'"

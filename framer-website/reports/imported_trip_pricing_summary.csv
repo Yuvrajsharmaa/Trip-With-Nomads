@@ -1,0 +1,59 @@
+trip_type,slug,trip_title,variant_name,departures_count,first_departure,last_departure,price_values_inr
+international,almaty,Almaty,Double Sharing,2,2026-03-12,2026-04-02,64999
+international,baku-without-shahdag,Baku without Shahdag,With Shahdag,4,2026-03-24,2026-05-29,57999
+international,baku-without-shahdag,Baku without Shahdag,Without Shahdag,4,2026-03-24,2026-05-29,52999
+domestic,do-dhaam,Kedarnath With Badrinath 4N,Triple Sharing,25,2026-04-24,2026-10-09,18000
+international,dubai,Dubai,Double Sharing,1,2026-03-28,2026-03-28,72499
+international,georgia,georgia,Double Sharing,5,2026-04-18,2026-06-27,64999
+international,japan,Japan,Double Sharing,2,2026-03-18,2026-04-02,169999
+domestic,kedarnath-yatra,Kedarnath 3N,Double Sharing,25,2026-04-24,2026-10-09,14000
+domestic,kedarnath-yatra,Kedarnath 3N,Quad Sharing,25,2026-04-24,2026-10-09,12000
+domestic,kedarnath-yatra,Kedarnath 3N,Triple Sharing,25,2026-04-24,2026-10-09,13000
+domestic,ladakh-apricot-blossom,Ladakh apricot blossom,Triple Sharing,6,2026-04-03,2026-04-21,29999
+domestic,leh-to-leh-with-turtuk-5n,Leh to Leh with Turtuk 5N,RE Himalayan - Pillion - Double Sharing,51,2026-04-03,2026-08-30,26000
+domestic,leh-to-leh-with-turtuk-5n,Leh to Leh with Turtuk 5N,RE Himalayan - Pillion - Triple Sharing,51,2026-04-03,2026-08-30,23000
+domestic,leh-to-leh-with-turtuk-5n,Leh to Leh with Turtuk 5N,RE Himalayan - Solo - Double Sharing,51,2026-04-03,2026-08-30,31000
+domestic,leh-to-leh-with-turtuk-5n,Leh to Leh with Turtuk 5N,RE Himalayan - Solo - Triple Sharing,51,2026-04-03,2026-08-30,28000
+domestic,leh-to-leh-with-turtuk-5n,Leh to Leh with Turtuk 5N,SIC (Seat in Coach) - Double Sharing,51,2026-04-03,2026-08-30,22000
+domestic,leh-to-leh-with-turtuk-5n,Leh to Leh with Turtuk 5N,SIC (Seat in Coach) - Triple Sharing,51,2026-04-03,2026-08-30,19000
+domestic,leh-to-leh-with-turtuk-6n,Leh to Leh with Turtuk 6N,RE Himalayan - Pillion - Double Sharing,43,2026-04-02,2026-08-31,28000
+domestic,leh-to-leh-with-turtuk-6n,Leh to Leh with Turtuk 6N,RE Himalayan - Pillion - Triple Sharing,43,2026-04-02,2026-08-31,25000
+domestic,leh-to-leh-with-turtuk-6n,Leh to Leh with Turtuk 6N,RE Himalayan - Solo - Double Sharing,43,2026-04-02,2026-08-31,33000
+domestic,leh-to-leh-with-turtuk-6n,Leh to Leh with Turtuk 6N,RE Himalayan - Solo - Triple Sharing,43,2026-04-02,2026-08-31,30000
+domestic,leh-to-leh-with-turtuk-6n,Leh to Leh with Turtuk 6N,SIC (Seat in Coach) - Double Sharing,43,2026-04-02,2026-08-31,25000
+domestic,leh-to-leh-with-turtuk-6n,Leh to Leh with Turtuk 6N,SIC (Seat in Coach) - Triple Sharing,43,2026-04-02,2026-08-31,22000
+domestic,leh-to-leh-with-umling-la-hanle-tso-moriri,"Leh to Leh with Umling La, Hanle & Tso Moriri",RE Himalayan - Pillion - Double Sharing,30,2026-05-03,2026-11-24,33000
+domestic,leh-to-leh-with-umling-la-hanle-tso-moriri,"Leh to Leh with Umling La, Hanle & Tso Moriri",RE Himalayan - Pillion - Triple Sharing,30,2026-05-03,2026-11-24,30000
+domestic,leh-to-leh-with-umling-la-hanle-tso-moriri,"Leh to Leh with Umling La, Hanle & Tso Moriri",RE Himalayan - Solo - Double Sharing,30,2026-05-03,2026-11-24,43000
+domestic,leh-to-leh-with-umling-la-hanle-tso-moriri,"Leh to Leh with Umling La, Hanle & Tso Moriri",RE Himalayan - Solo - Triple Sharing,30,2026-05-03,2026-11-24,40000
+domestic,leh-to-leh-with-umling-la-hanle-tso-moriri,"Leh to Leh with Umling La, Hanle & Tso Moriri",SIC (Seat in Coach) - Double Sharing,30,2026-05-03,2026-11-24,32000
+domestic,leh-to-leh-with-umling-la-hanle-tso-moriri,"Leh to Leh with Umling La, Hanle & Tso Moriri",SIC (Seat in Coach) - Triple Sharing,30,2026-05-03,2026-11-24,29000
+domestic,manali-with-chandrataal-2n,Manali With Chandrataal 2N,Double Sharing,21,2026-05-29,2026-10-16,11500
+domestic,manali-with-chandrataal-2n,Manali With Chandrataal 2N,Triple Sharing,21,2026-05-29,2026-10-16,10500
+domestic,sangla-holi-special,Sangla Holi 3N 4D,Double Sharing,1,2026-02-28,2026-02-28,16000
+domestic,sangla-holi-special,Sangla Holi 3N 4D,Quad Sharing,1,2026-02-28,2026-02-28,14000
+domestic,sangla-holi-special,Sangla Holi 3N 4D,Triple Sharing,1,2026-02-28,2026-02-28,15000
+domestic,short-spiti-4n-5d,Short Spiti 4N 5D,Double Sharing,21,2026-05-29,2026-10-16,15500
+domestic,short-spiti-4n-5d,Short Spiti 4N 5D,Quad Sharing,21,2026-05-29,2026-10-16,13500
+domestic,short-spiti-4n-5d,Short Spiti 4N 5D,Triple Sharing,21,2026-05-29,2026-10-16,14500
+domestic,spiti-biking,Spiti Biking,RE Himalayan Dual - Triple Sharing,21,2026-05-30,2026-10-17,29000
+domestic,spiti-biking,Spiti Biking,RE Himalayan Solo - Triple Sharing,21,2026-05-30,2026-10-17,39000
+domestic,spiti-biking,Spiti Biking,SIC (Seat in Coach) - Triple Sharing,21,2026-05-30,2026-10-17,22500
+domestic,spiti-biking,Spiti Biking,Self Bike - Triple Sharing,21,2026-05-30,2026-10-17,20000
+domestic,spiti-valley-with-sangla-holi,Spiti With Sangla 6N 7D,Double Sharing,1,2026-02-28,2026-02-28,21999
+domestic,spiti-valley-with-sangla-holi,Spiti With Sangla 6N 7D,Triple Sharing,1,2026-02-28,2026-02-28,19999
+international,sri-lanka,Sri Lanka,Double Sharing,3,2026-03-14,2026-04-14,69999
+domestic,summer-spiti,Summer Spiti,Double Sharing,20,2026-06-06,2026-10-17,19500
+domestic,summer-spiti,Summer Spiti,Quad Sharing,20,2026-06-06,2026-10-17,17500
+domestic,summer-spiti,Summer Spiti,Triple Sharing,20,2026-06-06,2026-10-17,18500
+domestic,teen-taal,Teen Taal 3N,Double Sharing,21,2026-05-29,2026-10-16,15500
+domestic,teen-taal,Teen Taal 3N,Quad Sharing,21,2026-05-29,2026-10-16,14500
+domestic,teen-taal,Teen Taal 3N,Triple Sharing,21,2026-05-29,2026-10-16,15000
+domestic,teen-taal-with-gopuranjan-4n,Teen Taal with Gopuranjan 4N,Double Sharing,21,2026-05-29,2026-10-16,15500
+domestic,teen-taal-with-gopuranjan-4n,Teen Taal with Gopuranjan 4N,Quad Sharing,21,2026-05-29,2026-10-16,14500
+domestic,teen-taal-with-gopuranjan-4n,Teen Taal with Gopuranjan 4N,Triple Sharing,21,2026-05-29,2026-10-16,15000
+international,thailand-full-moon-party,Thailand Full Moon,Double Sharing,3,2026-03-01,2026-04-29,52999
+international,thailand-songkran-festival,Thailand  Songkaran,Double Sharing,1,2026-04-12,2026-04-12,59999
+international,vietnam,Veitnam,Double Sharing,2,2026-03-07,2026-03-21,59999
+domestic,winter-spiti-expedition,Winter spiti,Triple Sharing,1,2026-03-21,2026-03-21,18499
+domestic,zanskar-6n,Zanskar 6N,Triple Sharing,22,2026-05-23,2026-10-17,22999

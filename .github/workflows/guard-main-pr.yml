@@ -1,0 +1,36 @@
+name: Guard Main PR
+
+on:
+  pull_request_target:
+    types: [opened, reopened, synchronize, labeled, unlabeled, edited]
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  enforce-main-policy:
+    if: github.event.pull_request.base.ref == 'main'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Enforce hotfix label for codex branches into main
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const pr = context.payload.pull_request
+            const head = pr.head.ref || ""
+            const labels = (pr.labels || []).map((l) => l.name)
+
+            if (!head.startsWith("codex/")) {
+              core.info(`Head branch '${head}' is not codex/*, skipping guard.`)
+              return
+            }
+
+            if (labels.includes("hotfix-approved")) {
+              core.info("hotfix-approved label present; allowing PR to main")
+              return
+            }
+
+            core.setFailed(
+              "PRs from codex/* to main require label 'hotfix-approved'. Use staging first for normal feature flow."
+            )

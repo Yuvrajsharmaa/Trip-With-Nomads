@@ -1,0 +1,12 @@
+{
+  "apply": false,
+  "before_trip_count": 17,
+  "before_pricing_count": 3541,
+  "target_trip_count": 22,
+  "target_pricing_count": 1383,
+  "removed_non_launch_trip_count": 2,
+  "missing_domestic_date_slugs": [],
+  "preview_csv": "/Users/yuvrajsharma/Desktop/Trip-With-Nomads/framer-website/reports/launch_cutover/2026-02-25T02-57-50-858Z_launch_trip_pricing_preview.csv",
+  "trip_id_map_csv": "/Users/yuvrajsharma/Desktop/Trip-With-Nomads/framer-website/reports/launch_cutover/2026-02-25T02-57-50-858Z_launch_mapping_preview.csv",
+  "framer_trip_id_sync_csv": "/Users/yuvrajsharma/Desktop/Trip-With-Nomads/framer-website/reports/launch_cutover/2026-02-25T02-57-50-858Z_framer_trip_id_sync.csv"
+}

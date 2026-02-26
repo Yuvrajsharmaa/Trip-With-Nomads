@@ -431,4 +431,4 @@ Insert a "Contact Details" step between traveller details and review. More steps
 2. **Test mode**: Should we start in PayU test mode? (Recommended: yes)
 3. **Bookings table**: Does the `bookings` table already exist, or do we need to create it fresh?
 4. **Edge functions**: Are `create-booking` and `handle-payment` already deployed, or do they need fresh deployment?
-5. **Success/failure pages**: Do these exist on `twn2.framer.website`?
+5. **Success/failure pages**: Do these exist on `tripwithnomads.com`?
