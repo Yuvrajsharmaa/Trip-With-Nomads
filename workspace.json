@@ -1,6 +1,6 @@
 {
     "name": "Trip With Nomads",
-    "description": "Unified workspace for TWN Framer Website and Admin Dashboard",
+    "description": "Trip With Nomads Framer Website workspace",
     "recommendedConfig": {
         "scripts": "scripts/",
         "context": "MASTER_HANDOFF.md"
