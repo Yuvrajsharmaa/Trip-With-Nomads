@@ -1,0 +1,20 @@
+model = "gpt-5.2-codex"
+model_reasoning_effort = "high"
+
+# Trip With Nomads – global collaboration defaults
+[collaboration]
+explanation_style = "balanced"
+
+[framer]
+# Use Framer API directly; do not use Unframer MCP
+use_direct_api = true
+require_env = ["FRAMER_TOKEN", "FRAMER_PROJECT_ID"]
+
+[workflow]
+# Staging-first for Trip With Nomads
+staging_first = true
+
+# Trip With Nomads – communication preferences
+[collaboration.project_notes]
+audience = "UX designer"
+style = "plain language first, short technical summary"
