@@ -17,6 +17,8 @@
 - Use the Framer API directly (no Unframer MCP).
 - Use MCP for Framer/Supabase only when direct API isn’t available.
 - Never run new features on production for testing.
+- For new projects, read local instruction files first and create them if missing.
+- If a required MCP isn’t connected, ask before proceeding.
 
 ## Delivery Expectations
 - Always summarize: what changed, why, and how to test.
