@@ -67,23 +67,29 @@ serve(async (req) => {
 
         console.log(`🤖 Comparison: Calculated [${calculatedHash}] vs Received [${receivedHash}]`)
 
+        const normalizedStatus = (status || "").toLowerCase()
         const isValid = (calculatedHash === receivedHash)
-        const isSuccess = (status === "success" && isValid)
+        const isSuccess = (normalizedStatus === "success" && isValid)
+        const isPending = (normalizedStatus === "pending")
+        const nextPaymentStatus = isSuccess ? "paid" : (isPending ? "pending" : "failed")
 
         if (bookingId) {
             await supabase
                 .from("bookings")
                 .update({
-                    payment_status: isSuccess ? "paid" : "failed",
+                    payment_status: nextPaymentStatus,
                     payu_mihpayid: mihpayid || null,
                 })
                 .eq("id", bookingId)
         }
 
         // Redirect with booking_id parameter
-        const framerBase = "https://twn2.framer.website"
-        const targetPage = isSuccess ? "success" : "payment-failed"
-        const redirectUrl = `${framerBase}/${targetPage}?booking_id=${bookingId}`
+        const siteBase =
+            Deno.env.get("SITE_URL") ||
+            Deno.env.get("PAYMENT_REDIRECT_BASE_URL") ||
+            "https://tripwithnomads.com"
+        const targetPage = isSuccess ? "payment-success" : "payment-failed"
+        const redirectUrl = `${siteBase.replace(/\/$/, "")}/${targetPage}?booking_id=${bookingId}&payment_status=${nextPaymentStatus}`
 
         console.log(`🚀 Redirecting to: ${redirectUrl}`)
         return Response.redirect(redirectUrl, 303)

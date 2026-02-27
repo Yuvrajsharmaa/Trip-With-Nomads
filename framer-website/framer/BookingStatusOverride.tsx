@@ -61,6 +61,9 @@ interface BookingData {
     total_amount: number
     currency: string
     payment_status: "pending" | "paid" | "failed"
+    paid_amount?: number
+    due_amount?: number
+    discount_amount?: number
     payu_txnid: string
     name: string
     email: string
@@ -80,8 +83,52 @@ type LoadState = "loading" | "ready" | "error"
 let _data: BookingData | null = null
 let _state: LoadState = "loading"
 let _subs: Array<() => void> = []
+let _pendingCountdown = 0
 
 function notify() { _subs.forEach((fn) => fn()) }
+
+function toNumber(value: any): number {
+    const n = Number(value)
+    return Number.isFinite(n) ? n : 0
+}
+
+function summarizeAmounts(d: BookingData) {
+    const breakdown = Array.isArray(d.payment_breakdown) ? d.payment_breakdown : []
+    let lineItemsTotal = 0
+    let breakdownDiscount = 0
+
+    for (const row of breakdown) {
+        const unit = toNumber(row?.price)
+        const count = Math.max(1, toNumber((row as any)?.count || 1))
+        const total = unit * count
+        const label = String((row as any)?.label || "").toLowerCase()
+        const isDiscountRow = label.includes("discount") || unit < 0
+        if (isDiscountRow) {
+            breakdownDiscount += Math.abs(total)
+        } else {
+            lineItemsTotal += Math.max(0, total)
+        }
+    }
+
+    const explicitDiscount = toNumber((d as any).discount_amount)
+    const discount = explicitDiscount > 0 ? explicitDiscount : breakdownDiscount
+    const tax = toNumber(d.tax_amount)
+    const fallbackSubtotal = Math.max(0, lineItemsTotal - discount)
+    const totalFromRow = toNumber(d.total_amount)
+    const total = totalFromRow > 0 ? totalFromRow : Math.max(0, fallbackSubtotal + tax)
+    const subtotal = Math.max(0, total - tax)
+    const paidAmountRaw = toNumber((d as any).paid_amount)
+    const paidAmount = paidAmountRaw > 0 ? paidAmountRaw : (d.payment_status === "paid" ? total : 0)
+
+    return {
+        lineItemsTotal: lineItemsTotal > 0 ? lineItemsTotal : subtotal,
+        discount,
+        tax,
+        subtotal,
+        total,
+        paidAmount,
+    }
+}
 
 function useBooking(): [BookingData | null, LoadState] {
     const [, bump] = useState(0)
@@ -125,6 +172,7 @@ export function withBookingStatus(Component): ComponentType {
         useEffect(() => {
             _data = null
             _state = "loading"
+            _pendingCountdown = 0
 
             const fetchBooking = async () => {
                 const bookingId = new URLSearchParams(window.location.search).get("booking_id")
@@ -173,6 +221,9 @@ export function withBookingStatus(Component): ComponentType {
             }
 
             const go = async () => {
+                const isSuccessRoute = window.location.pathname.includes("/payment-success")
+                const bookingId = new URLSearchParams(window.location.search).get("booking_id") || ""
+
                 // 1. Initial fetch
                 let result = await fetchBooking()
 
@@ -204,12 +255,35 @@ export function withBookingStatus(Component): ComponentType {
                         const newStatus = result.data.payment_status
                         if (newStatus !== _data.payment_status) {
                             console.log("[BookingStatus] Status changed:", newStatus)
-                            _data = result.data
-                            if (_data.trip_title) result.data.trip_title = _data.trip_title // preserve title
+                            const existingTitle = _data.trip_title
+                            _data = {
+                                ...result.data,
+                                trip_title: result.data.trip_title || existingTitle,
+                            }
                             notify()
                         }
 
+                        if (newStatus === "paid" && !isSuccessRoute) {
+                            window.location.href = `/payment-success?booking_id=${bookingId}`
+                            return
+                        }
+
                         if (newStatus !== "pending") break
+                    }
+
+                    if (_data?.payment_status === "pending") {
+                        _pendingCountdown = 8
+                        notify()
+                        const timer = window.setInterval(() => {
+                            _pendingCountdown = Math.max(0, _pendingCountdown - 1)
+                            notify()
+                            if (_pendingCountdown === 0) {
+                                window.clearInterval(timer)
+                                if (isSuccessRoute) {
+                                    window.location.href = `/payment-failed?booking_id=${bookingId}&reason=pending-timeout`
+                                }
+                            }
+                        }, 1000)
                     }
                 }
             }
@@ -325,34 +399,22 @@ export function withTravellerCount(Component): ComponentType {
 // --- PAYMENT SUMMARY CARD ---
 
 export function withBasePrice(Component): ComponentType {
-    return textOverride((d) => {
-        const breakdown = d.payment_breakdown || []
-        if (breakdown.length === 0) return fmt(d.total_amount - d.tax_amount)
-        const totalItems = breakdown.reduce((sum, b) => sum + (b.count || 1), 0)
-        if (breakdown.length === 1) {
-            const b = breakdown[0]
-            const count = b.count || 1
-            return count > 1 ? `${fmt(b.price)} × ${count}` : fmt(b.price)
-        }
-        return breakdown
-            .map((b) => {
-                const count = b.count || 1
-                return count > 1 ? `${fmt(b.price)} × ${count}` : fmt(b.price)
-            })
-            .join(" + ")
-    })(Component)
+    return textOverride((d) => fmt(summarizeAmounts(d).lineItemsTotal))(Component)
 }
 
 export function withSubtotal(Component): ComponentType {
-    return textOverride((d) => fmt(d.total_amount - d.tax_amount))(Component)
+    return textOverride((d) => fmt(summarizeAmounts(d).subtotal))(Component)
 }
 
 export function withTaxAmount(Component): ComponentType {
-    return textOverride((d) => fmt(d.tax_amount))(Component)
+    return textOverride((d) => fmt(summarizeAmounts(d).tax))(Component)
 }
 
 export function withTotalPaid(Component): ComponentType {
-    return textOverride((d) => fmt(d.total_amount))(Component)
+    return textOverride((d) => {
+        const amounts = summarizeAmounts(d)
+        return fmt(d.payment_status === "paid" ? amounts.paidAmount : amounts.total)
+    })(Component)
 }
 
 
@@ -366,11 +428,11 @@ export function withTotalPaid(Component): ComponentType {
 export function withStatusBadge(Component): ComponentType {
     return textOverride(
         (d) => {
-            if (d.payment_status === "paid") return "✓ Confirmed"
-            if (d.payment_status === "failed") return "✗ Failed"
-            return "⏳ Pending"
+            if (d.payment_status === "paid") return "Confirmed"
+            if (d.payment_status === "failed") return "Failed"
+            return "Pending"
         },
-        "⏳ Loading…"
+        "Loading"
     )(Component)
 }
 
@@ -491,7 +553,10 @@ export function withSubheadingText(Component): ComponentType {
                 return "Your adventure awaits. Here's everything you need to know."
             if (d.payment_status === "failed")
                 return "Your payment didn't go through. Don't worry, you can try again."
-            return "We're confirming your payment…"
+            if (_pendingCountdown > 0) {
+                return `We're still confirming your payment. Rechecking and redirecting in ${_pendingCountdown}s.`
+            }
+            return "We're confirming your payment."
         },
         ""
     )(Component)
@@ -570,15 +635,19 @@ export function withRetryButton(Component): ComponentType {
             return <Component {...props} style={{ ...props.style, display: "none" }} />
         }
 
-        // Show on failure or pending — clickable "Try Again" that goes back
-        const handleRetry = () => {
-            // Navigate back to the trip page if we have a trip_id
-            if (data.trip_id) {
-                window.location.href = `/domestic-trips/${data.trip_id}`
-            } else {
-                window.location.href = "/domestic-trips"
+            // Show on failure or pending — clickable "Try Again"
+            const handleRetry = () => {
+                const params = new URLSearchParams(window.location.search)
+                const slug = params.get("slug")
+                if (data.trip_id) {
+                    const next = new URLSearchParams()
+                    next.set("tripId", data.trip_id)
+                    if (slug) next.set("slug", slug)
+                    window.location.href = `/checkout?${next.toString()}`
+                } else {
+                    window.location.href = "/checkout"
+                }
             }
-        }
 
         return (
             <div
@@ -599,7 +668,7 @@ export function withRetryButton(Component): ComponentType {
                 onMouseEnter={(e) => { (e.target as HTMLElement).style.opacity = "0.85" }}
                 onMouseLeave={(e) => { (e.target as HTMLElement).style.opacity = "1" }}
             >
-                ← Try Again
+                Try Again
             </div>
         )
     }
@@ -617,4 +686,3 @@ export function withHideOnFailure(Component): ComponentType {
         return <Component {...props} />
     }
 }
-
