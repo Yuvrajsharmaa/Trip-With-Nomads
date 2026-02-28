@@ -67,11 +67,11 @@ function decodeBase64Url(value: string): string {
     const padded = normalized + "=".repeat((4 - (normalized.length % 4 || 4)) % 4)
     try {
         if (typeof atob === "function") return atob(padded)
-    } catch (_) {}
+    } catch (_) { }
     try {
         // @ts-ignore Framer runtime may expose Buffer in some contexts.
         if (typeof Buffer !== "undefined") return Buffer.from(padded, "base64").toString("utf8")
-    } catch (_) {}
+    } catch (_) { }
     return ""
 }
 
@@ -594,8 +594,8 @@ function buildLocalPricingBreakdown(store: any): PricingBreakdown {
         couponType === "percent"
             ? round2((subtotal * couponValue) / 100)
             : couponType === "fixed"
-              ? couponValue
-              : toNumber(coupon?.discount_amount)
+                ? couponValue
+                : toNumber(coupon?.discount_amount)
     const couponDiscount = meetsCouponMinSubtotal
         ? round2(Math.max(0, Math.min(couponRaw, subtotal)))
         : 0
@@ -701,10 +701,10 @@ function computeTotals(store: any) {
         pricingBreakdown.discount_amount_total > 0
             ? pricingBreakdown.discount_amount_total
             : pricingBreakdown.applied_discount_source === "coupon"
-              ? pricingBreakdown.coupon_discount_amount
-              : pricingBreakdown.applied_discount_source === "early_bird"
-                ? pricingBreakdown.early_bird_discount_amount
-                : 0
+                ? pricingBreakdown.coupon_discount_amount
+                : pricingBreakdown.applied_discount_source === "early_bird"
+                    ? pricingBreakdown.early_bird_discount_amount
+                    : 0
     )
     const taxableSubtotal = round2(
         pricingBreakdown.taxable_amount > 0
@@ -719,8 +719,8 @@ function computeTotals(store: any) {
         round2(pricingBreakdown.tax_amount) > 0
             ? round2(pricingBreakdown.tax_amount)
             : computedTaxFromTaxable > 0
-              ? computedTaxFromTaxable
-              : taxFromServerTotal
+                ? computedTaxFromTaxable
+                : taxFromServerTotal
     const total =
         round2(pricingBreakdown.total_amount) > 0
             ? round2(pricingBreakdown.total_amount)
@@ -819,16 +819,14 @@ function showInlineError(errors: string | string[]) {
     toast.id = "__checkout_error_toast"
 
     toast.innerHTML = `
-        <div style="font-weight:700; margin-bottom:${messages.length > 1 ? "8px" : "0"};">⚠️ ${
-        messages.length === 1 ? messages[0] : "Please complete:"
-    }</div>
-        ${
-        messages.length > 1
+        <div style="font-weight:700; margin-bottom:${messages.length > 1 ? "8px" : "0"};">⚠️ ${messages.length === 1 ? messages[0] : "Please complete:"
+        }</div>
+        ${messages.length > 1
             ? '<div style="opacity:.9;font-size:13px;line-height:1.5;">' +
-              messages.map((m) => `• ${m}`).join("<br>") +
-              "</div>"
+            messages.map((m) => `• ${m}`).join("<br>") +
+            "</div>"
             : ""
-    }
+        }
     `
 
     Object.assign(toast.style, {
@@ -905,11 +903,12 @@ async function fetchTripIdBySlug(slug: string): Promise<string> {
     const res = await fetch(
         `${SUPABASE_URL}/rest/v1/trips?slug=eq.${encodeURIComponent(cleanSlug)}&select=id&limit=1`,
         {
+            priority: "high",
             headers: {
                 apikey: SUPABASE_KEY,
                 Authorization: `Bearer ${SUPABASE_KEY}`,
             },
-        }
+        } as any
     )
 
     if (!res.ok) return ""
@@ -926,11 +925,12 @@ async function fetchTripContextById(tripId: string): Promise<{ id: string; slug:
             cleanTripId
         )}&select=id,slug,title&limit=1`,
         {
+            priority: "high",
             headers: {
                 apikey: SUPABASE_KEY,
                 Authorization: `Bearer ${SUPABASE_KEY}`,
             },
-        }
+        } as any
     )
     if (!res.ok) return null
     const rows = await res.json().catch(() => [])
@@ -959,11 +959,12 @@ async function fetchTripPricing(tripId: string): Promise<any[]> {
             cleanTripId
         )}&select=*`,
         {
+            priority: "high",
             headers: {
                 apikey: SUPABASE_KEY,
                 Authorization: `Bearer ${SUPABASE_KEY}`,
             },
-        }
+        } as any
     )
 
     if (!res.ok) return []
@@ -992,11 +993,12 @@ async function fetchTripDisplayPrice(params: { slug?: string; tripId?: string })
 
     const request = fetch(`${SUPABASE_URL}/functions/v1/get-trip-display-price?${query.toString()}`, {
         method: "GET",
+        priority: "high",
         headers: {
             apikey: SUPABASE_KEY,
             Authorization: `Bearer ${SUPABASE_KEY}`,
         },
-    })
+    } as any)
         .then(async (res) => {
             if (!res.ok) return null
             const data = await res.json().catch(() => null)
@@ -1126,11 +1128,11 @@ export function withCheckoutBootstrap(Component): ComponentType {
                 const travellers = inviteOnly
                     ? normalizeTravellers(store.travellers || [])
                     : sanitizeTravellersForDate(
-                          pricing,
-                          date,
-                          normalizeTravellers(store.travellers || []),
-                          transport
-                      )
+                        pricing,
+                        date,
+                        normalizeTravellers(store.travellers || []),
+                        transport
+                    )
 
                 const nextState = {
                     ...store,
@@ -1564,9 +1566,9 @@ export function withTravellerVehicleSelect(Component): ComponentType {
                         ...(hasMultipleVehicleOptions
                             ? {}
                             : {
-                                  display: "none",
-                                  pointerEvents: "none",
-                              }),
+                                display: "none",
+                                pointerEvents: "none",
+                            }),
                     }}
                 />
             </div>
@@ -1964,8 +1966,8 @@ export function withCheckoutDiscount(Component): ComponentType {
             totals.earlyBirdDiscount > 0
                 ? totals.earlyBirdDiscount
                 : totals.couponDiscount > 0
-                  ? totals.couponDiscount
-                  : totals.discount
+                    ? totals.couponDiscount
+                    : totals.discount
         return `- ${fmtINR(primaryDiscount)}`
     })(Component)
 }
@@ -2348,20 +2350,20 @@ function normalizeTripId(value: any): string {
 function readTripIdCandidate(props: any): string {
     return normalizeTripId(
         props?.tripId ||
-            props?.["data-trip-id"] ||
-            props?.text ||
-            (typeof props?.children === "string" ? props.children : "")
+        props?.["data-trip-id"] ||
+        props?.text ||
+        (typeof props?.children === "string" ? props.children : "")
     )
 }
 
 function readTripSlugCandidate(props: any): string {
     return normalizeSlug(
         props?.slug ||
-            props?.["data-trip-slug"] ||
-            props?.href ||
-            props?.link ||
-            props?.text ||
-            (typeof props?.children === "string" ? props.children : "")
+        props?.["data-trip-slug"] ||
+        props?.href ||
+        props?.link ||
+        props?.text ||
+        (typeof props?.children === "string" ? props.children : "")
     )
 }
 
@@ -2417,7 +2419,7 @@ export function withTripPrimaryPrice(Component): ComponentType {
         const value = toNumber(summary?.payable_price)
         const text = value > 0 ? fmtINR(value) : "₹0"
         return <Component {...props} text={text} />
-}
+    }
 }
 
 export function withTripStrikePrice(Component): ComponentType {
@@ -2443,7 +2445,7 @@ export function withTripStrikePrice(Component): ComponentType {
                 }}
             />
         )
-}
+    }
 }
 
 export function withTripSaveBadge(Component): ComponentType {
