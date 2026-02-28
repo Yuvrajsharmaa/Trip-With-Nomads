@@ -291,13 +291,30 @@ export function withPopupOverlay(Component: ComponentType): ComponentType {
                         onClick={(e) => e.stopPropagation()}
                         style={{
                             position: "relative",
-                            width: "fit-content",
+                            display: "flex",
+                            justifyContent: "center",
+                            alignItems: "center",
                             maxWidth: "92vw",
+                            maxHeight: "92vh",
                             backgroundColor: "transparent",
                             animation: `${animationName} 0.35s ease forwards`,
                         }}
                     >
-                        <Component {...props} />
+                        <Component
+                            {...props}
+                            style={{
+                                ...props.style,
+                                position: "relative",
+                                width: "fit-content",
+                                height: "fit-content",
+                                margin: "auto",
+                                top: "auto",
+                                bottom: "auto",
+                                left: "auto",
+                                right: "auto",
+                                transform: "none"
+                            }}
+                        />
                     </div>
                 </div>
             </>,
