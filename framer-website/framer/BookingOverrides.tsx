@@ -137,11 +137,12 @@ export function withTripIdSource(Component): ComponentType {
             fetch(
                 `${SUPABASE_URL}/rest/v1/trip_pricing?trip_id=eq.${id}&select=*`,
                 {
+                    priority: "high",
                     headers: {
                         apikey: SUPABASE_KEY,
                         Authorization: `Bearer ${SUPABASE_KEY}`,
                     },
-                }
+                } as any
             )
                 .then((res) => res.json())
                 .then((data) => {

@@ -38,3 +38,9 @@ Thumbs.db
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
+
+# Framer/MCP local backups and temp artifacts
+framer-website/.booking_status_live_backup_*.tsx
+framer-website/.booking_status_rollback.tsx
+framer-website/.framer_backups/
+framer-website/.tmp_project_xml.txt

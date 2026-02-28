@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { createPortal } from "react-dom";
+import { RenderTarget } from "framer";
 import type { ComponentType } from "react";
 
 const POPUP_DELAY_MS = 15_000;
@@ -240,6 +241,14 @@ export function withPopupOverlay(Component: ComponentType): ComponentType {
             [isClosing]
         );
 
+        const isFramer =
+            RenderTarget.current() === RenderTarget.canvas ||
+            (typeof window !== "undefined" && window.location.href.includes("framer.com"));
+
+        if (isFramer) {
+            return null;
+        }
+
         if (!domReady || !isActive) return null;
 
         return createPortal(
@@ -282,11 +291,30 @@ export function withPopupOverlay(Component: ComponentType): ComponentType {
                         onClick={(e) => e.stopPropagation()}
                         style={{
                             position: "relative",
-                            width: "min(92vw, 820px)",
+                            display: "flex",
+                            justifyContent: "center",
+                            alignItems: "center",
+                            maxWidth: "92vw",
+                            maxHeight: "92vh",
+                            backgroundColor: "transparent",
                             animation: `${animationName} 0.35s ease forwards`,
                         }}
                     >
-                        <Component {...props} />
+                        <Component
+                            {...props}
+                            style={{
+                                ...props.style,
+                                position: "relative",
+                                width: "fit-content",
+                                height: "fit-content",
+                                margin: "auto",
+                                top: "auto",
+                                bottom: "auto",
+                                left: "auto",
+                                right: "auto",
+                                transform: "none"
+                            }}
+                        />
                     </div>
                 </div>
             </>,
