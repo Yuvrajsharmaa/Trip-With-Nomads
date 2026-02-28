@@ -171,8 +171,6 @@ export function withPopupOverlay(Component: ComponentType): ComponentType {
         const [isVisible, setIsVisible] = useState(false);
         const [isClosing, setIsClosing] = useState(false);
 
-        const isCanvas = RenderTarget.current() === RenderTarget.canvas;
-
         useEffect(() => setDomReady(true), []);
 
         const handleClose = useCallback(() => {
@@ -243,12 +241,12 @@ export function withPopupOverlay(Component: ComponentType): ComponentType {
             [isClosing]
         );
 
-        if (isCanvas) {
-            return (
-                <div style={{ pointerEvents: "none" }}>
-                    <Component {...props} />
-                </div>
-            );
+        const isFramer =
+            RenderTarget.current() === RenderTarget.canvas ||
+            (typeof window !== "undefined" && window.location.href.includes("framer.com"));
+
+        if (isFramer) {
+            return null;
         }
 
         if (!domReady || !isActive) return null;
