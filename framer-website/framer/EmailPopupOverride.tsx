@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { createPortal } from "react-dom";
+import { RenderTarget } from "framer";
 import type { ComponentType } from "react";
 
 const POPUP_DELAY_MS = 15_000;
@@ -170,6 +171,8 @@ export function withPopupOverlay(Component: ComponentType): ComponentType {
         const [isVisible, setIsVisible] = useState(false);
         const [isClosing, setIsClosing] = useState(false);
 
+        const isCanvas = RenderTarget.current() === RenderTarget.canvas;
+
         useEffect(() => setDomReady(true), []);
 
         const handleClose = useCallback(() => {
@@ -240,6 +243,14 @@ export function withPopupOverlay(Component: ComponentType): ComponentType {
             [isClosing]
         );
 
+        if (isCanvas) {
+            return (
+                <div style={{ pointerEvents: "none" }}>
+                    <Component {...props} />
+                </div>
+            );
+        }
+
         if (!domReady || !isActive) return null;
 
         return createPortal(
@@ -282,7 +293,9 @@ export function withPopupOverlay(Component: ComponentType): ComponentType {
                         onClick={(e) => e.stopPropagation()}
                         style={{
                             position: "relative",
-                            width: "min(92vw, 820px)",
+                            width: "fit-content",
+                            maxWidth: "92vw",
+                            backgroundColor: "transparent",
                             animation: `${animationName} 0.35s ease forwards`,
                         }}
                     >
