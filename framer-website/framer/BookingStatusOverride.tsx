@@ -135,6 +135,7 @@ interface BookingData {
     created_at: string
     // Populated from trips table join
     trip_title?: string
+    trip_slug?: string
 }
 
 type LoadState = "loading" | "ready" | "error"
@@ -336,7 +337,7 @@ export function withBookingStatus(Component): ComponentType {
                     if (booking.trip_id) {
                         try {
                             const tripRes = await fetch(
-                                `${SUPABASE_URL}/rest/v1/trips?id=eq.${booking.trip_id}&select=title`,
+                                `${SUPABASE_URL}/rest/v1/trips?id=eq.${booking.trip_id}&select=title,slug`,
                                 {
                                     headers: {
                                         apikey: SUPABASE_KEY,
@@ -348,6 +349,7 @@ export function withBookingStatus(Component): ComponentType {
                                 const tripRows = await tripRes.json()
                                 if (tripRows?.length) {
                                     booking.trip_title = tripRows[0].title
+                                    booking.trip_slug = tripRows[0].slug
                                 }
                             }
                         } catch (tripErr) {
@@ -364,7 +366,7 @@ export function withBookingStatus(Component): ComponentType {
             const loadTripTitle = async (tripId: string) => {
                 try {
                     const res = await fetch(
-                        `${SUPABASE_URL}/rest/v1/trips?id=eq.${tripId}&select=title`,
+                        `${SUPABASE_URL}/rest/v1/trips?id=eq.${tripId}&select=title,slug`,
                         {
                             headers: {
                                 apikey: SUPABASE_KEY,
@@ -377,6 +379,7 @@ export function withBookingStatus(Component): ComponentType {
                         if (rows?.[0]?.title) {
                             if (_data) {
                                 _data.trip_title = rows[0].title
+                                if (rows[0].slug) _data.trip_slug = rows[0].slug
                                 notify()
                             }
                         }
@@ -417,6 +420,12 @@ export function withBookingStatus(Component): ComponentType {
                 _data = result.data
                 _state = "ready"
                 notify()
+
+                // Clean the URL so booking_id doesn't carry forward to other pages
+                if (typeof window !== "undefined" && window.history?.replaceState) {
+                    const cleanUrl = window.location.pathname
+                    window.history.replaceState({}, "", cleanUrl)
+                }
 
                 if (_data.trip_id) loadTripTitle(_data.trip_id)
 
@@ -869,6 +878,7 @@ export function withStatusIcon(Component): ComponentType {
 export function withRetryButton(Component): ComponentType {
     return (props: any) => {
         const [data, state] = useBooking()
+        const [retrying, setRetrying] = useState(false)
 
         if (state !== "ready" || !data) {
             return <Component {...props} style={{ ...props.style, display: "none" }} />
@@ -879,13 +889,63 @@ export function withRetryButton(Component): ComponentType {
             return <Component {...props} style={{ ...props.style, display: "none" }} />
         }
 
-        // Show on failure or pending — clickable "Try Again" that goes back
-        const handleRetry = () => {
-            // Navigate back to the trip page if we have a trip_id
-            if (data.trip_id) {
-                window.location.href = `${DOMESTIC_TRIPS_BASE_URL}/${data.trip_id}`
-            } else {
-                window.location.href = DOMESTIC_TRIPS_BASE_URL
+        // Retry payment by calling the retry-payment Edge Function
+        const handleRetry = async () => {
+            if (retrying) return
+            setRetrying(true)
+
+            try {
+                const res = await fetch(
+                    `${SUPABASE_URL}/functions/v1/retry-payment`,
+                    {
+                        method: "POST",
+                        headers: {
+                            "Content-Type": "application/json",
+                            apikey: SUPABASE_KEY,
+                            Authorization: `Bearer ${SUPABASE_KEY}`,
+                        },
+                        body: JSON.stringify({ booking_id: data.id }),
+                    }
+                )
+
+                if (!res.ok) throw new Error("Retry failed")
+
+                const result = await res.json()
+                const payu = result?.payu
+
+                if (payu?.action && payu?.key) {
+                    // Build and submit PayU form
+                    const form = document.createElement("form")
+                    form.method = "POST"
+                    form.action = payu.action
+                    form.style.display = "none"
+
+                    for (const [key, value] of Object.entries(payu)) {
+                        if (key === "action") continue
+                        const input = document.createElement("input")
+                        input.type = "hidden"
+                        input.name = key
+                        input.value = String(value)
+                        form.appendChild(input)
+                    }
+
+                    document.body.appendChild(form)
+                    form.submit()
+                    return
+                }
+
+                throw new Error("Invalid PayU response")
+            } catch (err) {
+                console.error("[RetryPayment] Error:", err)
+                // Fallback: navigate to trip page for a fresh booking
+                const slug = data.trip_slug || data.trip_id
+                if (slug) {
+                    window.location.href = `${DOMESTIC_TRIPS_BASE_URL}/${slug}`
+                } else {
+                    window.location.href = DOMESTIC_TRIPS_BASE_URL
+                }
+            } finally {
+                setRetrying(false)
             }
         }
 
@@ -893,22 +953,26 @@ export function withRetryButton(Component): ComponentType {
             <div
                 onClick={handleRetry}
                 style={{
-                    cursor: "pointer",
+                    cursor: retrying ? "wait" : "pointer",
                     display: "inline-block",
                     padding: "14px 32px",
-                    background: "linear-gradient(135deg, #1b91c9, #0085c1)",
+                    background: retrying
+                        ? "linear-gradient(135deg, #94a3b8, #64748b)"
+                        : "linear-gradient(135deg, #1b91c9, #0085c1)",
                     color: "#fff",
                     borderRadius: "12px",
                     fontSize: "16px",
                     fontWeight: 600,
                     textAlign: "center" as const,
                     marginTop: "16px",
-                    transition: "opacity 0.2s",
+                    transition: "all 0.2s",
+                    opacity: retrying ? 0.7 : 1,
+                    pointerEvents: retrying ? "none" as const : "auto" as const,
                 }}
-                onMouseEnter={(e) => { (e.target as HTMLElement).style.opacity = "0.85" }}
-                onMouseLeave={(e) => { (e.target as HTMLElement).style.opacity = "1" }}
+                onMouseEnter={(e) => { if (!retrying) (e.target as HTMLElement).style.opacity = "0.85" }}
+                onMouseLeave={(e) => { if (!retrying) (e.target as HTMLElement).style.opacity = "1" }}
             >
-                Try Again
+                {retrying ? "Retrying…" : "Try Again"}
             </div>
         )
     }
