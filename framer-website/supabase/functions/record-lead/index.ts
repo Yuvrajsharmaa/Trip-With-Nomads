@@ -22,6 +22,8 @@ const LEAD_HEADERS = [
     "Name",
     "Email",
     "Phone",
+    "Instagram ID",
+    "Reason",
     "Source",
     "Page URL",
     "Trip ID",
@@ -29,7 +31,7 @@ const LEAD_HEADERS = [
     "UTM Source",
     "UTM Medium",
     "UTM Campaign",
-    "Status"
+    "Status",
 ];
 
 function ordinalSuffix(day: number): string {
@@ -89,6 +91,10 @@ serve(async (req) => {
         const leadId = body?.lead_id ? String(body.lead_id).trim() : undefined;
         const status = body?.status ? String(body.status).trim() : "submitted";
 
+        // Extra fields for sheets only (not in DB leads table)
+        const instagram_id = body?.instagram_id ? String(body.instagram_id).trim() : null;
+        const reason = body?.reason ? String(body.reason).trim() : null;
+
         const payload = {
             ...(leadId ? { id: leadId } : {}),
             email,
@@ -143,12 +149,16 @@ serve(async (req) => {
         let sheetId = "";
         let sheetTab = "Leads";
 
-        const ORIGINAL_SHEET_ID = String(Deno.env.get("GOOGLE_SHEET_ID") || "");
+        // ── Sheet routing ─────────────────────────────────
+        // NTC Invites → new dedicated sheet
+        const NTC_SHEET_ID = "1rPlFfSJHFdYTSlj8dp5Q0R3LfHm9mhsCBwkeFQo4hbA";
+        // Trip Page Leads sheet
         const TRIPS_SHEET_ID = String(Deno.env.get("GOOGLE_SHEET_ID_TRIPS") || "1_rewyVrFYtAiy-xPJ0d_xLm8aHRcAeYP0o2BM7EfkkA");
+        // General / waitlist popup sheet
         const GENERAL_SHEET_ID = String(Deno.env.get("GOOGLE_SHEET_ID_GENERAL") || "1tA0hKhcGgo84hmD4iteOCw3Ar26SdDt6VQ2Wy5YTDoQ");
 
         if (payload.source === "booking_invite") {
-            sheetId = ORIGINAL_SHEET_ID;
+            sheetId = NTC_SHEET_ID;
             sheetTab = status === "partial_fill" ? "Abandoned Leads" : "NTC - Invites";
         } else if (payload.source === "trip_page_lead") {
             sheetId = TRIPS_SHEET_ID;
@@ -166,6 +176,8 @@ serve(async (req) => {
                 lead.name || "",
                 lead.email,
                 lead.phone || "",
+                instagram_id || "",
+                reason || "",
                 lead.source || "",
                 lead.page_url || "",
                 lead.trip_id || "",
@@ -173,7 +185,7 @@ serve(async (req) => {
                 lead.utm_source || "",
                 lead.utm_medium || "",
                 lead.utm_campaign || "",
-                status
+                status,
             ];
             try {
                 await appendRow(sheetId, sheetTab, values, LEAD_HEADERS);
@@ -188,7 +200,7 @@ serve(async (req) => {
             lead_id: lead.id,
             sheet_logged: sheetLogged,
             sheet_tab: sheetTab,
-            sheet_id: sheetId
+            sheet_id: sheetId,
         });
     } catch (err) {
         console.error("[record-lead] error", err);
