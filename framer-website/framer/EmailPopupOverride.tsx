@@ -410,3 +410,159 @@ export function withPopupFormSubmit(Component: ComponentType): ComponentType {
         );
     };
 }
+
+// =====================================================
+// LEAD TRACKING OVERRIDES (NTC Invite & Trip Page Leads)
+// =====================================================
+
+async function postLeadWithSource(
+    form: HTMLFormElement | null,
+    source: string,
+    statusOverride?: string
+): Promise<boolean> {
+    const root = form ?? document;
+    const email = normalizeEmail(
+        findInputValue(root, [
+            'input[type="email"]',
+            'input[name="email"]',
+            'input[name*="email" i]',
+            'input[placeholder*="email" i]',
+        ])
+    );
+    if (!email || !isValidEmail(email)) {
+        console.warn(`[LeadTracking:${source}] Invalid email; skipping`);
+        return false;
+    }
+
+    const name = findInputValue(root, [
+        'input[name="name"]',
+        'input[name*="name" i]',
+        'input[placeholder*="name" i]',
+    ]);
+    const phone = findInputValue(root, [
+        'input[type="tel"]',
+        'input[name="phone"]',
+        'input[name*="phone" i]',
+        'input[placeholder*="phone" i]',
+    ]);
+    const instagram_id = findInputValue(root, [
+        'input[name="instagram"]',
+        'input[name*="instagram" i]',
+        'input[placeholder*="instagram" i]',
+        'input[name="instagram_id"]',
+        'input[name*="insta" i]',
+        'input[placeholder*="insta" i]',
+    ]);
+    const reason = findInputValue(root, [
+        'textarea[name="reason"]',
+        'textarea[name*="reason" i]',
+        'textarea[placeholder*="reason" i]',
+        'input[name="reason"]',
+        'input[name*="reason" i]',
+        'textarea[name*="why" i]',
+        'textarea[placeholder*="why" i]',
+        'input[placeholder*="why" i]',
+    ]);
+
+    const params = new URLSearchParams(window.location.search);
+    const projectRef = getProjectRefFromHost();
+    const endpoint = `https://${projectRef}.supabase.co/functions/v1/record-lead`;
+
+    try {
+        const response = await fetch(endpoint, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+                email,
+                name: name || null,
+                phone: phone || null,
+                instagram_id: instagram_id || null,
+                reason: reason || null,
+                source,
+                status: statusOverride || "submitted",
+                page_url: window.location.href,
+                trip_id: params.get("tripId"),
+                trip_slug: params.get("slug"),
+                utm_source: params.get("utm_source"),
+                utm_medium: params.get("utm_medium"),
+                utm_campaign: params.get("utm_campaign"),
+            }),
+            keepalive: true,
+        });
+
+        const payload = await response.json().catch(() => ({}));
+        if (!response.ok || payload?.ok !== true) {
+            console.error(`[LeadTracking:${source}] Failed`, {
+                status: response.status,
+                payload,
+            });
+            return false;
+        }
+
+        console.log(`[LeadTracking:${source}] Captured`, {
+            leadId: payload?.lead_id,
+            sheetLogged: payload?.sheet_logged,
+            sheetTab: payload?.sheet_tab,
+        });
+        return true;
+    } catch (error) {
+        console.error(`[LeadTracking:${source}] Request failed`, error);
+        return false;
+    }
+}
+
+/**
+ * withBookingInviteTracking — Apply to the NTC Invite form submit button.
+ * Scrapes name, email, phone, Instagram ID, and reason from the form
+ * and sends to record-lead with source = "booking_invite".
+ */
+export function withBookingInviteTracking(Component: ComponentType): ComponentType {
+    return function BookingInviteTracking(props: any) {
+        return (
+            <Component
+                {...props}
+                onClick={async (event: any) => {
+                    props.onClick?.(event);
+                    const form = event?.currentTarget?.closest?.("form") || null;
+                    await postLeadWithSource(form, "booking_invite");
+                }}
+                onSubmit={async (event: any) => {
+                    props.onSubmit?.(event);
+                    const form =
+                        event?.currentTarget?.tagName === "FORM"
+                            ? event.currentTarget
+                            : event?.currentTarget?.closest?.("form") || null;
+                    await postLeadWithSource(form, "booking_invite");
+                }}
+            />
+        );
+    };
+}
+
+/**
+ * withTripPageLeadTracking — Apply to trip page lead capture forms.
+ * Scrapes name, email, phone, Instagram ID, and reason from the form
+ * and sends to record-lead with source = "trip_page_lead".
+ */
+export function withTripPageLeadTracking(Component: ComponentType): ComponentType {
+    return function TripPageLeadTracking(props: any) {
+        return (
+            <Component
+                {...props}
+                onClick={async (event: any) => {
+                    props.onClick?.(event);
+                    const form = event?.currentTarget?.closest?.("form") || null;
+                    await postLeadWithSource(form, "trip_page_lead");
+                }}
+                onSubmit={async (event: any) => {
+                    props.onSubmit?.(event);
+                    const form =
+                        event?.currentTarget?.tagName === "FORM"
+                            ? event.currentTarget
+                            : event?.currentTarget?.closest?.("form") || null;
+                    await postLeadWithSource(form, "trip_page_lead");
+                }}
+            />
+        );
+    };
+}

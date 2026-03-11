@@ -67,11 +67,11 @@ function decodeBase64Url(value: string): string {
     const padded = normalized + "=".repeat((4 - (normalized.length % 4 || 4)) % 4)
     try {
         if (typeof atob === "function") return atob(padded)
-    } catch (_) {}
+    } catch (_) { }
     try {
         // @ts-ignore Framer runtime may expose Buffer in some contexts.
         if (typeof Buffer !== "undefined") return Buffer.from(padded, "base64").toString("utf8")
-    } catch (_) {}
+    } catch (_) { }
     return ""
 }
 
@@ -594,8 +594,8 @@ function buildLocalPricingBreakdown(store: any): PricingBreakdown {
         couponType === "percent"
             ? round2((subtotal * couponValue) / 100)
             : couponType === "fixed"
-              ? couponValue
-              : toNumber(coupon?.discount_amount)
+                ? couponValue
+                : toNumber(coupon?.discount_amount)
     const couponDiscount = meetsCouponMinSubtotal
         ? round2(Math.max(0, Math.min(couponRaw, subtotal)))
         : 0
@@ -701,10 +701,10 @@ function computeTotals(store: any) {
         pricingBreakdown.discount_amount_total > 0
             ? pricingBreakdown.discount_amount_total
             : pricingBreakdown.applied_discount_source === "coupon"
-              ? pricingBreakdown.coupon_discount_amount
-              : pricingBreakdown.applied_discount_source === "early_bird"
-                ? pricingBreakdown.early_bird_discount_amount
-                : 0
+                ? pricingBreakdown.coupon_discount_amount
+                : pricingBreakdown.applied_discount_source === "early_bird"
+                    ? pricingBreakdown.early_bird_discount_amount
+                    : 0
     )
     const taxableSubtotal = round2(
         pricingBreakdown.taxable_amount > 0
@@ -719,8 +719,8 @@ function computeTotals(store: any) {
         round2(pricingBreakdown.tax_amount) > 0
             ? round2(pricingBreakdown.tax_amount)
             : computedTaxFromTaxable > 0
-              ? computedTaxFromTaxable
-              : taxFromServerTotal
+                ? computedTaxFromTaxable
+                : taxFromServerTotal
     const total =
         round2(pricingBreakdown.total_amount) > 0
             ? round2(pricingBreakdown.total_amount)
@@ -729,7 +729,8 @@ function computeTotals(store: any) {
         String(store?.paymentMode || "").trim().toLowerCase() === "partial_25"
             ? "partial_25"
             : "full"
-    const partialDeposit = round2(subtotal * 0.25)
+    // Deposit is computed from final payable amount (after discount + tax).
+    const partialDeposit = round2(total * 0.25)
     const payableNow =
         paymentMode === "partial_25"
             ? round2(Math.min(Math.max(0, partialDeposit), total))
@@ -819,16 +820,14 @@ function showInlineError(errors: string | string[]) {
     toast.id = "__checkout_error_toast"
 
     toast.innerHTML = `
-        <div style="font-weight:700; margin-bottom:${messages.length > 1 ? "8px" : "0"};">⚠️ ${
-        messages.length === 1 ? messages[0] : "Please complete:"
-    }</div>
-        ${
-        messages.length > 1
+        <div style="font-weight:700; margin-bottom:${messages.length > 1 ? "8px" : "0"};">⚠️ ${messages.length === 1 ? messages[0] : "Please complete:"
+        }</div>
+        ${messages.length > 1
             ? '<div style="opacity:.9;font-size:13px;line-height:1.5;">' +
-              messages.map((m) => `• ${m}`).join("<br>") +
-              "</div>"
+            messages.map((m) => `• ${m}`).join("<br>") +
+            "</div>"
             : ""
-    }
+        }
     `
 
     Object.assign(toast.style, {
@@ -905,11 +904,12 @@ async function fetchTripIdBySlug(slug: string): Promise<string> {
     const res = await fetch(
         `${SUPABASE_URL}/rest/v1/trips?slug=eq.${encodeURIComponent(cleanSlug)}&select=id&limit=1`,
         {
+            priority: "high",
             headers: {
                 apikey: SUPABASE_KEY,
                 Authorization: `Bearer ${SUPABASE_KEY}`,
             },
-        }
+        } as any
     )
 
     if (!res.ok) return ""
@@ -926,11 +926,12 @@ async function fetchTripContextById(tripId: string): Promise<{ id: string; slug:
             cleanTripId
         )}&select=id,slug,title&limit=1`,
         {
+            priority: "high",
             headers: {
                 apikey: SUPABASE_KEY,
                 Authorization: `Bearer ${SUPABASE_KEY}`,
             },
-        }
+        } as any
     )
     if (!res.ok) return null
     const rows = await res.json().catch(() => [])
@@ -959,11 +960,12 @@ async function fetchTripPricing(tripId: string): Promise<any[]> {
             cleanTripId
         )}&select=*`,
         {
+            priority: "high",
             headers: {
                 apikey: SUPABASE_KEY,
                 Authorization: `Bearer ${SUPABASE_KEY}`,
             },
-        }
+        } as any
     )
 
     if (!res.ok) return []
@@ -992,11 +994,12 @@ async function fetchTripDisplayPrice(params: { slug?: string; tripId?: string })
 
     const request = fetch(`${SUPABASE_URL}/functions/v1/get-trip-display-price?${query.toString()}`, {
         method: "GET",
+        priority: "high",
         headers: {
             apikey: SUPABASE_KEY,
             Authorization: `Bearer ${SUPABASE_KEY}`,
         },
-    })
+    } as any)
         .then(async (res) => {
             if (!res.ok) return null
             const data = await res.json().catch(() => null)
@@ -1051,6 +1054,15 @@ function withTextFromState(getText: (store: any) => string, fallback = "—") {
             return <Component {...props} text={text} />
         }
     }
+}
+
+function readNodeText(value: any): string {
+    if (value == null) return ""
+    if (typeof value === "string" || typeof value === "number") return String(value)
+    if (Array.isArray(value)) return value.map((item) => readNodeText(item)).join(" ")
+    if (React.isValidElement(value)) return readNodeText((value as any)?.props?.children)
+    if (typeof value === "object" && value?.props) return readNodeText(value.props.children)
+    return ""
 }
 
 export function withCheckoutBootstrap(Component): ComponentType {
@@ -1126,11 +1138,11 @@ export function withCheckoutBootstrap(Component): ComponentType {
                 const travellers = inviteOnly
                     ? normalizeTravellers(store.travellers || [])
                     : sanitizeTravellersForDate(
-                          pricing,
-                          date,
-                          normalizeTravellers(store.travellers || []),
-                          transport
-                      )
+                        pricing,
+                        date,
+                        normalizeTravellers(store.travellers || []),
+                        transport
+                    )
 
                 const nextState = {
                     ...store,
@@ -1564,9 +1576,9 @@ export function withTravellerVehicleSelect(Component): ComponentType {
                         ...(hasMultipleVehicleOptions
                             ? {}
                             : {
-                                  display: "none",
-                                  pointerEvents: "none",
-                              }),
+                                display: "none",
+                                pointerEvents: "none",
+                            }),
                     }}
                 />
             </div>
@@ -1964,8 +1976,8 @@ export function withCheckoutDiscount(Component): ComponentType {
             totals.earlyBirdDiscount > 0
                 ? totals.earlyBirdDiscount
                 : totals.couponDiscount > 0
-                  ? totals.couponDiscount
-                  : totals.discount
+                    ? totals.couponDiscount
+                    : totals.discount
         return `- ${fmtINR(primaryDiscount)}`
     })(Component)
 }
@@ -2006,7 +2018,8 @@ export function withCheckoutTaxValue(Component): ComponentType {
 }
 
 export function withCheckoutTotal(Component): ComponentType {
-    return withTextFromState((store) => fmtINR(computeTotals(store).total))(Component)
+    // Checkout summary total should reflect amount payable now.
+    return withTextFromState((store) => fmtINR(computeTotals(store).payableNow))(Component)
 }
 
 export function withCheckoutValidationHint(Component): ComponentType {
@@ -2016,47 +2029,113 @@ export function withCheckoutValidationHint(Component): ComponentType {
 }
 
 function inferPaymentModeFromProps(props: any): PaymentMode {
-    const explicit = String(
-        props?.paymentModeValue || props?.["data-payment-mode"] || props?.value || ""
-    )
-        .trim()
+    const text = [
+        props?.text,
+        props?.label,
+        props?.title,
+        props?.name,
+        props?.id,
+        props?.pnMgUuoPi, // common TWN button label prop in Framer instances
+        props?.["aria-label"],
+        props?.ariaLabel,
+        props?.children,
+    ]
+        .map((entry) => readNodeText(entry))
+        .join(" ")
         .toLowerCase()
-    if (explicit === "partial_25" || explicit === "partial") return "partial_25"
-    if (explicit === "full") return "full"
 
-    const text = String(props?.text || props?.children || "").toLowerCase()
-    if (text.includes("25") || text.includes("deposit") || text.includes("part")) {
+    if (/25\s*%/.test(text) || /\bdeposit\b/.test(text) || /\bpartial\b/.test(text)) {
         return "partial_25"
     }
+    // Assume if we explicitly detect "full", it's full. Otherwise, assume full.
+    // Important: DO NOT rely on props.value or props.mode because Framer RadioGroup
+    // passes its CURRENT STATE value down to all children, which would override detection.
     return "full"
+}
+
+function inferPaymentModeFromEvent(event: any): PaymentMode | null {
+    const target = event?.target as HTMLElement | null
+    if (!target) return null
+    const text = String(target.textContent || "").trim().toLowerCase()
+    if (!text) return null
+    if (/25\s*%/.test(text) || /\bdeposit\b/.test(text) || /\bpartial\b/.test(text)) {
+        return "partial_25"
+    }
+    if (/\bfull\b/.test(text)) return "full"
+    return null
+}
+
+function normalizePaymentModeValue(value: any, fallback: PaymentMode): PaymentMode {
+    const clean = String(value || "").trim().toLowerCase()
+    if (!clean) return fallback
+    if (clean === "partial_25" || clean === "partial") return "partial_25"
+    if (clean === "full") return "full"
+    if (/25\s*%/.test(clean) || /\bdeposit\b/.test(clean) || /\bpartial\b/.test(clean)) {
+        return "partial_25"
+    }
+    if (/\bfull\b/.test(clean)) return "full"
+    return fallback
 }
 
 export function withCheckoutPaymentMode(Component): ComponentType {
     return (props: any) => {
         const [store, setStore] = useStore()
         const modeFromProps = inferPaymentModeFromProps(props)
+        // If the mode inferred from this element's text matches the store's mode, it's selected.
         const isSelected = (store?.paymentMode || "full") === modeFromProps
 
-        const applyMode = (value: any) => {
-            const nextMode =
-                String(value || "").trim().toLowerCase() === "partial_25" ? "partial_25" : "full"
-            setStore({ paymentMode: nextMode as PaymentMode })
-        }
+        const setModeToThis = () => setStore({ paymentMode: modeFromProps })
 
         return (
             <Component
                 {...props}
-                value={store?.paymentMode || "full"}
-                onValueChange={applyMode}
-                onChange={(e: any) => applyMode(e?.target?.value)}
+                // Do NOT override `value`; Framer relies on it internally for RadioGroups.
+                checked={isSelected}
+                onValueChange={setModeToThis}
+                onChange={(e: any) => {
+                    const checked = e?.target?.checked
+                    if (typeof checked === "boolean" && checked) {
+                        setModeToThis()
+                    } else if (e?.target?.value) {
+                        setModeToThis()
+                    }
+                }}
                 onClick={(e: any) => {
                     props?.onClick?.(e)
-                    e?.preventDefault?.()
-                    e?.stopPropagation?.()
-                    setStore({ paymentMode: modeFromProps })
+                    // Removed preventDefault/stopPropagation so Framer's natural animations/variants can play.
+                    setModeToThis()
                 }}
                 aria-pressed={isSelected}
+                role="radio"
+                aria-checked={isSelected}
                 data-active={isSelected ? "true" : "false"}
+                style={{
+                    ...(props.style || {}),
+                    cursor: "pointer",
+                    userSelect: "none",
+                    transition: "all 0.25s cubic-bezier(0.4, 0, 0.2, 1)",
+                    borderRadius: props.style?.borderRadius || "12px", // rounded corners to fit inside typical parent pill
+                    ...(isSelected
+                        ? {
+                              backgroundColor: "#1b91c9",
+                              borderColor: "#1b91c9",
+                              borderWidth: "1px",
+                              borderStyle: "solid",
+                              color: "#ffffff",
+                              WebkitTextFillColor: "white",
+                              boxShadow: "0 2px 8px rgba(27, 145, 201, 0.3)",
+                              fontWeight: "600",
+                          }
+                        : {
+                              backgroundColor: "transparent",
+                              borderColor: "transparent",
+                              borderWidth: "1px",
+                              borderStyle: "solid",
+                              color: "#494D4D",
+                              WebkitTextFillColor: "inherit",
+                              fontWeight: "500",
+                          }),
+                }}
             />
         )
     }
@@ -2070,13 +2149,22 @@ export function withCheckoutDueAmount(Component): ComponentType {
     return withTextFromState((store) => fmtINR(computeTotals(store).dueAmount))(Component)
 }
 
+export function withCheckoutHideWhenNoDue(Component): ComponentType {
+    return (props: any) => {
+        const [store] = useStore()
+        const due = computeTotals(store).dueAmount
+        if (due <= 0) {
+            return <Component {...props} style={{ ...(props.style || {}), display: "none" }} />
+        }
+        return <Component {...props} />
+    }
+}
+
 export function withCheckoutPaymentModeHint(Component): ComponentType {
     return withTextFromState((store) => {
         const totals = computeTotals(store)
         if (totals.paymentMode === "partial_25") {
-            return `Pay ${fmtINR(totals.payableNow)} now. Remaining ${fmtINR(
-                totals.dueAmount
-            )} is collected on-site before departure.`
+            return "Pay a 25% deposit now. The remaining balance is collected on-site before departure."
         }
         return "Pay full amount now for instant paid-in-full confirmation."
     })(Component)
@@ -2217,12 +2305,18 @@ export function withCheckoutPayButton(Component): ComponentType {
                 let data = await res.json().catch(() => ({}))
                 const legacyMissingFieldsError =
                     typeof data?.error === "string" &&
-                    data.error.includes("Missing required fields (trip_id, date, travellers, amount, email, name)")
+                    (data.error.includes(
+                        "Missing required fields (trip_id, date, travellers, amount, email, name)"
+                    ) ||
+                        data.error.includes(
+                            "Missing required fields (trip_id, departure_date, travellers, name, email)"
+                        ))
 
                 if (!res.ok && legacyMissingFieldsError) {
                     const form = new URLSearchParams()
                     form.set("trip_id", String(payload.trip_id || ""))
                     form.set("date", String(payload.date || ""))
+                    form.set("departure_date", String(payload.departure_date || ""))
                     form.set("amount", String(payload.amount || ""))
                     form.set("email", String(payload.email || ""))
                     form.set("name", String(payload.name || ""))
@@ -2348,20 +2442,20 @@ function normalizeTripId(value: any): string {
 function readTripIdCandidate(props: any): string {
     return normalizeTripId(
         props?.tripId ||
-            props?.["data-trip-id"] ||
-            props?.text ||
-            (typeof props?.children === "string" ? props.children : "")
+        props?.["data-trip-id"] ||
+        props?.text ||
+        (typeof props?.children === "string" ? props.children : "")
     )
 }
 
 function readTripSlugCandidate(props: any): string {
     return normalizeSlug(
         props?.slug ||
-            props?.["data-trip-slug"] ||
-            props?.href ||
-            props?.link ||
-            props?.text ||
-            (typeof props?.children === "string" ? props.children : "")
+        props?.["data-trip-slug"] ||
+        props?.href ||
+        props?.link ||
+        props?.text ||
+        (typeof props?.children === "string" ? props.children : "")
     )
 }
 
@@ -2417,7 +2511,7 @@ export function withTripPrimaryPrice(Component): ComponentType {
         const value = toNumber(summary?.payable_price)
         const text = value > 0 ? fmtINR(value) : "₹0"
         return <Component {...props} text={text} />
-}
+    }
 }
 
 export function withTripStrikePrice(Component): ComponentType {
@@ -2443,7 +2537,7 @@ export function withTripStrikePrice(Component): ComponentType {
                 }}
             />
         )
-}
+    }
 }
 
 export function withTripSaveBadge(Component): ComponentType {
