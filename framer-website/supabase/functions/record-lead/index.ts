@@ -34,44 +34,20 @@ const LEAD_HEADERS = [
     "Status",
 ];
 
-function ordinalSuffix(day: number): string {
-    const mod100 = day % 100;
-    if (mod100 >= 11 && mod100 <= 13) return "th";
-    switch (day % 10) {
-        case 1:
-            return "st";
-        case 2:
-            return "nd";
-        case 3:
-            return "rd";
-        default:
-            return "th";
-    }
-}
-
 function formatTimestamp(value: string): string {
     const date = new Date(value);
     if (Number.isNaN(date.getTime())) return value;
-    const parts = new Intl.DateTimeFormat("en-IN", {
+    const text = new Intl.DateTimeFormat("en-IN", {
         timeZone: "Asia/Kolkata",
-        day: "numeric",
+        day: "2-digit",
         month: "short",
         year: "numeric",
-        hour: "numeric",
+        hour: "2-digit",
         minute: "2-digit",
+        second: "2-digit",
         hour12: true,
-    }).formatToParts(date);
-
-    const day = Number(parts.find((p) => p.type === "day")?.value || 0);
-    const month = parts.find((p) => p.type === "month")?.value || "";
-    const year = parts.find((p) => p.type === "year")?.value || "";
-    const hour = parts.find((p) => p.type === "hour")?.value || "";
-    const minute = parts.find((p) => p.type === "minute")?.value || "00";
-    const dayPeriod = (parts.find((p) => p.type === "dayPeriod")?.value || "")
-        .toUpperCase();
-
-    if (!day || !month || !year) return value;
-    return `${day}${ordinalSuffix(day)} ${month} ${year} ${hour}:${minute} ${dayPeriod}`;
+    }).format(date);
+    return `${text} IST`;
 }
 
 serve(async (req) => {
@@ -150,12 +126,10 @@ serve(async (req) => {
         let sheetTab = "Leads";
 
         // ── Sheet routing ─────────────────────────────────
-        // NTC Invites → new dedicated sheet
-        const NTC_SHEET_ID = "1rPlFfSJHFdYTSlj8dp5Q0R3LfHm9mhsCBwkeFQo4hbA";
-        // Trip Page Leads sheet
-        const TRIPS_SHEET_ID = String(Deno.env.get("GOOGLE_SHEET_ID_TRIPS") || "1_rewyVrFYtAiy-xPJ0d_xLm8aHRcAeYP0o2BM7EfkkA");
-        // General / waitlist popup sheet
-        const GENERAL_SHEET_ID = String(Deno.env.get("GOOGLE_SHEET_ID_GENERAL") || "1tA0hKhcGgo84hmD4iteOCw3Ar26SdDt6VQ2Wy5YTDoQ");
+        const NTC_SHEET_ID = String(Deno.env.get("GOOGLE_SHEET_ID_NTC") || "");
+        const ORIGINAL_SHEET_ID = String(Deno.env.get("GOOGLE_SHEET_ID") || "");
+        const TRIPS_SHEET_ID = String(Deno.env.get("GOOGLE_SHEET_ID_TRIPS") || "");
+        const GENERAL_SHEET_ID = String(Deno.env.get("GOOGLE_SHEET_ID_GENERAL") || "");
 
         if (payload.source === "booking_invite") {
             sheetId = NTC_SHEET_ID;
@@ -199,8 +173,6 @@ serve(async (req) => {
             ok: true,
             lead_id: lead.id,
             sheet_logged: sheetLogged,
-            sheet_tab: sheetTab,
-            sheet_id: sheetId,
         });
     } catch (err) {
         console.error("[record-lead] error", err);

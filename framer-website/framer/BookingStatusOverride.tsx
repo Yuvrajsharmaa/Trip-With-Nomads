@@ -241,9 +241,18 @@ function settlementStatus(d: BookingData): "pending" | "failed" | "partially_pai
 function dueAmount(d: BookingData): number {
     const explicit = Math.max(0, toNumber((d as any)?.due_amount))
     if (explicit > 0) return explicit
+    
+    const mode = String((d as any)?.payment_mode || "").trim().toLowerCase()
+    if (mode === "partial_25") {
+        const total = resolvedTotalAmount(d)
+        const payableNow = Math.max(0, toNumber((d as any)?.payable_now_amount))
+        if (payableNow > 0) return Math.max(0, total - payableNow)
+        return Math.max(0, total - Math.round(total * 0.25 * 100) / 100)
+    }
+
     const status = settlementStatus(d)
     if (status === "partially_paid") {
-        const total = Math.max(0, toNumber(d.total_amount))
+        const total = resolvedTotalAmount(d)
         const payableNow = Math.max(0, toNumber((d as any)?.payable_now_amount))
         if (payableNow > 0) return Math.max(0, total - payableNow)
     }
@@ -253,6 +262,15 @@ function dueAmount(d: BookingData): number {
 function paidAmount(d: BookingData): number {
     const explicit = Math.max(0, toNumber((d as any)?.paid_amount))
     if (explicit > 0) return explicit
+
+    const mode = String((d as any)?.payment_mode || "").trim().toLowerCase()
+    if (mode === "partial_25") {
+        const payableNow = Math.max(0, toNumber((d as any)?.payable_now_amount))
+        if (payableNow > 0) return payableNow
+        const total = resolvedTotalAmount(d)
+        return Math.round(total * 0.25 * 100) / 100
+    }
+
     const status = settlementStatus(d)
     if (status === "fully_paid") return resolvedTotalAmount(d)
     if (status === "partially_paid") return Math.max(0, toNumber((d as any)?.payable_now_amount))
@@ -599,17 +617,25 @@ export function withTotalPaid(Component): ComponentType {
     return textOverride((d) => {
         const paid = paidAmount(d)
         if (paid > 0) return fmt(paid)
+        
+        const payableNow = Math.max(0, Math.round(toNumber((d as any)?.payable_now_amount) * 100) / 100)
+        if (payableNow > 0) return fmt(payableNow)
+        
         const total = resolvedTotalAmount(d)
         return fmt(total)
     })(Component)
 }
 
 export function withPayableNowAmount(Component): ComponentType {
-    return textOverride((d) => fmt(Math.max(0, toNumber((d as any)?.payable_now_amount))))(Component)
+    return textOverride((d) => fmt(Math.max(0, Math.round(toNumber((d as any)?.payable_now_amount) * 100) / 100)))(Component)
 }
 
 export function withDueAmount(Component): ComponentType {
     return textOverride((d) => fmt(dueAmount(d)))(Component)
+}
+
+export function withTripTotal(Component): ComponentType {
+    return textOverride((d) => fmt(resolvedTotalAmount(d)))(Component)
 }
 
 export function withBalanceDueNote(Component): ComponentType {
@@ -619,6 +645,29 @@ export function withBalanceDueNote(Component): ComponentType {
         const explicit = String((d as any)?.balance_due_note || "").trim()
         return explicit || `${fmt(due)} due on-site before trip departure.`
     })(Component)
+}
+
+export function withStatusHideWhenNoDue(Component): ComponentType {
+    return (props: any) => {
+        const [data, state] = useBooking()
+        const [isVisible, setIsVisible] = useState(true)
+
+        useEffect(() => {
+            if (state === "ready" && data) {
+                const due = dueAmount(data)
+                setIsVisible(due > 0)
+            } else if (state === "loading") {
+                // Keep it visible as skeleton while loading
+                setIsVisible(true)
+            }
+        }, [state, data])
+
+        if (!isVisible) {
+            return <Component {...props} style={{ ...props.style, display: "none" }} />
+        }
+
+        return <Component {...props} />
+    }
 }
 
 
