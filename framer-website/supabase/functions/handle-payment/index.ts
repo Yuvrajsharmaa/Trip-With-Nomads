@@ -6,6 +6,10 @@ import {
     buildBookingCallbackRow,
 } from "../_shared/booking_callback_sheets.ts"
 import {
+    issueBookingStatusToken,
+    resolveBookingStatusSecret,
+} from "../_shared/booking_status_token.ts"
+import {
     appendRow,
     findRowByColumnValue,
     safeUpdateRow,
@@ -47,10 +51,6 @@ function bookingSheetsWriteEnabled(): boolean {
     return isTruthy(Deno.env.get("BOOKING_SHEETS_WRITE_ENABLED"))
 }
 
-function bookingLifecycleSheetsWriteEnabled(): boolean {
-    return isTruthy(Deno.env.get("BOOKING_LIFECYCLE_SHEETS_WRITE_ENABLED"))
-}
-
 serve(async (req) => {
     try {
         const formData = await req.formData()
@@ -86,11 +86,14 @@ serve(async (req) => {
         const supabase = createClient(supabaseUrl, serviceRoleKey)
 
         const isTest = Deno.env.get("PAYU_TEST_MODE") === "true"
+        const payuKey = isTest
+            ? Deno.env.get("PAYU_TEST_KEY") || Deno.env.get("PAYU_KEY")
+            : Deno.env.get("PAYU_LIVE_KEY") || Deno.env.get("PAYU_KEY")
         const payuSalt = isTest
             ? Deno.env.get("PAYU_TEST_SALT") || Deno.env.get("PAYU_SALT")
             : Deno.env.get("PAYU_LIVE_SALT") || Deno.env.get("PAYU_SALT")
 
-        if (!payuSalt) return new Response("Missing payment salt", { status: 500 })
+        if (!payuSalt || !payuKey) return new Response("Missing payment configuration", { status: 500 })
 
         let supportsBalanceDueNote = true
         let { data: booking, error: bookingError } = await supabase
@@ -145,7 +148,8 @@ serve(async (req) => {
                 : toNumber(booking?.total_amount)
         const safeAmount = String(amount || (fallbackAmount > 0 ? fallbackAmount.toFixed(2) : "")).trim()
         const safeTxnid = String(txnid || "").trim()
-        const safeKey = String(key || "").trim()
+        const safeKey = String(payuKey || "").trim()
+        const incomingKey = String(key || "").trim()
         const normalizedStatus = String(status || "").trim().toLowerCase()
 
         const hashString = `${payuSalt}|${normalizedStatus}||||||||||${safeUdf1}|${safeEmail}|${safeFirstname}|${safeProductinfo}|${safeAmount}|${safeTxnid}|${safeKey}`
@@ -154,10 +158,21 @@ serve(async (req) => {
             .map((b) => b.toString(16).padStart(2, "0"))
             .join("")
 
-        const isValid =
+        const hashMatches =
             calculatedHash.toLowerCase() === String(receivedHash || "").trim().toLowerCase()
+        const keyMatches = safeKey.length > 0 && safeKey === incomingKey
+        const isValid = hashMatches && keyMatches
         const isSuccess = normalizedStatus === "success" && isValid
-        const isPending = normalizedStatus === "pending"
+        const isPending = normalizedStatus === "pending" && isValid
+        const isFailed = (normalizedStatus === "failure" || normalizedStatus === "failed") && isValid
+        const notes: string[] = []
+
+        if (!keyMatches) {
+            notes.push("PayU key mismatch; callback ignored")
+        }
+        if (!hashMatches) {
+            notes.push("PayU hash mismatch; callback ignored")
+        }
 
         const totalAmount = round2(Math.max(0, toNumber(booking?.total_amount)))
         const paymentMode =
@@ -194,51 +209,65 @@ serve(async (req) => {
             : toNumber(booking?.due_amount)
         const nextPaidAmount = isSuccess ? effectivePaidAmount : toNumber(booking?.paid_amount)
 
-        const updatePayload: Record<string, any> = {
-            payment_status: nextPaymentStatus,
-            settlement_status: settlementStatus,
-            payu_mihpayid: mihpayid || null,
-            payu_txnid: safeTxnid || null,
-        }
+        const updatePayload: Record<string, any> = {}
+        let updatedBooking: any = booking
+        let updateError: any = null
 
-        if (isSuccess) {
-            updatePayload.paid_amount = nextPaidAmount
-            updatePayload.due_amount = dueAmount
-            if (supportsBalanceDueNote) {
-                updatePayload.balance_due_note =
-                    dueAmount > 0
-                        ? `₹${dueAmount.toLocaleString("en-IN")} due on-site before trip departure.`
-                        : null
+        if (isValid && (isSuccess || isPending || isFailed)) {
+            updatePayload.payment_status = nextPaymentStatus
+            updatePayload.settlement_status = settlementStatus
+            updatePayload.payu_mihpayid = mihpayid || null
+            updatePayload.payu_txnid = safeTxnid || null
+
+            if (isSuccess) {
+                updatePayload.paid_amount = nextPaidAmount
+                updatePayload.due_amount = dueAmount
+                if (supportsBalanceDueNote) {
+                    updatePayload.balance_due_note =
+                        dueAmount > 0
+                            ? `₹${dueAmount.toLocaleString("en-IN")} due on-site before trip departure.`
+                            : null
+                }
             }
-        }
 
-        let { data: updatedBooking, error: updateError } = await supabase
-            .from("bookings")
-            .update(updatePayload)
-            .eq("id", bookingId)
-            .select("*")
-            .single()
-
-        if (
-            updateError &&
-            supportsBalanceDueNote &&
-            isMissingColumnError(updateError, "balance_due_note")
-        ) {
-            const fallbackUpdatePayload = { ...updatePayload }
-            delete fallbackUpdatePayload.balance_due_note
-            const fallbackUpdate = await supabase
+            let updateResult = await supabase
                 .from("bookings")
-                .update(fallbackUpdatePayload)
+                .update(updatePayload)
                 .eq("id", bookingId)
                 .select("*")
                 .single()
-            updatedBooking = fallbackUpdate.data
-            updateError = fallbackUpdate.error
-            supportsBalanceDueNote = false
-        }
 
-        if (updateError) {
-            console.error("[handle-payment] booking update error", updateError)
+            updatedBooking = updateResult.data || booking
+            updateError = updateResult.error
+
+            if (
+                updateError &&
+                supportsBalanceDueNote &&
+                isMissingColumnError(updateError, "balance_due_note")
+            ) {
+                const fallbackUpdatePayload = { ...updatePayload }
+                delete fallbackUpdatePayload.balance_due_note
+                updateResult = await supabase
+                    .from("bookings")
+                    .update(fallbackUpdatePayload)
+                    .eq("id", bookingId)
+                    .select("*")
+                    .single()
+                updatedBooking = updateResult.data || booking
+                updateError = updateResult.error
+                supportsBalanceDueNote = false
+            }
+
+            if (updateError) {
+                console.error("[handle-payment] booking update error", updateError)
+            }
+        } else {
+            console.warn("[handle-payment] callback authenticity check failed; booking not updated", {
+                bookingId,
+                status: normalizedStatus,
+                keyMatches,
+                hashMatches,
+            })
         }
 
         const finalBooking = {
@@ -254,12 +283,13 @@ serve(async (req) => {
                     : (booking as any)?.balance_due_note ?? null,
         }
 
-        const eventStage = isSuccess ? "paid_callback" : isPending ? "pending_callback" : "failed_callback"
-        const notes: string[] = []
-
-        if (normalizedStatus === "success" && !isValid) {
-            notes.push("PayU hash mismatch; callback marked failed")
-        }
+        const eventStage = !isValid
+            ? "invalid_callback"
+            : isSuccess
+                ? "paid_callback"
+                : isPending
+                    ? "pending_callback"
+                    : "failed_callback"
 
         if (callbackAmount > 0 && expectedPayableNow > 0 && Math.abs(callbackAmount - expectedPayableNow) >= 0.5) {
             notes.push(
@@ -271,17 +301,16 @@ serve(async (req) => {
             Deno.env.get("GOOGLE_SHEET_ID_TRIPS"),
             Deno.env.get("GOOGLE_SHEET_ID"),
         )
-        const callbackSheetId = String(Deno.env.get("BOOKING_CALLBACK_SHEET_ID") || "").trim()
+        const callbackSheetId = firstNonEmpty(
+            Deno.env.get("BOOKING_CALLBACK_SHEET_ID"),
+            Deno.env.get("GOOGLE_SHEET_ID_TRIPS"),
+            Deno.env.get("GOOGLE_SHEET_ID")
+        )
         const bookingsSheetTab = firstNonEmpty(Deno.env.get("BOOKINGS_SHEET_TAB"), "Bookings")
         const successSheetTab = firstNonEmpty(Deno.env.get("BOOKING_SUCCESS_SHEET_TAB"), "Bookings_Success")
         const failedSheetTab = firstNonEmpty(Deno.env.get("BOOKING_FAILED_SHEET_TAB"), "Bookings_Failed")
-        const lifecycleSheetsEnabled = bookingLifecycleSheetsWriteEnabled()
 
-        if (
-            bookingSheetsWriteEnabled() &&
-            sheetsEnabled() &&
-            (callbackSheetId || (lifecycleSheetsEnabled && bookingsSheetId))
-        ) {
+        if (bookingSheetsWriteEnabled() && sheetsEnabled() && (bookingsSheetId || callbackSheetId)) {
             const callbackTab = isSuccess ? successSheetTab : failedSheetTab
             const callbackRow = buildBookingCallbackRow({
                 booking: updatedBooking || finalBooking,
@@ -291,7 +320,7 @@ serve(async (req) => {
             })
 
             try {
-                if (lifecycleSheetsEnabled && bookingsSheetId) {
+                if (bookingsSheetId) {
                     const rowValues = buildBookingSheetRow({
                         booking: updatedBooking || finalBooking,
                         eventStage,
@@ -343,16 +372,11 @@ serve(async (req) => {
                         callbackRow,
                         BOOKING_CALLBACK_HEADERS
                     )
-                } else if (isSuccess || (!isSuccess && !isPending)) {
-                    console.error(
-                        "[handle-payment] callback sheet skipped: BOOKING_CALLBACK_SHEET_ID is missing"
-                    )
                 }
             } catch (sheetErr) {
                 console.error("[handle-payment] sheets sync failed", {
                     bookingsSheetId,
                     callbackSheetId,
-                    lifecycleSheetsEnabled,
                     error: sheetErr,
                 })
             }
@@ -365,7 +389,25 @@ serve(async (req) => {
             Deno.env.get("PAYMENT_REDIRECT_BASE_URL") ||
             "https://tripwithnomads.com"
         const targetPage = isSuccess ? "payment-success" : "payment-failed"
-        const redirectUrl = `${siteBase.replace(/\/$/, "")}/${targetPage}?booking_id=${bookingId}&payment_status=${nextPaymentStatus}`
+        const normalizedSiteBase = siteBase.replace(/\/$/, "")
+        const baseOrigin = /^https?:\/\//i.test(normalizedSiteBase)
+            ? normalizedSiteBase
+            : `https://${normalizedSiteBase}`
+        const basePath = `${baseOrigin}/${targetPage}`
+        const redirectUrlObject = new URL(basePath)
+        redirectUrlObject.searchParams.set("booking_id", bookingId)
+        redirectUrlObject.searchParams.set("payment_status", nextPaymentStatus)
+
+        const bookingStatusSecret = resolveBookingStatusSecret(payuSalt)
+        if (bookingStatusSecret) {
+            try {
+                const statusToken = await issueBookingStatusToken(bookingId, bookingStatusSecret)
+                redirectUrlObject.searchParams.set("status_token", statusToken.token)
+            } catch (tokenErr) {
+                console.error("[handle-payment] status token generation failed", tokenErr)
+            }
+        }
+        const redirectUrl = redirectUrlObject.toString()
 
         console.log(`🚀 Redirecting to: ${redirectUrl}`)
         return Response.redirect(redirectUrl, 303)
