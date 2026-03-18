@@ -28,6 +28,7 @@ alter table if exists public.bookings
     add column if not exists name text,
     add column if not exists email text,
     add column if not exists phone text;
+
 do $$
 begin
     if exists (
@@ -70,8 +71,10 @@ begin
         execute 'alter table public.bookings alter column scheduled_end_at drop not null';
     end if;
 end $$;
+
 create index if not exists bookings_trip_id_idx on public.bookings(trip_id);
 create index if not exists bookings_departure_date_idx on public.bookings(departure_date);
 create index if not exists bookings_payu_txnid_idx on public.bookings(payu_txnid);
 create index if not exists bookings_booking_ref_idx on public.bookings(booking_ref);
 create index if not exists bookings_coupon_code_idx on public.bookings(coupon_code);
+

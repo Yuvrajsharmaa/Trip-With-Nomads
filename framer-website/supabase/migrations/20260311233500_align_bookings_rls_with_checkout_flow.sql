@@ -3,3 +3,4 @@
 -- Disable RLS on bookings to match existing checkout flow behavior.
 
 alter table if exists public.bookings disable row level security;
+

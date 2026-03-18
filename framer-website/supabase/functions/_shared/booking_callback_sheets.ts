@@ -37,9 +37,9 @@ function formatTimestampIST(value?: string): string {
     if (Number.isNaN(date.getTime())) return String(value || "")
     const text = new Intl.DateTimeFormat("en-IN", {
         timeZone: BOOKING_TIMEZONE,
-        year: "numeric",
-        month: "2-digit",
         day: "2-digit",
+        month: "short",
+        year: "numeric",
         hour: "2-digit",
         minute: "2-digit",
         second: "2-digit",
