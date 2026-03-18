@@ -10,11 +10,14 @@ This project contains all the code and assets related to the **Trip with Nomads*
 - **`scripts/`**: Automation scripts for syncing data between the local environment, Supabase, and Framer CMS.
   - `framer_cms_sync.mjs`: Syncs trip data to Framer.
   - `push_booking_overrides.mjs`: Utility to manage overrides.
+  - `upload_r2_video.mjs`: Uploads public marketing videos to Cloudflare R2.
 - **`supabase/`**: Shared backend infrastructure (migrations and Edge Functions).
 - **`app/` & `components/`**: A Next.js clone of the Framer site (used for prototyping and reference).
 - **`prototypes/`**: HTML prototypes for testing specific logic (e.g., payment redirections).
 - **`data/`**: JSON and CSV files containing trip and pricing data.
 - **`legacy-components/`**: Older versions of components for reference.
+- **`docs/`**: Project-specific operational notes such as Cloudflare R2 setup and change logs for public videos.
+  - `security-change-log.md`: Security rollout log (Supabase/checkout hardening).
 
 ## 🔗 Dependencies & Context
 
@@ -32,3 +35,8 @@ Check `IMPLEMENTATION_PLAN.md` for the full technical roadmap.
 - `scripts/`: Data management utilities.
 - `data/`: Source of truth for trips.
 - `IMPLEMENTATION_PLAN.md`: The overarching technical plan.
+
+## 🔐 Payment Status Token Secret
+
+Set `BOOKING_STATUS_TOKEN_SECRET` in Supabase Edge Function secrets to protect booking status reads on payment success/failure pages.  
+If this secret is not set, the functions fall back to `PAYU_*_SALT` values for backward compatibility.

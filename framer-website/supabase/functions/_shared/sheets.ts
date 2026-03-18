@@ -172,7 +172,7 @@ export async function appendRow(
     if (headers?.length) await ensureHeaders(tab, headers, sheetId);
 
     const res = await sheetsFetch(
-        `/values/${encodeURIComponent(tab)}!A:Z:append?valueInputOption=RAW`,
+        `/values/${encodeURIComponent(tab)}!A:ZZ:append?valueInputOption=RAW`,
         sheetId,
         {
             method: "POST",

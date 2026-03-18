@@ -71,6 +71,14 @@ function normalizeBaseUrl(value: string): string {
     return String(value || "").trim().replace(/\/+$/, "")
 }
 
+function normalizeBookingId(value: string): string {
+    const clean = String(value || "").trim()
+    if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(clean)) {
+        return ""
+    }
+    return clean
+}
+
 function resolveRuntimeEnv(): RuntimeEnv {
     if (typeof window === "undefined") return "production"
     const host = String(window.location.hostname || "").trim().toLowerCase()
@@ -289,10 +297,17 @@ function joinMetaParts(parts: Array<string | undefined | null>): string {
     return parts.map((part) => String(part || "").trim()).filter(Boolean).join(" · ")
 }
 
-function buildStatusUrl(pathname: string, bookingId: string, extraParams?: Record<string, string>) {
+function buildStatusUrl(
+    pathname: string,
+    bookingId: string,
+    statusToken?: string,
+    extraParams?: Record<string, string>
+) {
     const base = CURRENT_RUNTIME.siteBaseUrl || (typeof window !== "undefined" ? window.location.origin : "")
     const url = new URL(pathname, base.endsWith("/") ? base : `${base}/`)
     if (bookingId) url.searchParams.set("booking_id", bookingId)
+    const token = String(statusToken || "").trim()
+    if (token) url.searchParams.set("status_token", token)
     for (const [key, value] of Object.entries(extraParams || {})) {
         url.searchParams.set(key, value)
     }
@@ -312,83 +327,41 @@ export function withBookingStatus(Component): ComponentType {
             _pendingCountdown = 0
 
             const fetchBooking = async () => {
-                const bookingId = new URLSearchParams(window.location.search).get("booking_id")
+                const params = new URLSearchParams(window.location.search)
+                const bookingId = normalizeBookingId(params.get("booking_id") || "")
+                const statusToken = String(params.get("status_token") || "").trim()
                 if (!bookingId) return { error: "No booking_id" }
 
                 try {
-                    // First fetch the booking
-                    const res = await fetch(
-                        `${SUPABASE_URL}/rest/v1/bookings?id=eq.${bookingId}&select=*`,
-                        {
-                            headers: {
-                                apikey: SUPABASE_KEY,
-                                Authorization: `Bearer ${SUPABASE_KEY}`,
-                            },
-                        }
-                    )
-                    if (!res.ok) return { error: "HTTP " + res.status }
-                    const rows = await res.json()
-                    if (!rows?.length) return { error: "Not found" }
-
-                    const booking = rows[0]
-
-                    // Then fetch the trip details since there is no foreign key relation
-                    if (booking.trip_id) {
-                        try {
-                            const tripRes = await fetch(
-                                `${SUPABASE_URL}/rest/v1/trips?id=eq.${booking.trip_id}&select=title`,
-                                {
-                                    headers: {
-                                        apikey: SUPABASE_KEY,
-                                        Authorization: `Bearer ${SUPABASE_KEY}`,
-                                    },
-                                }
-                            )
-                            if (tripRes.ok) {
-                                const tripRows = await tripRes.json()
-                                if (tripRows?.length) {
-                                    booking.trip_title = tripRows[0].title
-                                }
-                            }
-                        } catch (tripErr) {
-                            console.warn("Could not fetch trip details:", tripErr)
-                        }
+                    const statusRes = await fetch(`${SUPABASE_URL}/functions/v1/get-booking-status`, {
+                        method: "POST",
+                        headers: {
+                            "Content-Type": "application/json",
+                            apikey: SUPABASE_KEY,
+                            Authorization: `Bearer ${SUPABASE_KEY}`,
+                        },
+                        body: JSON.stringify({
+                            booking_id: bookingId,
+                            status_token: statusToken,
+                        }),
+                    })
+                    if (statusRes.ok) {
+                        const payload = await statusRes.json()
+                        if (payload?.booking) return { data: payload.booking }
                     }
-
-                    return { data: booking }
+                    return { error: "Not found" }
                 } catch (err) {
                     return { error: String(err) }
                 }
             }
 
-            const loadTripTitle = async (tripId: string) => {
-                try {
-                    const res = await fetch(
-                        `${SUPABASE_URL}/rest/v1/trips?id=eq.${tripId}&select=title`,
-                        {
-                            headers: {
-                                apikey: SUPABASE_KEY,
-                                Authorization: `Bearer ${SUPABASE_KEY}`,
-                            },
-                        }
-                    )
-                    if (res.ok) {
-                        const rows = await res.json()
-                        if (rows?.[0]?.title) {
-                            if (_data) {
-                                _data.trip_title = rows[0].title
-                                notify()
-                            }
-                        }
-                    }
-                } catch { }
-            }
-
             const go = async () => {
-                const bookingId = new URLSearchParams(window.location.search).get("booking_id") || ""
+                const params = new URLSearchParams(window.location.search)
+                const bookingId = normalizeBookingId(params.get("booking_id") || "")
+                const statusToken = String(params.get("status_token") || "").trim()
                 const isSuccessRoute = window.location.pathname.includes("/payment-success")
-                const successUrl = buildStatusUrl("/payment-success", bookingId)
-                const failedUrl = buildStatusUrl("/payment-failed", bookingId, {
+                const successUrl = buildStatusUrl("/payment-success", bookingId, statusToken)
+                const failedUrl = buildStatusUrl("/payment-failed", bookingId, statusToken, {
                     reason: "pending-timeout",
                 })
 
@@ -417,8 +390,6 @@ export function withBookingStatus(Component): ComponentType {
                 _data = result.data
                 _state = "ready"
                 notify()
-
-                if (_data.trip_id) loadTripTitle(_data.trip_id)
 
                 // 2. Poll if pending (max 10 times, 2s interval)
                 if (_data.payment_status === "pending") {
@@ -869,6 +840,7 @@ export function withStatusIcon(Component): ComponentType {
 export function withRetryButton(Component): ComponentType {
     return (props: any) => {
         const [data, state] = useBooking()
+        const [isRetrying, setIsRetrying] = useState(false)
 
         if (state !== "ready" || !data) {
             return <Component {...props} style={{ ...props.style, display: "none" }} />
@@ -879,13 +851,56 @@ export function withRetryButton(Component): ComponentType {
             return <Component {...props} style={{ ...props.style, display: "none" }} />
         }
 
-        // Show on failure or pending — clickable "Try Again" that goes back
-        const handleRetry = () => {
-            // Navigate back to the trip page if we have a trip_id
-            if (data.trip_id) {
-                window.location.href = `${DOMESTIC_TRIPS_BASE_URL}/${data.trip_id}`
-            } else {
-                window.location.href = DOMESTIC_TRIPS_BASE_URL
+        // Show on failure or pending — secure retry with booking_id + email.
+        const handleRetry = async () => {
+            if (isRetrying) return
+            setIsRetrying(true)
+
+            try {
+                const res = await fetch(`${SUPABASE_URL}/functions/v1/retry-payment`, {
+                    method: "POST",
+                    headers: {
+                        "Content-Type": "application/json",
+                        apikey: SUPABASE_KEY,
+                        Authorization: `Bearer ${SUPABASE_KEY}`,
+                    },
+                    body: JSON.stringify({
+                        booking_id: data.id,
+                        email: String(data.email || "").trim(),
+                    }),
+                })
+                if (!res.ok) throw new Error(`Retry failed (${res.status})`)
+
+                const payload = await res.json().catch(() => null)
+                const payu = payload?.payu
+                if (!payu?.action) throw new Error("Invalid PayU response")
+
+                const form = document.createElement("form")
+                form.method = "POST"
+                form.action = String(payu.action)
+                form.style.display = "none"
+
+                for (const [key, value] of Object.entries(payu)) {
+                    if (key === "action") continue
+                    const input = document.createElement("input")
+                    input.type = "hidden"
+                    input.name = key
+                    input.value = String(value ?? "")
+                    form.appendChild(input)
+                }
+
+                document.body.appendChild(form)
+                form.submit()
+                return
+            } catch (err) {
+                console.error("[RetryPayment] Error:", err)
+                if (data.trip_id) {
+                    window.location.href = `${DOMESTIC_TRIPS_BASE_URL}/${data.trip_id}`
+                } else {
+                    window.location.href = DOMESTIC_TRIPS_BASE_URL
+                }
+            } finally {
+                setIsRetrying(false)
             }
         }
 
@@ -893,22 +908,30 @@ export function withRetryButton(Component): ComponentType {
             <div
                 onClick={handleRetry}
                 style={{
-                    cursor: "pointer",
+                    cursor: isRetrying ? "wait" : "pointer",
                     display: "inline-block",
                     padding: "14px 32px",
-                    background: "linear-gradient(135deg, #1b91c9, #0085c1)",
+                    background: isRetrying
+                        ? "linear-gradient(135deg, #94a3b8, #64748b)"
+                        : "linear-gradient(135deg, #1b91c9, #0085c1)",
                     color: "#fff",
                     borderRadius: "12px",
                     fontSize: "16px",
                     fontWeight: 600,
                     textAlign: "center" as const,
                     marginTop: "16px",
-                    transition: "opacity 0.2s",
+                    transition: "all 0.2s",
+                    opacity: isRetrying ? 0.7 : 1,
+                    pointerEvents: isRetrying ? "none" : "auto",
                 }}
-                onMouseEnter={(e) => { (e.target as HTMLElement).style.opacity = "0.85" }}
-                onMouseLeave={(e) => { (e.target as HTMLElement).style.opacity = "1" }}
+                onMouseEnter={(e) => {
+                    if (!isRetrying) (e.target as HTMLElement).style.opacity = "0.85"
+                }}
+                onMouseLeave={(e) => {
+                    if (!isRetrying) (e.target as HTMLElement).style.opacity = "1"
+                }}
             >
-                Try Again
+                {isRetrying ? "Retrying…" : "Try Again"}
             </div>
         )
     }
