@@ -1,0 +1,68 @@
+name: enforce-main-policy
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+
+permissions:
+  statuses: write
+  contents: read
+
+jobs:
+  enforce:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Enforce main policy
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const owner = context.repo.owner;
+            const repo = context.repo.repo;
+
+            const pr = context.payload.pull_request;
+            if (!pr) {
+              return;
+            }
+
+            const requiredContext = "enforce-main-policy";
+            const statusSha = context.sha; // PR merge commit sha (strict checks)
+
+            // Only enforce on PRs targeting main. For other bases, mark success so the check always exists.
+            if (pr.base?.ref !== "main") {
+              await github.rest.repos.createCommitStatus({
+                owner,
+                repo,
+                sha: statusSha,
+                state: "success",
+                context: requiredContext,
+                description: "Not applicable (base is not main)",
+              });
+              return;
+            }
+
+            const base = pr.base.sha;
+            const head = pr.head.sha;
+
+            const compare = await github.rest.repos.compareCommits({
+              owner,
+              repo,
+              base,
+              head,
+              per_page: 250,
+            });
+
+            const commits = Array.isArray(compare?.data?.commits) ? compare.data.commits : [];
+            const mergeCommits = commits.filter((c) => Array.isArray(c.parents) && c.parents.length > 1);
+
+            const ok = mergeCommits.length === 0;
+            await github.rest.repos.createCommitStatus({
+              owner,
+              repo,
+              sha: statusSha,
+              state: ok ? "success" : "failure",
+              context: requiredContext,
+              description: ok
+                ? "No merge commits in PR branch"
+                : `Merge commits detected (${mergeCommits.length}) – rebase/squash required`,
+            });
+
