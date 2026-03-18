@@ -5,6 +5,16 @@ const corsHeaders = {
     "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
 }
 
+function isUuid(value: unknown): boolean {
+    return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
+        String(value || "").trim()
+    )
+}
+
+function normalizeEmail(value: unknown): string {
+    return String(value || "").trim().toLowerCase()
+}
+
 function toNumber(value: any): number {
     const parsed = Number(value)
     return Number.isFinite(parsed) ? parsed : 0
@@ -45,9 +55,22 @@ Deno.serve(async (req) => {
             throw new Error("Missing PayU Secrets")
         }
 
-        const { booking_id } = await req.json()
-        const bookingId = String(booking_id || "").trim()
-        if (!bookingId) throw new Error("booking_id is required")
+        const body = await req.json().catch(() => ({}))
+        const bookingId = String(body?.booking_id || "").trim()
+        const providedEmail = normalizeEmail(body?.email)
+
+        if (!isUuid(bookingId)) {
+            return new Response(JSON.stringify({ error: "Invalid booking_id format" }), {
+                headers: { ...corsHeaders, "Content-Type": "application/json" },
+                status: 400,
+            })
+        }
+        if (!providedEmail) {
+            return new Response(JSON.stringify({ error: "Email is required for retry" }), {
+                headers: { ...corsHeaders, "Content-Type": "application/json" },
+                status: 400,
+            })
+        }
 
         const supabase = createClient(supabaseUrl, supabaseKey)
         const { data: booking, error } = await supabase
@@ -58,6 +81,14 @@ Deno.serve(async (req) => {
             .eq("id", bookingId)
             .single()
         if (error || !booking) throw new Error("Booking not found")
+
+        const bookingEmail = normalizeEmail(booking.email)
+        if (!bookingEmail || bookingEmail !== providedEmail) {
+            return new Response(JSON.stringify({ error: "Booking not found" }), {
+                headers: { ...corsHeaders, "Content-Type": "application/json" },
+                status: 404,
+            })
+        }
 
         if (String(booking.payment_status || "").toLowerCase() === "paid") {
             throw new Error("Booking is already paid. Retry is not allowed.")
