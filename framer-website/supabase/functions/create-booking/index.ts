@@ -1,6 +1,10 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts"
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2"
 import { buildBookingSheetRow, BOOKING_HEADERS } from "../_shared/booking_sheets.ts"
+import {
+    issueBookingStatusToken,
+    resolveBookingStatusSecret,
+} from "../_shared/booking_status_token.ts"
 import { appendRow, sheetsEnabled } from "../_shared/sheets.ts"
 
 const corsHeaders = {
@@ -838,6 +842,10 @@ serve(async (req) => {
         const firstname = name.split(" ")[0]
         const udf1 = data.id
         const gatewayAmount = payableNowAmount.toFixed(2)
+        const bookingStatusSecret = resolveBookingStatusSecret(payuSalt)
+        const bookingStatusToken = bookingStatusSecret
+            ? await issueBookingStatusToken(udf1, bookingStatusSecret)
+            : null
 
         const hashString = `${payuKey}|${txnid}|${gatewayAmount}|${productinfo}|${firstname}|${email}|${udf1}||||||||||${payuSalt}`
         const hashBuffer = await crypto.subtle.digest("SHA-512", new TextEncoder().encode(hashString))
@@ -858,6 +866,8 @@ serve(async (req) => {
                 payable_now_amount: payableNowAmount,
                 due_amount: dueAmount,
                 settlement_status: settlementStatus,
+                status_token: bookingStatusToken?.token || null,
+                status_token_expires_at: bookingStatusToken?.expiresAt || null,
                 payu: {
                     key: payuKey,
                     txnid,

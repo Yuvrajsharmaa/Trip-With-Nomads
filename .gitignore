@@ -44,3 +44,8 @@ framer-website/.booking_status_live_backup_*.tsx
 framer-website/.booking_status_rollback.tsx
 framer-website/.framer_backups/
 framer-website/.tmp_project_xml.txt
+framer-website/.tmp/
+framer-website/.wrangler/
+
+# Local scratch repos
+skills-main/

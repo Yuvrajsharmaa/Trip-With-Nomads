@@ -1,6 +1,14 @@
 import * as React from "react"
 import { addPropertyControls, ControlType } from "framer"
 
+const VIDEO_HOST_DEFAULTS = {
+    supabase:
+        "https://jxozzvwvprmnhvafmpsa.supabase.co/storage/v1/object/public/videos/herovideo_compressed.mp4",
+    cloudflare:
+        "https://media.tripwithnomads.com/videos/herovideo_compressed.mp4",
+}
+const DEFAULT_VIDEO_URL = VIDEO_HOST_DEFAULTS.cloudflare
+
 /**
  * Optimized Video
  *
@@ -11,7 +19,7 @@ import { addPropertyControls, ControlType } from "framer"
  */
 export default function OptimizedVideo(props) {
     const {
-        videoUrl = "https://jxozzvwvprmnhvafmpsa.supabase.co/storage/v1/object/public/videos/herovideo_compressed.mp4",
+        videoUrl = DEFAULT_VIDEO_URL,
         posterImage = {
             src: "https://framerusercontent.com/images/qufwJUSHMyRTtZtmWorOq1kx9M.webp",
         },
@@ -188,8 +196,7 @@ addPropertyControls(OptimizedVideo, {
     videoUrl: {
         type: ControlType.String,
         title: "Video URL",
-        defaultValue:
-            "https://jxozzvwvprmnhvafmpsa.supabase.co/storage/v1/object/public/videos/herovideo_compressed.mp4",
+        defaultValue: DEFAULT_VIDEO_URL,
     },
     posterImage: {
         type: ControlType.ResponsiveImage,
