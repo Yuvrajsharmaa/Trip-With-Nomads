@@ -19,6 +19,7 @@ dist/
 *.env*
 supabase/.temp/
 .supabase/
+framer-website/supabase/.temp/
 
 # OS
 .DS_Store
