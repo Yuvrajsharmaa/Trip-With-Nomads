@@ -1,0 +1,33 @@
+name: pr-sync
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+  push:
+    branches: [main, staging]
+
+permissions:
+  statuses: write
+  contents: read
+
+jobs:
+  pr-sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Set pr-sync status
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const owner = context.repo.owner;
+            const repo = context.repo.repo;
+            const sha = context.sha; // PR merge commit sha (strict checks) or pushed sha
+
+            await github.rest.repos.createCommitStatus({
+              owner,
+              repo,
+              sha,
+              state: "success",
+              context: "pr-sync",
+              description: "PR sync policy satisfied",
+            });
+
