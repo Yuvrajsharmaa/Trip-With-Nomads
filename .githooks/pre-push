@@ -1,0 +1,30 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ALLOW_PROTECTED_PUSH="${ALLOW_PROTECTED_PUSH:-}"
+
+deny_ref() {
+  local ref="$1"
+  case "$ref" in
+    refs/heads/main|refs/heads/staging) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+while read -r local_ref local_sha remote_ref remote_sha; do
+  if deny_ref "$remote_ref"; then
+    if [[ -n "$ALLOW_PROTECTED_PUSH" ]]; then
+      echo "[pre-push] ALLOW_PROTECTED_PUSH is set; allowing push to ${remote_ref}." >&2
+      continue
+    fi
+    cat >&2 <<EOF
+[pre-push] Blocked push to protected branch: ${remote_ref}
+
+Use a feature branch + PR, then "Squash and merge".
+
+If you *must* bypass locally (not recommended), re-run with:
+  ALLOW_PROTECTED_PUSH=1 git push ...
+EOF
+    exit 1
+  fi
+done
