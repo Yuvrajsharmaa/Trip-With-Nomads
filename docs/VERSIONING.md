@@ -15,6 +15,19 @@ This repo is set up to prefer a **linear git history** (no merge commits) on pro
 
 This keeps protected branches linear and avoids long-running branch drift.
 
+## Local guardrails (recommended)
+
+This repo includes lightweight git hooks in `.githooks/` to:
+
+- block direct pushes to `main` / `staging`
+- block committing generated/local artifacts
+
+Enable them once per clone:
+
+```bash
+git config core.hooksPath .githooks
+```
+
 ## Releases / “what’s in production?”
 
 - Tag production deployments on `main` using a timestamp tag like:

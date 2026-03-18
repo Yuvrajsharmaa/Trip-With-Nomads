@@ -1,0 +1,51 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ALLOW_PROTECTED_PUSH="${ALLOW_PROTECTED_PUSH:-}"
+
+deny_ref() {
+  local ref="$1"
+  case "$ref" in
+    refs/heads/main|refs/heads/staging) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+has_merge_commits() {
+  local from_sha="$1"
+  local to_sha="$2"
+  if [[ "$from_sha" == "0000000000000000000000000000000000000000" ]]; then
+    # new branch push: only inspect the commits being pushed
+    git rev-list --merges "$to_sha" --max-count=1 >/dev/null 2>&1
+    return $?
+  fi
+  git rev-list --merges "${from_sha}..${to_sha}" --max-count=1 >/dev/null 2>&1
+}
+
+while read -r local_ref local_sha remote_ref remote_sha; do
+  if deny_ref "$remote_ref"; then
+    if [[ -n "$ALLOW_PROTECTED_PUSH" ]]; then
+      echo "[pre-push] ALLOW_PROTECTED_PUSH is set; allowing push to ${remote_ref}." >&2
+      continue
+    fi
+    cat >&2 <<EOF
+[pre-push] Blocked push to protected branch: ${remote_ref}
+
+Use a feature branch + PR, then "Squash and merge".
+
+If you *must* bypass locally (not recommended), re-run with:
+  ALLOW_PROTECTED_PUSH=1 git push ...
+EOF
+    exit 1
+  fi
+
+  if has_merge_commits "$remote_sha" "$local_sha"; then
+    cat >&2 <<EOF
+[pre-push] Blocked push: merge commits detected in the pushed range.
+
+Fix by rebasing / squashing before pushing.
+EOF
+    exit 1
+  fi
+done
+
