@@ -34,6 +34,11 @@ const LEAD_HEADERS = [
     "Status",
 ];
 
+const LIVE_SHEET_HOSTS = new Set([
+    "tripwithnomads.com",
+    "www.tripwithnomads.com",
+]);
+
 function formatTimestamp(value: string): string {
     const date = new Date(value);
     if (Number.isNaN(date.getTime())) return value;
@@ -48,6 +53,48 @@ function formatTimestamp(value: string): string {
         hour12: true,
     }).format(date);
     return `${text} IST`;
+}
+
+function extractHost(value: string | null | undefined): string {
+    const raw = String(value || "").trim();
+    if (!raw) return "";
+    try {
+        return new URL(raw).hostname.toLowerCase();
+    } catch {
+        return "";
+    }
+}
+
+function isLiveSheetHost(host: string): boolean {
+    return LIVE_SHEET_HOSTS.has(String(host || "").trim().toLowerCase());
+}
+
+function canWriteSheetsForRequest(req: Request): {
+    allowed: boolean;
+    decisionHost: string;
+    decisionSource: "headers" | "none";
+} {
+    const originHost = extractHost(req.headers.get("origin"));
+    const refererHost = extractHost(req.headers.get("referer"));
+    const headerHosts = [originHost, refererHost].filter(Boolean);
+
+    if (headerHosts.length > 0) {
+        const liveHeaderHost = headerHosts.find((host) => isLiveSheetHost(host));
+        return {
+            allowed: Boolean(liveHeaderHost),
+            decisionHost: liveHeaderHost || headerHosts[0] || "",
+            decisionSource: "headers",
+        };
+    }
+
+    return { allowed: false, decisionHost: "", decisionSource: "none" };
+}
+
+function isMissingLeadsTableMessage(message: string): boolean {
+    const normalized = String(message || "").toLowerCase();
+    return normalized.includes("table 'public.leads'") ||
+        normalized.includes('relation "leads" does not exist') ||
+        normalized.includes("could not find the table 'public.leads'");
 }
 
 serve(async (req) => {
@@ -95,6 +142,20 @@ serve(async (req) => {
         }
 
         const supabase = createClient(supabaseUrl, supabaseServiceRole);
+        let duplicateByLeadId = false;
+        if (payload.id) {
+            const { data: existingLead, error: lookupError } = await supabase
+                .from("leads")
+                .select("id")
+                .eq("id", payload.id)
+                .maybeSingle();
+            if (lookupError && !isMissingLeadsTableMessage(lookupError.message)) {
+                console.error("[record-lead] lead lookup error", lookupError);
+            } else if (existingLead?.id) {
+                duplicateByLeadId = true;
+            }
+        }
+
         const { data: insertedLead, error } = await supabase
             .from("leads")
             .upsert(payload, { onConflict: "id" })
@@ -104,8 +165,7 @@ serve(async (req) => {
         let lead = insertedLead;
         if (error || !lead) {
             const message = String(error?.message || "");
-            const missingLeadsTable = message.includes("table 'public.leads'") ||
-                message.includes('relation "leads" does not exist');
+            const missingLeadsTable = isMissingLeadsTableMessage(message);
             if (!missingLeadsTable) {
                 console.error("[record-lead] upsert error", error);
                 return json({ error: error?.message || "Could not upsert lead" }, 500);
@@ -124,26 +184,59 @@ serve(async (req) => {
         let sheetLogged = false;
         let sheetId = "";
         let sheetTab = "Leads";
+        let sheetRoute = "general";
+        let sheetWarning: string | null = null;
 
         // ── Sheet routing ─────────────────────────────────
         const NTC_SHEET_ID = String(Deno.env.get("GOOGLE_SHEET_ID_NTC") || "");
         const ORIGINAL_SHEET_ID = String(Deno.env.get("GOOGLE_SHEET_ID") || "");
         const TRIPS_SHEET_ID = String(Deno.env.get("GOOGLE_SHEET_ID_TRIPS") || "");
         const GENERAL_SHEET_ID = String(Deno.env.get("GOOGLE_SHEET_ID_GENERAL") || "");
+        const CUSTOM_TRIPS_SHEET_ID = String(
+            Deno.env.get("GOOGLE_SHEET_ID_CUSTOM_TRIPS") || "",
+        );
+        void ORIGINAL_SHEET_ID;
 
         if (payload.source === "booking_invite") {
             sheetId = NTC_SHEET_ID;
             sheetTab = status === "partial_fill" ? "Abandoned Leads" : "NTC - Invites";
+            sheetRoute = "ntc";
+        } else if (payload.source === "custom_trip_lead") {
+            // Custom-trip leads should never fall back to trips/general sheets.
+            sheetId = CUSTOM_TRIPS_SHEET_ID;
+            sheetTab = status === "partial_fill" ? "Abandoned Leads" : "Custom Trip Leads";
+            sheetRoute = "custom_trips";
         } else if (payload.source === "trip_page_lead") {
             sheetId = TRIPS_SHEET_ID;
             sheetTab = status === "partial_fill" ? "Abandoned Leads" : "Leads";
+            sheetRoute = "trips";
         } else {
             // General leads (waitlist_popup, general_lead, etc)
             sheetId = GENERAL_SHEET_ID;
             sheetTab = status === "partial_fill" ? "Abandoned Leads" : "Leads";
+            sheetRoute = "general";
         }
 
-        if (sheetsEnabled() && sheetId) {
+        if (payload.source === "custom_trip_lead" && !sheetId) {
+            sheetWarning = "GOOGLE_SHEET_ID_CUSTOM_TRIPS is not configured";
+            console.error(
+                "[record-lead] GOOGLE_SHEET_ID_CUSTOM_TRIPS is missing; custom leads will not be written to any fallback sheet",
+            );
+        }
+
+        const sheetWriteGate = canWriteSheetsForRequest(req);
+        if (!sheetWriteGate.allowed) {
+            const reasonHost = sheetWriteGate.decisionHost || "unknown";
+            const reason = `Sheet write blocked for non-live host (${reasonHost})`;
+            sheetWarning = sheetWarning ? `${sheetWarning}; ${reason}` : reason;
+            console.warn("[record-lead] sheets write skipped", {
+                source: payload.source,
+                reason,
+                decision_source: sheetWriteGate.decisionSource,
+            });
+        }
+
+        if (sheetWriteGate.allowed && sheetsEnabled() && sheetId && !duplicateByLeadId) {
             const values = [
                 lead.id,
                 formatTimestamp(String(lead.created_at || "")),
@@ -173,6 +266,10 @@ serve(async (req) => {
             ok: true,
             lead_id: lead.id,
             sheet_logged: sheetLogged,
+            sheet_route: sheetRoute,
+            sheet_tab: sheetTab,
+            sheet_warning: sheetWarning,
+            sheet_write_allowed: sheetWriteGate.allowed,
         });
     } catch (err) {
         console.error("[record-lead] error", err);

@@ -1,0 +1,1808 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>TWN Corporate Tours Prototype</title>
+  <meta name="description" content="Trip With Nomads corporate tours prototype page for offsites, team outings, and MICE travel." />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;700&family=Manrope:wght@500;700;800&display=swap" rel="stylesheet" />
+  <style>
+    :root {
+      --brand-primary: #1b91c9;
+      --brand-primary-2: #0099ff;
+      --bg-dark: #08111e;
+      --bg-soft: #0f1d32;
+      --text-light: #f3f9ff;
+      --text-muted: #9bb3c8;
+      --surface: #ffffff;
+      --surface-soft: #f3f9ff;
+      --border-soft: #d7e7f3;
+      --card-radius: 18px;
+      --shadow-soft: 0 20px 40px rgba(2, 20, 36, 0.12);
+      --container: min(1200px, calc(100% - 2rem));
+      --nav-height: 76px;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    html {
+      scroll-behavior: smooth;
+    }
+
+    body {
+      margin: 0;
+      font-family: 'DM Sans', sans-serif;
+      color: #12263a;
+      background: linear-gradient(180deg, #f8fcff 0%, #ffffff 24%, #f8fbff 100%);
+      line-height: 1.5;
+    }
+
+    h1,
+    h2,
+    h3,
+    h4 {
+      margin: 0;
+      font-family: 'Manrope', sans-serif;
+      letter-spacing: -0.02em;
+      color: #08192d;
+    }
+
+    p {
+      margin: 0;
+    }
+
+    a {
+      color: inherit;
+      text-decoration: none;
+    }
+
+    img {
+      max-width: 100%;
+      display: block;
+    }
+
+    .container {
+      width: var(--container);
+      margin-inline: auto;
+    }
+
+    .top-strip {
+      background: #071628;
+      color: #d4e8f8;
+      font-size: 0.86rem;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+    }
+
+    .top-strip .container {
+      min-height: 42px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 1rem;
+      flex-wrap: wrap;
+      padding: 0.4rem 0;
+    }
+
+    .top-strip .line {
+      display: flex;
+      gap: 1rem;
+      align-items: center;
+      flex-wrap: wrap;
+    }
+
+    .pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.5rem;
+      padding: 0.32rem 0.62rem;
+      border-radius: 999px;
+      background: rgba(0, 153, 255, 0.16);
+      color: #bce7ff;
+      font-weight: 600;
+      font-size: 0.78rem;
+      letter-spacing: 0.01em;
+    }
+
+    .nav-shell {
+      position: sticky;
+      top: 0;
+      z-index: 70;
+      background: rgba(5, 15, 28, 0.82);
+      border-bottom: 1px solid rgba(196, 231, 255, 0.16);
+      backdrop-filter: blur(10px);
+    }
+
+    .nav {
+      height: var(--nav-height);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 1rem;
+    }
+
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 0.75rem;
+      color: #f4fbff;
+      font-weight: 800;
+      font-size: 1.1rem;
+      letter-spacing: 0.02em;
+    }
+
+    .brand img {
+      width: 54px;
+      height: 54px;
+      object-fit: contain;
+      border-radius: 50%;
+      background: rgba(255, 255, 255, 0.95);
+      padding: 3px;
+      box-shadow: 0 8px 30px rgba(12, 45, 80, 0.25);
+    }
+
+    .nav-links {
+      display: flex;
+      align-items: center;
+      gap: 1.1rem;
+      color: #c8e5f9;
+      font-size: 0.92rem;
+      font-weight: 500;
+    }
+
+    .nav-links a {
+      position: relative;
+      padding-bottom: 2px;
+    }
+
+    .nav-links a::after {
+      content: '';
+      position: absolute;
+      left: 0;
+      bottom: -2px;
+      width: 0;
+      height: 2px;
+      border-radius: 20px;
+      background: linear-gradient(90deg, var(--brand-primary), #a4ddff);
+      transition: width 0.24s ease;
+    }
+
+    .nav-links a:hover::after,
+    .nav-links a:focus-visible::after {
+      width: 100%;
+    }
+
+    .cta-group {
+      display: flex;
+      align-items: center;
+      gap: 0.65rem;
+    }
+
+    .btn {
+      border: none;
+      border-radius: 12px;
+      padding: 0.8rem 1.1rem;
+      font-size: 0.9rem;
+      font-weight: 700;
+      cursor: pointer;
+      transition: transform 0.18s ease, box-shadow 0.18s ease, background 0.18s ease, color 0.18s ease;
+      text-align: center;
+    }
+
+    .btn:focus-visible {
+      outline: 2px solid #d6f0ff;
+      outline-offset: 2px;
+    }
+
+    .btn-primary {
+      background: linear-gradient(135deg, var(--brand-primary), var(--brand-primary-2));
+      color: #ffffff;
+      box-shadow: 0 14px 32px rgba(27, 145, 201, 0.3);
+    }
+
+    .btn-primary:hover {
+      transform: translateY(-1px);
+      box-shadow: 0 18px 34px rgba(15, 117, 165, 0.42);
+    }
+
+    .btn-outline {
+      border: 1px solid rgba(189, 229, 255, 0.5);
+      background: rgba(255, 255, 255, 0.04);
+      color: #dff2ff;
+    }
+
+    .btn-outline:hover {
+      transform: translateY(-1px);
+      background: rgba(255, 255, 255, 0.1);
+    }
+
+    .hero {
+      min-height: calc(100vh - var(--nav-height));
+      position: relative;
+      color: var(--text-light);
+      isolation: isolate;
+      display: flex;
+      align-items: center;
+      padding: clamp(3rem, 5vw, 5rem) 0;
+      overflow: hidden;
+    }
+
+    .hero::before {
+      content: '';
+      position: absolute;
+      inset: 0;
+      background: linear-gradient(98deg, rgba(4, 14, 26, 0.88) 15%, rgba(7, 20, 36, 0.66) 55%, rgba(4, 12, 23, 0.95) 100%);
+      z-index: -1;
+    }
+
+    .hero::after {
+      content: '';
+      position: absolute;
+      inset: -20% -10% auto;
+      height: 76%;
+      background: radial-gradient(circle at 78% 35%, rgba(0, 158, 255, 0.28), transparent 58%);
+      z-index: -1;
+      pointer-events: none;
+    }
+
+    .hero-bg {
+      position: absolute;
+      inset: 0;
+      z-index: -2;
+      object-fit: cover;
+      width: 100%;
+      height: 100%;
+      transform: scale(1.06);
+      animation: heroPulse 10s ease-in-out infinite alternate;
+    }
+
+    @keyframes heroPulse {
+      from { transform: scale(1.06) translateX(0); }
+      to { transform: scale(1.1) translateX(-1.2%); }
+    }
+
+    .hero-grid {
+      display: grid;
+      grid-template-columns: 1.15fr 0.85fr;
+      gap: clamp(1.25rem, 3vw, 2.8rem);
+      align-items: end;
+      width: 100%;
+    }
+
+    .hero-eyebrow {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.5rem;
+      border: 1px solid rgba(168, 223, 255, 0.35);
+      border-radius: 999px;
+      padding: 0.45rem 0.8rem;
+      font-size: 0.82rem;
+      font-weight: 600;
+      color: #d8eeff;
+      background: rgba(255, 255, 255, 0.06);
+      margin-bottom: 1.1rem;
+    }
+
+    .hero h1 {
+      color: #ffffff;
+      font-size: clamp(2rem, 4vw, 3.75rem);
+      line-height: 1.06;
+      margin-bottom: 1rem;
+      max-width: 14ch;
+    }
+
+    .hero .sub {
+      color: #d2e8f8;
+      font-size: clamp(1rem, 1.4vw, 1.18rem);
+      max-width: 58ch;
+      margin-bottom: 1.6rem;
+    }
+
+    .hero-actions {
+      display: flex;
+      gap: 0.8rem;
+      flex-wrap: wrap;
+      margin-bottom: 1.25rem;
+    }
+
+    .hero-stats-inline {
+      display: flex;
+      gap: 0.8rem;
+      flex-wrap: wrap;
+    }
+
+    .stat-mini {
+      padding: 0.6rem 0.8rem;
+      border-radius: 12px;
+      border: 1px solid rgba(179, 223, 248, 0.28);
+      background: rgba(255, 255, 255, 0.06);
+      color: #e4f5ff;
+      font-size: 0.82rem;
+      font-weight: 600;
+    }
+
+    .hero-side-card {
+      background: rgba(244, 251, 255, 0.98);
+      border-radius: 18px;
+      padding: 1rem;
+      border: 1px solid rgba(176, 220, 243, 0.65);
+      box-shadow: var(--shadow-soft);
+      transform: translateY(28px);
+    }
+
+    .hero-side-card img {
+      border-radius: 14px;
+      aspect-ratio: 16 / 11;
+      object-fit: cover;
+      width: 100%;
+      margin-bottom: 0.9rem;
+    }
+
+    .hero-side-card h3 {
+      font-size: 1.08rem;
+      margin-bottom: 0.35rem;
+    }
+
+    .hero-side-card p {
+      color: #456580;
+      font-size: 0.92rem;
+    }
+
+    .metrics {
+      margin-top: -28px;
+      position: relative;
+      z-index: 10;
+      padding-bottom: 1rem;
+    }
+
+    .metrics-grid {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 0.9rem;
+    }
+
+    .metric-card {
+      background: #fff;
+      border: 1px solid var(--border-soft);
+      border-radius: var(--card-radius);
+      padding: 1rem;
+      box-shadow: var(--shadow-soft);
+      min-height: 110px;
+      transition: transform 0.22s ease, box-shadow 0.22s ease;
+    }
+
+    .metric-card:hover {
+      transform: translateY(-3px);
+      box-shadow: 0 18px 30px rgba(16, 47, 76, 0.14);
+    }
+
+    .metric-card .value {
+      color: var(--brand-primary);
+      font-size: clamp(1.7rem, 3.2vw, 2.1rem);
+      font-weight: 800;
+      letter-spacing: -0.03em;
+      margin-bottom: 0.2rem;
+      line-height: 1;
+    }
+
+    .metric-card .label {
+      color: #34556f;
+      font-size: 0.9rem;
+      font-weight: 600;
+    }
+
+    section {
+      padding: clamp(3.2rem, 6vw, 5.4rem) 0;
+    }
+
+    .section-head {
+      display: flex;
+      justify-content: space-between;
+      gap: 1.2rem;
+      align-items: end;
+      margin-bottom: 1.5rem;
+      flex-wrap: wrap;
+    }
+
+    .section-head h2 {
+      font-size: clamp(1.7rem, 3vw, 2.5rem);
+      line-height: 1.08;
+      max-width: 18ch;
+    }
+
+    .section-head p {
+      color: #4f6f87;
+      max-width: 62ch;
+    }
+
+    .offerings {
+      background: radial-gradient(circle at 95% 5%, #d4eeff 0%, transparent 33%), linear-gradient(180deg, #f5fbff 0%, #eff7fd 100%);
+      border-top: 1px solid #e0eef9;
+      border-bottom: 1px solid #d7e9f8;
+    }
+
+    .card-grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 0.95rem;
+    }
+
+    .info-card {
+      background: #ffffff;
+      border: 1px solid #dcebf7;
+      border-radius: var(--card-radius);
+      padding: 1rem;
+      box-shadow: 0 10px 20px rgba(11, 36, 57, 0.06);
+      display: flex;
+      gap: 0.85rem;
+      transition: transform 0.2s ease, box-shadow 0.2s ease, border-color 0.2s ease;
+    }
+
+    .info-card:hover {
+      transform: translateY(-4px);
+      border-color: #b9ddf4;
+      box-shadow: 0 16px 26px rgba(11, 36, 57, 0.12);
+    }
+
+    .icon-wrap {
+      width: 42px;
+      height: 42px;
+      border-radius: 12px;
+      display: grid;
+      place-items: center;
+      background: linear-gradient(145deg, #dbf0ff, #eefdff);
+      color: #0a6f9d;
+      flex-shrink: 0;
+    }
+
+    .icon-wrap svg {
+      width: 20px;
+      height: 20px;
+    }
+
+    .info-card h3 {
+      font-size: 1rem;
+      margin-bottom: 0.22rem;
+    }
+
+    .info-card p {
+      color: #557089;
+      font-size: 0.9rem;
+    }
+
+    .tabs-wrap {
+      border-radius: 22px;
+      border: 1px solid #dae8f5;
+      background: #fff;
+      box-shadow: var(--shadow-soft);
+      padding: 1rem;
+    }
+
+    .tabs {
+      display: flex;
+      gap: 0.6rem;
+      flex-wrap: wrap;
+      margin-bottom: 1rem;
+    }
+
+    .tab-btn {
+      border: 1px solid #cde5f6;
+      border-radius: 999px;
+      padding: 0.55rem 1rem;
+      color: #2a4e6b;
+      background: #f5fbff;
+      font-weight: 700;
+      font-size: 0.86rem;
+      cursor: pointer;
+      transition: all 0.2s ease;
+    }
+
+    .tab-btn[aria-selected='true'] {
+      background: linear-gradient(135deg, #1b91c9, #0099ff);
+      border-color: transparent;
+      color: #fff;
+      box-shadow: 0 10px 18px rgba(5, 117, 170, 0.32);
+    }
+
+    .tab-panel {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 0.85rem;
+      opacity: 0;
+      transform: translateY(6px);
+      transition: opacity 0.28s ease, transform 0.28s ease;
+    }
+
+    .tab-panel.ready {
+      opacity: 1;
+      transform: translateY(0);
+    }
+
+    .package-card {
+      background: linear-gradient(180deg, #ffffff 0%, #f8fcff 100%);
+      border: 1px solid #d8e8f4;
+      border-radius: 16px;
+      padding: 1rem;
+      min-height: 178px;
+      display: flex;
+      flex-direction: column;
+      gap: 0.6rem;
+      transition: transform 0.2s ease, box-shadow 0.2s ease;
+    }
+
+    .package-card:hover {
+      transform: translateY(-4px);
+      box-shadow: 0 16px 22px rgba(9, 44, 74, 0.14);
+    }
+
+    .package-badge {
+      width: fit-content;
+      font-size: 0.74rem;
+      letter-spacing: 0.03em;
+      text-transform: uppercase;
+      font-weight: 700;
+      color: #0d6f9b;
+      border: 1px solid #c2e3f8;
+      border-radius: 999px;
+      padding: 0.2rem 0.55rem;
+      background: #eaf6ff;
+    }
+
+    .package-card h3 {
+      font-size: 1.02rem;
+    }
+
+    .package-meta {
+      margin-top: auto;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 0.5rem;
+      color: #3f607b;
+      font-size: 0.84rem;
+      font-weight: 600;
+    }
+
+    .timeline {
+      display: grid;
+      grid-template-columns: repeat(5, minmax(0, 1fr));
+      gap: 0.75rem;
+      position: relative;
+    }
+
+    .timeline::before {
+      content: '';
+      position: absolute;
+      left: 3%;
+      right: 3%;
+      top: 28px;
+      height: 2px;
+      background: linear-gradient(90deg, #8bd3ff, #1a8fca, #8bd3ff);
+      opacity: 0.44;
+      z-index: 0;
+    }
+
+    .step {
+      position: relative;
+      z-index: 1;
+      background: #fff;
+      border: 1px solid #d7e8f6;
+      border-radius: 16px;
+      padding: 0.95rem;
+      box-shadow: 0 10px 20px rgba(11, 36, 57, 0.08);
+      transition: transform 0.2s ease;
+    }
+
+    .step:hover {
+      transform: translateY(-4px);
+    }
+
+    .step-count {
+      width: 34px;
+      height: 34px;
+      border-radius: 50%;
+      background: linear-gradient(135deg, #1c93cb, #00a2ff);
+      color: #fff;
+      display: grid;
+      place-items: center;
+      font-weight: 700;
+      margin-bottom: 0.7rem;
+    }
+
+    .step h3 {
+      font-size: 0.97rem;
+      margin-bottom: 0.3rem;
+    }
+
+    .step p {
+      color: #50708a;
+      font-size: 0.86rem;
+    }
+
+    .logos {
+      display: grid;
+      grid-template-columns: repeat(6, minmax(0, 1fr));
+      gap: 0.65rem;
+      margin-bottom: 1.2rem;
+    }
+
+    .logo-chip {
+      border: 1px solid #dcebf7;
+      border-radius: 12px;
+      background: #fff;
+      min-height: 52px;
+      display: grid;
+      place-items: center;
+      color: #2a4f6e;
+      font-weight: 700;
+      font-size: 0.83rem;
+      letter-spacing: 0.01em;
+      text-align: center;
+      padding: 0.4rem;
+    }
+
+    .testimonial-grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 0.9rem;
+    }
+
+    .testimonial {
+      border: 1px solid #dbe9f5;
+      border-radius: var(--card-radius);
+      overflow: hidden;
+      background: #fff;
+      box-shadow: 0 12px 24px rgba(7, 34, 58, 0.09);
+      transition: transform 0.2s ease, box-shadow 0.2s ease;
+    }
+
+    .testimonial:hover {
+      transform: translateY(-4px);
+      box-shadow: 0 16px 30px rgba(7, 34, 58, 0.14);
+    }
+
+    .testimonial img {
+      width: 100%;
+      aspect-ratio: 4 / 3;
+      object-fit: cover;
+      background: #e5f3fd;
+    }
+
+    .testimonial-body {
+      padding: 0.9rem;
+      display: grid;
+      gap: 0.4rem;
+    }
+
+    .testimonial h3 {
+      font-size: 1rem;
+    }
+
+    .testimonial p {
+      color: #4a6a84;
+      font-size: 0.88rem;
+    }
+
+    .gallery {
+      background: linear-gradient(180deg, #08111e 0%, #0f1b2f 100%);
+      color: #f3f9ff;
+      border-top: 1px solid rgba(174, 219, 245, 0.2);
+      border-bottom: 1px solid rgba(174, 219, 245, 0.16);
+    }
+
+    .gallery .section-head h2,
+    .gallery .section-head p {
+      color: #e4f4ff;
+    }
+
+    .gallery-grid {
+      display: grid;
+      grid-template-columns: 1.2fr 1fr 1fr 1fr;
+      grid-auto-rows: 180px;
+      gap: 0.75rem;
+    }
+
+    .gallery-item {
+      position: relative;
+      overflow: hidden;
+      border-radius: 16px;
+      border: 1px solid rgba(199, 230, 252, 0.2);
+      background: rgba(255, 255, 255, 0.06);
+    }
+
+    .gallery-item:first-child {
+      grid-row: span 2;
+    }
+
+    .gallery-item img {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+      transition: transform 0.5s ease, filter 0.5s ease;
+    }
+
+    .gallery-item:hover img {
+      transform: scale(1.07);
+      filter: saturate(1.08);
+    }
+
+    .gallery-item .overlay {
+      position: absolute;
+      inset: auto 0 0;
+      padding: 0.55rem 0.7rem;
+      font-size: 0.76rem;
+      color: #eaf5ff;
+      background: linear-gradient(180deg, transparent, rgba(4, 14, 26, 0.82));
+    }
+
+    .pricing-wrap {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 0.9rem;
+    }
+
+    .pricing-card,
+    .inclusions {
+      border-radius: 20px;
+      border: 1px solid #d9e8f5;
+      background: #fff;
+      padding: 1.2rem;
+      box-shadow: var(--shadow-soft);
+    }
+
+    .price-tag {
+      font-size: clamp(2rem, 3vw, 2.8rem);
+      color: #0f8ac3;
+      font-weight: 800;
+      line-height: 1;
+      margin: 0.8rem 0 0.35rem;
+    }
+
+    .pricing-note {
+      font-size: 0.88rem;
+      color: #5a768c;
+    }
+
+    .list {
+      list-style: none;
+      padding: 0;
+      margin: 0;
+      display: grid;
+      gap: 0.55rem;
+    }
+
+    .list li {
+      display: flex;
+      gap: 0.6rem;
+      color: #34556f;
+      font-size: 0.9rem;
+    }
+
+    .list li::before {
+      content: '';
+      width: 8px;
+      height: 8px;
+      border-radius: 99px;
+      margin-top: 0.39rem;
+      background: linear-gradient(135deg, #1b91c9, #64c8ff);
+      flex-shrink: 0;
+    }
+
+    .faq {
+      border-top: 1px solid #dcecf8;
+      background: linear-gradient(180deg, #f6fbff 0%, #f9fdff 100%);
+    }
+
+    .faq-list {
+      display: grid;
+      gap: 0.65rem;
+    }
+
+    .faq-item {
+      border: 1px solid #d9eaf8;
+      border-radius: 14px;
+      background: #fff;
+      overflow: hidden;
+    }
+
+    .faq-btn {
+      width: 100%;
+      text-align: left;
+      background: transparent;
+      border: none;
+      font-size: 0.97rem;
+      font-weight: 700;
+      color: #173650;
+      padding: 0.85rem 1rem;
+      display: flex;
+      justify-content: space-between;
+      gap: 0.85rem;
+      cursor: pointer;
+    }
+
+    .faq-btn span {
+      transition: transform 0.22s ease;
+      color: #0f7eb0;
+      font-weight: 700;
+    }
+
+    .faq-item[data-open='true'] .faq-btn span {
+      transform: rotate(45deg);
+    }
+
+    .faq-content {
+      max-height: 0;
+      overflow: hidden;
+      transition: max-height 0.3s ease;
+    }
+
+    .faq-content p {
+      color: #486883;
+      padding: 0 1rem 0.95rem;
+      font-size: 0.9rem;
+    }
+
+    .footer {
+      background: #071223;
+      color: #d6ebfa;
+      padding: 2.3rem 0;
+      border-top: 1px solid rgba(172, 224, 255, 0.15);
+    }
+
+    .footer-grid {
+      display: grid;
+      grid-template-columns: 1.3fr 1fr 1fr;
+      gap: 1rem;
+    }
+
+    .footer h3,
+    .footer h4 {
+      color: #f2faff;
+      margin-bottom: 0.5rem;
+    }
+
+    .footer p,
+    .footer li {
+      color: #b4d1e5;
+      font-size: 0.9rem;
+    }
+
+    .footer ul {
+      list-style: none;
+      padding: 0;
+      margin: 0;
+      display: grid;
+      gap: 0.38rem;
+    }
+
+    .footer-logo {
+      width: 74px;
+      margin-bottom: 0.45rem;
+      border-radius: 50%;
+      background: #fff;
+      padding: 3px;
+    }
+
+    .floating-cta {
+      position: fixed;
+      right: 1rem;
+      bottom: 1rem;
+      z-index: 80;
+      border-radius: 999px;
+      padding: 0.8rem 1.06rem;
+      border: none;
+      background: linear-gradient(135deg, #1b91c9, #0099ff);
+      color: #fff;
+      font-weight: 700;
+      box-shadow: 0 18px 34px rgba(6, 117, 170, 0.38);
+      cursor: pointer;
+      transition: transform 0.2s ease;
+    }
+
+    .floating-cta:hover {
+      transform: translateY(-2px);
+    }
+
+    .modal {
+      position: fixed;
+      inset: 0;
+      background: rgba(4, 12, 22, 0.68);
+      display: grid;
+      place-items: center;
+      z-index: 100;
+      opacity: 0;
+      pointer-events: none;
+      transition: opacity 0.24s ease;
+      padding: 1rem;
+    }
+
+    .modal.open {
+      opacity: 1;
+      pointer-events: auto;
+    }
+
+    .dialog {
+      width: min(720px, 100%);
+      max-height: calc(100vh - 2rem);
+      overflow: auto;
+      border-radius: 18px;
+      background: #fff;
+      border: 1px solid #d8e8f4;
+      box-shadow: 0 32px 60px rgba(3, 18, 31, 0.32);
+      padding: 1rem;
+    }
+
+    .dialog-head {
+      display: flex;
+      justify-content: space-between;
+      align-items: start;
+      gap: 1rem;
+      margin-bottom: 0.8rem;
+    }
+
+    .dialog-head h3 {
+      font-size: 1.25rem;
+    }
+
+    .dialog-head p {
+      color: #4f6e86;
+      font-size: 0.9rem;
+      margin-top: 0.3rem;
+    }
+
+    .close-btn {
+      border: none;
+      width: 34px;
+      height: 34px;
+      border-radius: 10px;
+      background: #eaf6ff;
+      color: #116f9a;
+      font-size: 1.28rem;
+      line-height: 1;
+      cursor: pointer;
+    }
+
+    .lead-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 0.65rem;
+    }
+
+    .field {
+      display: grid;
+      gap: 0.28rem;
+    }
+
+    .field.full {
+      grid-column: span 2;
+    }
+
+    label {
+      font-size: 0.8rem;
+      color: #395d78;
+      font-weight: 700;
+    }
+
+    input,
+    select,
+    textarea {
+      width: 100%;
+      border: 1px solid #cae1f1;
+      border-radius: 10px;
+      font: inherit;
+      font-size: 0.92rem;
+      padding: 0.62rem 0.75rem;
+      color: #13324a;
+      background: #fcfeff;
+    }
+
+    input:focus,
+    select:focus,
+    textarea:focus {
+      outline: 2px solid rgba(21, 145, 203, 0.22);
+      border-color: #5ab9e7;
+    }
+
+    .error {
+      border-color: #dc5e5e;
+      background: #fff8f8;
+    }
+
+    .error-text {
+      color: #cc3e3e;
+      font-size: 0.78rem;
+      min-height: 0.95rem;
+    }
+
+    .form-actions {
+      margin-top: 0.85rem;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 0.6rem;
+      flex-wrap: wrap;
+    }
+
+    .success {
+      color: #0f7f4e;
+      font-weight: 700;
+      font-size: 0.86rem;
+      display: none;
+    }
+
+    .success.active {
+      display: block;
+    }
+
+    .reveal {
+      opacity: 0;
+      transform: translateY(16px);
+      transition: opacity 0.55s ease, transform 0.55s ease;
+    }
+
+    .reveal.in-view {
+      opacity: 1;
+      transform: translateY(0);
+    }
+
+    @media (max-width: 1080px) {
+      .hero-grid,
+      .pricing-wrap,
+      .footer-grid {
+        grid-template-columns: 1fr;
+      }
+
+      .hero-side-card {
+        transform: none;
+        max-width: 560px;
+      }
+
+      .metrics-grid,
+      .card-grid,
+      .testimonial-grid,
+      .timeline,
+      .logos {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
+
+      .tab-panel {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
+
+      .gallery-grid {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        grid-auto-rows: 160px;
+      }
+
+      .gallery-item:first-child {
+        grid-row: span 1;
+      }
+    }
+
+    @media (max-width: 760px) {
+      .top-strip {
+        font-size: 0.77rem;
+      }
+
+      .nav-links {
+        display: none;
+      }
+
+      .cta-group .btn-outline {
+        display: none;
+      }
+
+      .hero {
+        min-height: auto;
+      }
+
+      .metrics {
+        margin-top: 0;
+      }
+
+      .metrics-grid,
+      .card-grid,
+      .testimonial-grid,
+      .timeline,
+      .logos,
+      .tab-panel,
+      .lead-grid {
+        grid-template-columns: 1fr;
+      }
+
+      .lead-grid .field.full {
+        grid-column: span 1;
+      }
+
+      .timeline::before {
+        display: none;
+      }
+
+      .section-head {
+        margin-bottom: 1rem;
+      }
+
+      .floating-cta {
+        left: 0.8rem;
+        right: 0.8rem;
+        text-align: center;
+      }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      html { scroll-behavior: auto; }
+      *, *::before, *::after {
+        animation-duration: 0.01ms !important;
+        animation-iteration-count: 1 !important;
+        transition-duration: 0.01ms !important;
+      }
+      .reveal { opacity: 1; transform: none; }
+    }
+  </style>
+</head>
+<body>
+  <div class="top-strip">
+    <div class="container">
+      <div class="line">
+        <span>info@tripwithnomads.com</span>
+        <span>+91 93184 05401 · +91 98999 05970</span>
+      </div>
+      <span class="pill">Corporate Offsites · Pan India + International</span>
+    </div>
+  </div>
+
+  <header class="nav-shell">
+    <div class="container nav">
+      <a class="brand" href="#top" aria-label="Trip With Nomads home">
+        <img src="https://framerusercontent.com/images/FR1lBzx4w9xp2fecFXEMUGGul4.png?width=364&height=229" data-fallback="./assets/corporate/pdf-twn-logo.png" alt="Trip With Nomads logo" />
+        <span>TWN Corporate</span>
+      </a>
+      <nav class="nav-links" aria-label="Primary">
+        <a href="#offerings">Offerings</a>
+        <a href="#packages">Packages</a>
+        <a href="#process">Process</a>
+        <a href="#clients">Clients</a>
+        <a href="#pricing">Pricing</a>
+        <a href="#faq">FAQs</a>
+      </nav>
+      <div class="cta-group">
+        <button class="btn btn-outline" type="button" data-open-modal="deck">Download Deck</button>
+        <button class="btn btn-primary" type="button" data-open-modal="plan">Plan Offsite</button>
+      </div>
+    </div>
+  </header>
+
+  <main id="top">
+    <section class="hero">
+      <img class="hero-bg" src="https://framerusercontent.com/images/qufwJUSHMyRTtZtmWorOq1kx9M.webp?width=3360&height=1892" data-fallback="./assets/corporate/pdf-night-group.jpg" alt="Corporate team travelling with TWN" />
+      <div class="container hero-grid reveal">
+        <div>
+          <span class="hero-eyebrow">Corporate Tours · MICE · Team Offsites</span>
+          <h1>Corporate tours your team actually remembers.</h1>
+          <p class="sub">Trip With Nomads designs purpose-first offsites, conferences, incentive trips, and team outings with complete planning, on-ground support, and high-energy experiences.</p>
+          <div class="hero-actions">
+            <button class="btn btn-primary" type="button" data-open-modal="plan">Plan Corporate Offsite</button>
+            <button class="btn btn-outline" type="button" data-open-modal="deck">Download Deck</button>
+          </div>
+          <div class="hero-stats-inline">
+            <span class="stat-mini">24/7 Coordination Desk</span>
+            <span class="stat-mini">Dedicated Corporate Account Manager</span>
+            <span class="stat-mini">Custom Itinerary + GST Billing</span>
+          </div>
+        </div>
+
+        <article class="hero-side-card">
+          <img src="./assets/corporate/pdf-offsite-group.jpg" alt="TWN corporate offsite group" />
+          <h3>Built for HR, Admin & Leadership Teams</h3>
+          <p>From destination shortlisting to final execution, every module is planned to align with your goals, group size, and budget.</p>
+        </article>
+      </div>
+    </section>
+
+    <section class="metrics">
+      <div class="container metrics-grid" id="statsGrid"></div>
+    </section>
+
+    <section class="offerings" id="offerings">
+      <div class="container">
+        <div class="section-head reveal">
+          <h2>What TWN Corporate Offsites include</h2>
+          <p>We merged the strongest conversion and content patterns from category leaders into one practical flow: clear offerings, transparent pricing, real proof, and fast enquiry.</p>
+        </div>
+        <div class="card-grid" id="offeringsGrid"></div>
+      </div>
+    </section>
+
+    <section id="packages">
+      <div class="container">
+        <div class="section-head reveal">
+          <h2>Destination clusters and package tracks</h2>
+          <p>Switch between domestic offsites, international incentive tours, and incentive-heavy experiences. Every package is customizable on dates, difficulty, hotel category, and objective.</p>
+        </div>
+        <div class="tabs-wrap reveal">
+          <div class="tabs" role="tablist" aria-label="Corporate package categories" id="tabs"></div>
+          <div id="tabPanel" class="tab-panel" role="tabpanel" aria-live="polite"></div>
+        </div>
+      </div>
+    </section>
+
+    <section id="process">
+      <div class="container">
+        <div class="section-head reveal">
+          <h2>Our planning process</h2>
+          <p>Structured execution from first brief to post-trip review so your internal team spends less time coordinating vendors and more time with people.</p>
+        </div>
+        <div class="timeline" id="timeline"></div>
+      </div>
+    </section>
+
+    <section id="clients">
+      <div class="container">
+        <div class="section-head reveal">
+          <h2>Corporate teams we have hosted</h2>
+          <p>Social proof section modeled from top competitors, but adapted to TWN style with real visual references and short case snapshots.</p>
+        </div>
+        <div class="logos reveal" id="clientLogos"></div>
+        <div class="testimonial-grid" id="testimonials"></div>
+      </div>
+    </section>
+
+    <section class="gallery" id="gallery">
+      <div class="container">
+        <div class="section-head reveal">
+          <h2>Real moments from TWN offsites</h2>
+          <p>Mixed source gallery using website-first imagery, PDF extractions, and placeholders for future replacement.</p>
+        </div>
+        <div class="gallery-grid" id="galleryGrid"></div>
+      </div>
+    </section>
+
+    <section id="pricing">
+      <div class="container">
+        <div class="section-head reveal">
+          <h2>Pricing and inclusions</h2>
+          <p>Pricing baseline and module list are seeded from your corporate PDF and adapted for web readability.</p>
+        </div>
+
+        <div class="pricing-wrap reveal">
+          <article class="pricing-card">
+            <p class="pill" style="background: #e7f5ff; color: #0d74a3;">Custom Corporate Packages</p>
+            <div class="price-tag">₹6,000 / person</div>
+            <p class="pricing-note">Starting from. Final proposal varies by destination, trip duration, hotel category, activity intensity, and level of customization required.</p>
+            <div class="hero-actions" style="margin-top: 1rem; margin-bottom: 0;">
+              <button class="btn btn-primary" type="button" data-open-modal="quote">Request Quote</button>
+              <button class="btn" style="background:#f0f8ff;color:#0f6f9b;border:1px solid #c8e2f3;" type="button" data-open-modal="deck">Get Deck PDF</button>
+            </div>
+          </article>
+
+          <aside class="inclusions">
+            <h3 style="font-size:1.1rem; margin-bottom:0.7rem;">What can be included</h3>
+            <ul class="list" id="inclusionsList"></ul>
+          </aside>
+        </div>
+      </div>
+    </section>
+
+    <section class="faq" id="faq">
+      <div class="container">
+        <div class="section-head reveal">
+          <h2>FAQs for corporate teams</h2>
+          <p>Decision-support content inspired by competitor structures, tightened for faster scanning and lead conversion.</p>
+        </div>
+        <div class="faq-list" id="faqList"></div>
+      </div>
+    </section>
+  </main>
+
+  <footer class="footer">
+    <div class="container footer-grid">
+      <div>
+        <img class="footer-logo" src="https://framerusercontent.com/images/FR1lBzx4w9xp2fecFXEMUGGul4.png?width=364&height=229" data-fallback="./assets/corporate/pdf-twn-logo.png" alt="Trip With Nomads logo" />
+        <h3>Trip With Nomads</h3>
+        <p>Corporate travel partner for offsites, leadership retreats, conferences, team outings, and incentive trips across India and international destinations.</p>
+      </div>
+
+      <div>
+        <h4>Corporate Desk</h4>
+        <ul>
+          <li>info@tripwithnomads.com</li>
+          <li>+91 93184 05401</li>
+          <li>+91 98999 05970</li>
+          <li>@tripwithnomads</li>
+        </ul>
+      </div>
+
+      <div>
+        <h4>Office</h4>
+        <ul>
+          <li>Office No 840, 8th Floor, Vipul Plaza</li>
+          <li>Sector 81, Faridabad, Haryana 121007</li>
+          <li>24/7 planning support</li>
+          <li>GST invoice + corporate billing</li>
+        </ul>
+      </div>
+    </div>
+  </footer>
+
+  <button class="floating-cta" type="button" data-open-modal="plan" aria-label="Open corporate enquiry form">Plan My Corporate Tour</button>
+
+  <div class="modal" id="leadModal" aria-hidden="true">
+    <div class="dialog" role="dialog" aria-modal="true" aria-labelledby="leadTitle">
+      <div class="dialog-head">
+        <div>
+          <h3 id="leadTitle">Plan your corporate offsite with TWN</h3>
+          <p>Fill this quick brief and our team will contact you with a custom proposal.</p>
+        </div>
+        <button class="close-btn" type="button" data-close-modal aria-label="Close form">×</button>
+      </div>
+
+      <form id="leadForm" novalidate>
+        <input type="hidden" name="intent" id="intentField" value="plan" />
+        <div class="lead-grid">
+          <div class="field">
+            <label for="name">Name</label>
+            <input id="name" name="name" type="text" placeholder="Your full name" />
+            <span class="error-text" data-error-for="name"></span>
+          </div>
+
+          <div class="field">
+            <label for="email">Email</label>
+            <input id="email" name="email" type="email" placeholder="name@company.com" />
+            <span class="error-text" data-error-for="email"></span>
+          </div>
+
+          <div class="field">
+            <label for="phone">Phone</label>
+            <input id="phone" name="phone" type="tel" placeholder="10-digit mobile number" />
+            <span class="error-text" data-error-for="phone"></span>
+          </div>
+
+          <div class="field">
+            <label for="company">Company</label>
+            <input id="company" name="company" type="text" placeholder="Company name" />
+            <span class="error-text" data-error-for="company"></span>
+          </div>
+
+          <div class="field">
+            <label for="teamSize">Team Size</label>
+            <select id="teamSize" name="teamSize">
+              <option value="">Select team size</option>
+              <option>10-20</option>
+              <option>21-50</option>
+              <option>51-100</option>
+              <option>100+</option>
+            </select>
+            <span class="error-text" data-error-for="teamSize"></span>
+          </div>
+
+          <div class="field">
+            <label for="preferredDestination">Preferred Destination</label>
+            <input id="preferredDestination" name="preferredDestination" type="text" placeholder="Ladakh / Thailand / Flexible" />
+            <span class="error-text" data-error-for="preferredDestination"></span>
+          </div>
+
+          <div class="field full">
+            <label for="travelWindow">Travel Window</label>
+            <input id="travelWindow" name="travelWindow" type="text" placeholder="e.g. Sep 2026, 4D/3N" />
+            <span class="error-text" data-error-for="travelWindow"></span>
+          </div>
+
+          <div class="field full">
+            <label for="message">Message</label>
+            <textarea id="message" name="message" rows="4" placeholder="Tell us your goal: team bonding, strategy meet, reward trip, etc."></textarea>
+            <span class="error-text" data-error-for="message"></span>
+          </div>
+        </div>
+
+        <div class="form-actions">
+          <p class="success" id="formSuccess">Thanks! This is a prototype submission. We captured your request locally.</p>
+          <button class="btn btn-primary" type="submit">Send Enquiry</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <script>
+    window.corporatePageData = {
+      hero: {
+        title: 'Corporate tours your team actually remembers.',
+        subtitle: 'Trip With Nomads designs purpose-first offsites, conferences, incentive trips, and team outings with complete planning, on-ground support, and high-energy experiences.',
+        primaryCta: 'Plan Corporate Offsite',
+        secondaryCta: 'Download Deck'
+      },
+      stats: [
+        { value: 8500, suffix: '+', label: 'Happy travellers served' },
+        { value: 95, suffix: '%', label: 'Good review sentiment' },
+        { value: 3236, suffix: '+', label: 'Tour success touchpoints' },
+        { value: 24, suffix: '/7', label: 'Planning & on-ground support' }
+      ],
+      offerings: [
+        { icon: 'presentation', title: 'Conferences', description: 'Conference-ready stays, AV support, and structured agenda blocks for productive sessions.' },
+        { icon: 'chat', title: 'Communication Activities', description: 'Interactive modules to improve team communication and cross-functional collaboration.' },
+        { icon: 'users', title: 'Team Building Activities', description: 'Curated team challenges and collaboration-led experiences based on group dynamics.' },
+        { icon: 'music', title: 'Bonfire & Live Jamming', description: 'High-energy social evenings that improve bonding after work-intensive days.' },
+        { icon: 'map', title: 'Off-beat Venues', description: 'Handpicked locations beyond crowded mainstream itineraries for better focus and recall.' },
+        { icon: 'leaf', title: 'Team Outings & Nature Walks', description: 'Light adventure and nature-led experiences that balance fun, wellness, and conversation.' }
+      ],
+      destinations: {
+        Domestic: [
+          { name: 'Ladakh Leadership Retreat', type: 'Domestic', duration: '5D/4N', note: 'Adventure + alignment' },
+          { name: 'Uttarakhand Wellness Offsite', type: 'Domestic', duration: '4D/3N', note: 'Nature + communication' },
+          { name: 'Himachal Team Outing', type: 'Domestic', duration: '3D/2N', note: 'Quick reset module' }
+        ],
+        International: [
+          { name: 'Thailand Corporate Retreat', type: 'International', duration: '5D/4N', note: 'Beach + planning sprint' },
+          { name: 'Vietnam Incentive Tour', type: 'International', duration: '5D/4N', note: 'Culture + reward' },
+          { name: 'Dubai Conference Trip', type: 'International', duration: '4D/3N', note: 'MICE-ready' }
+        ],
+        Incentive: [
+          { name: 'Top Performer Reward Escape', type: 'Incentive', duration: '3D/2N', note: 'Milestone celebration' },
+          { name: 'Annual Team Recognition Program', type: 'Incentive', duration: '4D/3N', note: 'High-engagement format' },
+          { name: 'Leadership Residency', type: 'Incentive', duration: '5D/4N', note: 'Privacy + strategic sessions' }
+        ]
+      },
+      processSteps: [
+        { title: 'Briefing', description: 'Objective mapping, group size, dates, and budget calibration.' },
+        { title: 'Itinerary Design', description: 'Destination shortlist, stay categories, activity architecture, and proposal.' },
+        { title: 'Logistics Lock', description: 'Travel, stays, vendor blocks, billing paperwork, and contingency prep.' },
+        { title: 'On-ground Delivery', description: 'Dedicated support team handling real-time trip operations.' },
+        { title: 'Post-trip Wrap', description: 'Feedback capture, highlights, and recommendations for next offsite.' }
+      ],
+      testimonials: [
+        {
+          client: 'AlgoCirrus Team Offsite',
+          summary: 'Designed for high-participation activities with structured team engagement windows.',
+          image: './assets/corporate/pdf-client-saffron.jpg',
+          location: 'Rajasthan'
+        },
+        {
+          client: 'Capital Group Incentive Trip',
+          summary: 'Balanced international movement, local experiences, and operational precision.',
+          image: './assets/corporate/pdf-client-capital.jpg',
+          location: 'Thailand'
+        },
+        {
+          client: 'Digi Sidekick Offsite',
+          summary: 'Combined team games, awards evening, and relaxed social modules.',
+          image: './assets/corporate/pdf-client-digisidekick.jpg',
+          location: 'Goa'
+        }
+      ],
+      faqs: [
+        {
+          q: 'Can corporate packages be customized for our goals?',
+          a: 'Yes. Every itinerary is custom built around your objective, team profile, budget, and preferred travel window.'
+        },
+        {
+          q: 'Do you handle both domestic and international corporate tours?',
+          a: 'Yes. We run domestic offsites, international incentive travel, and conference-focused trips with end-to-end coordination.'
+        },
+        {
+          q: 'Is corporate billing and GST invoicing available?',
+          a: 'Yes. Billing documentation and GST invoices are included for corporate bookings.'
+        },
+        {
+          q: 'How early should we plan an offsite?',
+          a: 'Recommended lead time is 4 to 8 weeks for better pricing, venue options, and operational smoothness.'
+        },
+        {
+          q: 'What is the minimum group size?',
+          a: 'We can design plans for smaller teams and large groups; ideal structuring starts from around 10 participants.'
+        }
+      ],
+      contact: {
+        email: 'info@tripwithnomads.com',
+        phones: ['+91 93184 05401', '+91 98999 05970'],
+        address: 'Office No 840, 08th floor, Vipul Plaza, Sector 81, Faridabad, Haryana - 121007'
+      }
+    };
+
+    const iconMap = {
+      presentation: '<svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M3 4h18v11H3z" stroke="currentColor" stroke-width="1.8"/><path d="M9 20h6M12 15v5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>',
+      chat: '<svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M4 5h16v10H8l-4 4z" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></svg>',
+      users: '<svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M16 19a4 4 0 0 0-8 0" stroke="currentColor" stroke-width="1.8"/><circle cx="12" cy="8" r="3" stroke="currentColor" stroke-width="1.8"/><path d="M20 19a3 3 0 0 0-3-3" stroke="currentColor" stroke-width="1.8"/><path d="M4 19a3 3 0 0 1 3-3" stroke="currentColor" stroke-width="1.8"/></svg>',
+      music: '<svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M9 17a2 2 0 1 1-2-2 2 2 0 0 1 2 2Zm0 0V6l10-2v9" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/><circle cx="17" cy="15" r="2" stroke="currentColor" stroke-width="1.8"/></svg>',
+      map: '<svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M3 6l6-2 6 2 6-2v14l-6 2-6-2-6 2z" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/><path d="M9 4v14M15 6v14" stroke="currentColor" stroke-width="1.8"/></svg>',
+      leaf: '<svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M5 19c7 0 14-7 14-14-7 0-14 7-14 14Z" stroke="currentColor" stroke-width="1.8"/><path d="M5 19c4-5 8-8 14-14" stroke="currentColor" stroke-width="1.8"/></svg>'
+    };
+
+    const data = window.corporatePageData;
+
+    const statsGrid = document.getElementById('statsGrid');
+    data.stats.forEach((item) => {
+      const el = document.createElement('article');
+      el.className = 'metric-card reveal';
+      el.innerHTML = `<div class="value" data-count="${item.value}" data-suffix="${item.suffix}">0${item.suffix}</div><p class="label">${item.label}</p>`;
+      statsGrid.appendChild(el);
+    });
+
+    const offeringsGrid = document.getElementById('offeringsGrid');
+    data.offerings.forEach((item) => {
+      const el = document.createElement('article');
+      el.className = 'info-card reveal';
+      el.innerHTML = `<div class="icon-wrap">${iconMap[item.icon] || iconMap.presentation}</div><div><h3>${item.title}</h3><p>${item.description}</p></div>`;
+      offeringsGrid.appendChild(el);
+    });
+
+    const tabsEl = document.getElementById('tabs');
+    const tabPanel = document.getElementById('tabPanel');
+    const tabKeys = Object.keys(data.destinations);
+
+    function renderTab(tabKey) {
+      const items = data.destinations[tabKey];
+      tabPanel.classList.remove('ready');
+      tabPanel.innerHTML = items.map((item) => `
+        <article class="package-card">
+          <span class="package-badge">${item.type}</span>
+          <h3>${item.name}</h3>
+          <p>${item.note}</p>
+          <div class="package-meta"><span>${item.duration}</span><span>Customizable</span></div>
+        </article>
+      `).join('');
+      requestAnimationFrame(() => tabPanel.classList.add('ready'));
+    }
+
+    tabKeys.forEach((key, idx) => {
+      const btn = document.createElement('button');
+      btn.className = 'tab-btn';
+      btn.type = 'button';
+      btn.role = 'tab';
+      btn.id = `tab-${key}`;
+      btn.setAttribute('aria-controls', 'tabPanel');
+      btn.setAttribute('aria-selected', idx === 0 ? 'true' : 'false');
+      btn.textContent = key;
+      btn.addEventListener('click', () => {
+        [...tabsEl.querySelectorAll('.tab-btn')].forEach((node) => node.setAttribute('aria-selected', 'false'));
+        btn.setAttribute('aria-selected', 'true');
+        renderTab(key);
+      });
+      tabsEl.appendChild(btn);
+    });
+    renderTab(tabKeys[0]);
+
+    const timeline = document.getElementById('timeline');
+    data.processSteps.forEach((step, idx) => {
+      const el = document.createElement('article');
+      el.className = 'step reveal';
+      el.innerHTML = `<div class="step-count">${idx + 1}</div><h3>${step.title}</h3><p>${step.description}</p>`;
+      timeline.appendChild(el);
+    });
+
+    const clientNames = ['Paytm', 'Adobe', 'Concentrix', 'HighLevel', 'TVS', 'BlackRock', 'AlgoCirrus', 'Capital Group', 'Digi Sidekick', 'Startups', 'SMEs', 'Enterprise'];
+    const clientLogos = document.getElementById('clientLogos');
+    clientNames.forEach((name) => {
+      const item = document.createElement('div');
+      item.className = 'logo-chip reveal';
+      item.textContent = name;
+      clientLogos.appendChild(item);
+    });
+
+    const testimonials = document.getElementById('testimonials');
+    data.testimonials.forEach((item) => {
+      const el = document.createElement('article');
+      el.className = 'testimonial reveal';
+      el.innerHTML = `
+        <img src="${item.image}" alt="${item.client}" data-fallback="./assets/corporate/pdf-offsite-group.jpg" />
+        <div class="testimonial-body">
+          <h3>${item.client}</h3>
+          <p>${item.summary}</p>
+          <p><strong>${item.location}</strong></p>
+        </div>
+      `;
+      testimonials.appendChild(el);
+    });
+
+    const galleryImages = [
+      { src: 'https://framerusercontent.com/images/FMXBvKSF25Viqx02mwO1JyyQz80.png?width=2606&height=3475', label: 'Community storytelling sessions' },
+      { src: './assets/corporate/pdf-offsite-group.jpg', label: 'Corporate offsite group moment' },
+      { src: './assets/corporate/pdf-team-portrait.jpg', label: 'Leadership retreat team' },
+      { src: './assets/corporate/pdf-night-group.jpg', label: 'Team dinner and social evening' },
+      { src: 'https://images.unsplash.com/photo-1521737604893-d14cc237f11d?auto=format&fit=crop&w=1200&q=80', label: 'Workshop collaboration' },
+      { src: 'https://images.unsplash.com/photo-1528605248644-14dd04022da1?auto=format&fit=crop&w=1200&q=80', label: 'Incentive celebrations' },
+      { src: 'https://images.unsplash.com/photo-1515187029135-18ee286d815b?auto=format&fit=crop&w=1200&q=80', label: 'Team planning block' },
+      { src: 'https://images.unsplash.com/photo-1505373877841-8d25f7d46678?auto=format&fit=crop&w=1200&q=80', label: 'Conference execution' }
+    ];
+
+    const galleryGrid = document.getElementById('galleryGrid');
+    galleryImages.forEach((item) => {
+      const wrap = document.createElement('figure');
+      wrap.className = 'gallery-item reveal';
+      wrap.innerHTML = `<img src="${item.src}" alt="${item.label}" data-fallback="./assets/corporate/pdf-offsite-group.jpg" /><figcaption class="overlay">${item.label}</figcaption>`;
+      galleryGrid.appendChild(wrap);
+    });
+
+    const inclusionsList = document.getElementById('inclusionsList');
+    ['Team Building Activities', 'Bonfire and Live Jamming Sessions', 'Conferences', 'Communication Activities', 'Off-beat Venues', 'Adventure Activities', 'Team Outings', 'Nature Walks'].forEach((text) => {
+      const li = document.createElement('li');
+      li.textContent = text;
+      inclusionsList.appendChild(li);
+    });
+
+    const faqList = document.getElementById('faqList');
+    data.faqs.forEach((faq, idx) => {
+      const item = document.createElement('article');
+      item.className = 'faq-item reveal';
+      item.dataset.open = idx === 0 ? 'true' : 'false';
+      item.innerHTML = `
+        <button class="faq-btn" type="button" aria-expanded="${idx === 0}" aria-controls="faq-content-${idx}">
+          <span>${faq.q}</span><span>+</span>
+        </button>
+        <div id="faq-content-${idx}" class="faq-content">
+          <p>${faq.a}</p>
+        </div>
+      `;
+      faqList.appendChild(item);
+    });
+
+    function syncFaqHeights() {
+      document.querySelectorAll('.faq-item').forEach((item) => {
+        const panel = item.querySelector('.faq-content');
+        panel.style.maxHeight = item.dataset.open === 'true' ? `${panel.scrollHeight}px` : '0px';
+      });
+    }
+
+    faqList.addEventListener('click', (event) => {
+      const btn = event.target.closest('.faq-btn');
+      if (!btn) return;
+      const item = btn.closest('.faq-item');
+      const isOpen = item.dataset.open === 'true';
+      faqList.querySelectorAll('.faq-item').forEach((node) => {
+        node.dataset.open = 'false';
+        node.querySelector('.faq-btn').setAttribute('aria-expanded', 'false');
+      });
+      item.dataset.open = String(!isOpen);
+      btn.setAttribute('aria-expanded', String(!isOpen));
+      syncFaqHeights();
+    });
+
+    const modal = document.getElementById('leadModal');
+    const intentField = document.getElementById('intentField');
+    const openModalButtons = document.querySelectorAll('[data-open-modal]');
+    const closeModalButtons = document.querySelectorAll('[data-close-modal]');
+
+    function openModal(intent = 'plan') {
+      intentField.value = intent;
+      modal.classList.add('open');
+      modal.setAttribute('aria-hidden', 'false');
+      const firstInput = document.getElementById('name');
+      firstInput.focus();
+    }
+
+    function closeModal() {
+      modal.classList.remove('open');
+      modal.setAttribute('aria-hidden', 'true');
+    }
+
+    openModalButtons.forEach((button) => {
+      button.addEventListener('click', () => openModal(button.dataset.openModal || 'plan'));
+    });
+    closeModalButtons.forEach((button) => button.addEventListener('click', closeModal));
+
+    modal.addEventListener('click', (event) => {
+      if (event.target === modal) closeModal();
+    });
+
+    window.addEventListener('keydown', (event) => {
+      if (event.key === 'Escape' && modal.classList.contains('open')) closeModal();
+    });
+
+    const requiredFields = ['name', 'email', 'phone', 'company', 'teamSize', 'preferredDestination', 'travelWindow', 'message'];
+    const form = document.getElementById('leadForm');
+    const formSuccess = document.getElementById('formSuccess');
+
+    function validateField(field) {
+      const value = field.value.trim();
+      let valid = true;
+      let message = '';
+
+      if (!value) {
+        valid = false;
+        message = 'This field is required';
+      } else if (field.name === 'email' && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value)) {
+        valid = false;
+        message = 'Enter a valid email';
+      } else if (field.name === 'phone' && !/^[0-9]{10,15}$/.test(value.replace(/\D/g, ''))) {
+        valid = false;
+        message = 'Enter a valid phone number';
+      }
+
+      field.classList.toggle('error', !valid);
+      const errorNode = form.querySelector(`[data-error-for="${field.name}"]`);
+      if (errorNode) errorNode.textContent = message;
+      return valid;
+    }
+
+    requiredFields.forEach((name) => {
+      const field = form.elements[name];
+      field.addEventListener('blur', () => validateField(field));
+      field.addEventListener('input', () => {
+        if (field.classList.contains('error')) validateField(field);
+      });
+    });
+
+    form.addEventListener('submit', (event) => {
+      event.preventDefault();
+      let valid = true;
+      requiredFields.forEach((name) => {
+        const field = form.elements[name];
+        valid = validateField(field) && valid;
+      });
+
+      if (!valid) {
+        formSuccess.classList.remove('active');
+        return;
+      }
+
+      const payload = {};
+      [...new FormData(form).entries()].forEach(([key, value]) => {
+        payload[key] = String(value).trim();
+      });
+      localStorage.setItem('twnCorporatePrototypeLead', JSON.stringify(payload));
+
+      formSuccess.classList.add('active');
+      form.reset();
+      requiredFields.forEach((name) => {
+        const field = form.elements[name];
+        field.classList.remove('error');
+        const errorNode = form.querySelector(`[data-error-for="${name}"]`);
+        if (errorNode) errorNode.textContent = '';
+      });
+
+      setTimeout(() => {
+        formSuccess.classList.remove('active');
+        closeModal();
+      }, 1400);
+    });
+
+    const observer = new IntersectionObserver((entries) => {
+      entries.forEach((entry) => {
+        if (entry.isIntersecting) {
+          entry.target.classList.add('in-view');
+          observer.unobserve(entry.target);
+        }
+      });
+    }, { threshold: 0.16 });
+
+    document.querySelectorAll('.reveal').forEach((el) => observer.observe(el));
+
+    const counterObserver = new IntersectionObserver((entries) => {
+      entries.forEach((entry) => {
+        if (!entry.isIntersecting) return;
+        const node = entry.target;
+        const target = Number(node.dataset.count || 0);
+        const suffix = node.dataset.suffix || '';
+        const start = performance.now();
+        const duration = 900;
+
+        function tick(now) {
+          const progress = Math.min((now - start) / duration, 1);
+          const eased = 1 - Math.pow(1 - progress, 3);
+          const current = Math.floor(target * eased);
+          node.textContent = `${current}${suffix}`;
+          if (progress < 1) requestAnimationFrame(tick);
+        }
+        requestAnimationFrame(tick);
+        counterObserver.unobserve(node);
+      });
+    }, { threshold: 0.55 });
+
+    document.querySelectorAll('[data-count]').forEach((node) => counterObserver.observe(node));
+
+    function applyImageFallback(img) {
+      const fallback = img.dataset.fallback;
+      if (!fallback) return;
+      img.addEventListener('error', () => {
+        if (img.dataset.failed === 'true') return;
+        img.dataset.failed = 'true';
+        img.src = fallback;
+      });
+    }
+
+    document.querySelectorAll('img[data-fallback]').forEach(applyImageFallback);
+    syncFaqHeights();
+  </script>
+</body>
+</html>

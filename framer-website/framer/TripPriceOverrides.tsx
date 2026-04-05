@@ -28,12 +28,11 @@ const RUNTIME_CONFIG: Record<RuntimeEnv, RuntimeConfig> = {
 function resolveRuntimeEnv(): RuntimeEnv {
     if (typeof window === "undefined") return "production"
     const host = String(window.location.hostname || "").trim().toLowerCase()
-    if (host === "tripwithnomads.com" || host === "www.tripwithnomads.com") return "production"
-    if (
+    const isStagingHost =
         host === "maroon-aside-814100.framer.app" ||
-        host === "localhost" ||
-        host === "127.0.0.1"
-    ) {
+        /^maroon-aside-814100-[a-z0-9]+\.framer\.app$/.test(host)
+    if (host === "tripwithnomads.com" || host === "www.tripwithnomads.com") return "production"
+    if (isStagingHost || host === "localhost" || host === "127.0.0.1") {
         return "development"
     }
     return "production"
@@ -152,7 +151,12 @@ function normalizeSlug(value: any): string {
 
     const fromUrl = raw.match(/\/upcoming-trips\/([^/?#]+)/i)
     const candidate = fromUrl?.[1] ? decodeURIComponent(fromUrl[1]) : raw
-    return /^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(candidate) ? candidate : ""
+    const looksLikeSlug = /^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(candidate)
+    const looksLikeTripId = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
+        candidate
+    )
+    if (!looksLikeSlug || looksLikeTripId) return ""
+    return candidate
 }
 
 function normalizeTripId(value: any): string {
@@ -248,8 +252,7 @@ function useTripDisplayData(props?: any) {
         const slugFromPath = getTripSlugFromPathname(window.location.pathname)
         const tripId =
             propTripId || query.get("tripId") || query.get("trip_id") || forcedTripId || ""
-        const slug =
-            propSlug || slugFromPath || (tripId ? "" : query.get("slug") || "")
+        const slug = propSlug || (tripId ? "" : slugFromPath || query.get("slug") || "")
 
         fetchTripDisplayPrice({ slug, tripId })
             .then((payload) => {

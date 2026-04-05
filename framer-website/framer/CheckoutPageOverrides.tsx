@@ -40,12 +40,11 @@ function normalizeBaseUrl(value: string): string {
 function resolveRuntimeEnv(): RuntimeEnv {
     if (typeof window === "undefined") return "production"
     const host = String(window.location.hostname || "").trim().toLowerCase()
-    if (host === "tripwithnomads.com" || host === "www.tripwithnomads.com") return "production"
-    if (
+    const isStagingHost =
         host === "maroon-aside-814100.framer.app" ||
-        host === "localhost" ||
-        host === "127.0.0.1"
-    ) {
+        /^maroon-aside-814100-[a-z0-9]+\.framer\.app$/.test(host)
+    if (host === "tripwithnomads.com" || host === "www.tripwithnomads.com") return "production"
+    if (isStagingHost || host === "localhost" || host === "127.0.0.1") {
         return "development"
     }
     return "production"
@@ -251,6 +250,52 @@ function formatNextBatchDate(value: any): string {
     }).format(new Date(parsed))
 }
 
+function normalizeDateKey(value: any): string {
+    const raw = String(value || "").trim()
+    if (!raw) return ""
+
+    const direct = /^(\d{4}-\d{2}-\d{2})/.exec(raw)
+    if (direct?.[1]) return direct[1]
+
+    const parsed = Date.parse(raw)
+    if (Number.isFinite(parsed)) return new Date(parsed).toISOString().slice(0, 10)
+
+    return raw
+}
+
+function getOrdinalSuffix(day: number): string {
+    const mod100 = day % 100
+    if (mod100 >= 11 && mod100 <= 13) return "th"
+    const mod10 = day % 10
+    if (mod10 === 1) return "st"
+    if (mod10 === 2) return "nd"
+    if (mod10 === 3) return "rd"
+    return "th"
+}
+
+function formatReadableDate(value: any): string {
+    const normalized = normalizeDateKey(value)
+    if (!normalized) return ""
+
+    const match = normalized.match(/^(\d{4})-(\d{2})-(\d{2})$/)
+    if (!match) return normalized
+
+    const year = Number(match[1])
+    const month = Number(match[2])
+    const day = Number(match[3])
+    if (!Number.isFinite(year) || !Number.isFinite(month) || !Number.isFinite(day)) return normalized
+
+    const date = new Date(Date.UTC(year, month - 1, day))
+    if (!Number.isFinite(date.getTime())) return normalized
+
+    const monthName = new Intl.DateTimeFormat("en-GB", {
+        month: "long",
+        timeZone: "UTC",
+    }).format(date)
+
+    return `${day}${getOrdinalSuffix(day)} of ${monthName}, ${year}`
+}
+
 function buildPricingBreakdownFromQuote(source: any, fallbackStore: any): PricingBreakdown {
     const fallback = buildLocalPricingBreakdown(fallbackStore)
     const baseSubtotal = round2(
@@ -375,7 +420,7 @@ function nextTravellerId(store: any): number {
 }
 
 function getDateValue(row: any): string {
-    return row?.start_date || row?.departure_date || ""
+    return normalizeDateKey(row?.start_date || row?.departure_date || "")
 }
 
 function normalizeSharing(value: string): SharingValue | "" {
@@ -892,7 +937,9 @@ function populateDropdown(select: HTMLSelectElement, options: string[]) {
     options.forEach((value) => {
         const opt = document.createElement("option")
         opt.value = value
-        opt.text = value
+        opt.text = /^\d{4}-\d{2}-\d{2}$/.test(String(value || ""))
+            ? formatReadableDate(value)
+            : value
         select.add(opt)
     })
 }
@@ -973,6 +1020,41 @@ async function fetchTripPricing(tripId: string): Promise<any[]> {
     return Array.isArray(rows) ? rows : []
 }
 
+async function fetchCheckoutTripContext(params: {
+    slug?: string
+    tripId?: string
+}): Promise<{ trip: { id: string; slug: string; title: string }; pricing_rows: any[] } | null> {
+    const slug = String(params.slug || "").trim()
+    const tripId = String(params.tripId || "").trim()
+    if (!slug && !tripId) return null
+
+    const query = new URLSearchParams()
+    if (slug) query.set("slug", slug)
+    if (tripId) query.set("trip_id", tripId)
+
+    const res = await fetch(`${SUPABASE_URL}/functions/v1/get-trip-checkout-context?${query.toString()}`, {
+        method: "GET",
+        priority: "high",
+        headers: {
+            apikey: SUPABASE_KEY,
+            Authorization: `Bearer ${SUPABASE_KEY}`,
+        },
+    } as any).catch(() => null)
+
+    if (!res?.ok) return null
+    const data = await res.json().catch(() => null)
+    if (!data || !data?.trip?.id) return null
+
+    return {
+        trip: {
+            id: String(data?.trip?.id || "").trim(),
+            slug: String(data?.trip?.slug || "").trim(),
+            title: String(data?.trip?.title || "").trim(),
+        },
+        pricing_rows: Array.isArray(data?.pricing_rows) ? data.pricing_rows : [],
+    }
+}
+
 async function fetchTripDisplayPrice(params: { slug?: string; tripId?: string }): Promise<any | null> {
     const slug = String(params.slug || "").trim()
     const tripId = String(params.tripId || "").trim()
@@ -1032,7 +1114,7 @@ function readCheckoutRouteContext() {
     return {
         tripId: String(query.get("tripId") || query.get("trip_id") || "").trim(),
         slug: String(query.get("slug") || "").trim(),
-        date: String(query.get("date") || "").trim(),
+        date: normalizeDateKey(query.get("date")),
         transport: String(query.get("vehicle") || query.get("transport") || "").trim(),
     }
 }
@@ -1103,7 +1185,11 @@ export function withCheckoutBootstrap(Component): ComponentType {
                 let tripId = ctx.tripId
                 let slug = ctx.slug
 
-                if (!tripId && slug) {
+                const bootstrapContext = await fetchCheckoutTripContext({ tripId, slug })
+                if (bootstrapContext?.trip?.id) {
+                    tripId = String(bootstrapContext.trip.id || "").trim()
+                    slug = slug || String(bootstrapContext.trip.slug || "").trim()
+                } else if (!tripId && slug) {
                     tripId = await fetchTripIdBySlug(slug)
                 }
 
@@ -1118,10 +1204,17 @@ export function withCheckoutBootstrap(Component): ComponentType {
                     return
                 }
 
-                const [pricing, tripContext] = await Promise.all([
-                    fetchTripPricing(tripId),
-                    fetchTripContextById(tripId),
-                ])
+                const [pricing, tripContext] = bootstrapContext
+                    ? [
+                        Array.isArray(bootstrapContext.pricing_rows)
+                            ? bootstrapContext.pricing_rows
+                            : [],
+                        bootstrapContext.trip,
+                    ]
+                    : await Promise.all([
+                        fetchTripPricing(tripId),
+                        fetchTripContextById(tripId),
+                    ])
                 if (disposed) return
 
                 slug = slug || String(tripContext?.slug || "").trim()
@@ -2428,7 +2521,12 @@ function normalizeSlug(value: any): string {
 
     const fromUrl = raw.match(/\/upcoming-trips\/([^/?#]+)/i)
     const candidate = fromUrl?.[1] ? decodeURIComponent(fromUrl[1]) : raw
-    return /^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(candidate) ? candidate : ""
+    const looksLikeSlug = /^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(candidate)
+    const looksLikeTripId = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
+        candidate
+    )
+    if (!looksLikeSlug || looksLikeTripId) return ""
+    return candidate
 }
 
 function normalizeTripId(value: any): string {
@@ -2484,7 +2582,7 @@ function useTripDisplayData(props?: any) {
         const slugFromPath = getTripSlugFromPathname(window.location.pathname)
         const tripId =
             propTripId || query.get("tripId") || query.get("trip_id") || forcedTripId || ""
-        const slug = propSlug || slugFromPath || (tripId ? "" : query.get("slug") || "")
+        const slug = propSlug || (tripId ? "" : slugFromPath || query.get("slug") || "")
 
         fetchTripDisplayPrice({ slug, tripId })
             .then((payload) => {

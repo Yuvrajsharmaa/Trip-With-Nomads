@@ -1,36 +1,24 @@
 import type { Metadata } from "next";
-import { Manrope, DM_Sans } from "next/font/google";
 import "./globals.css";
-
-const manrope = Manrope({
-    subsets: ["latin"],
-    variable: "--font-manrope",
-    weight: ["400", "500", "700"],
-});
-
-const dmSans = DM_Sans({
-    subsets: ["latin"],
-    variable: "--font-dm-sans",
-    weight: ["400", "500", "700"],
-});
+import { ThemeProvider } from "@/components/theme-provider";
 
 export const metadata: Metadata = {
-    title: "Trip with Nomads (Clone)",
-    description: "Travel with strangers. Leave with a tribe.",
+  title: "Nomads CRM",
+  description: "CRM dashboard for leads, bookings, customers, and settings",
 };
 
 export default function RootLayout({
-    children,
+  children,
 }: Readonly<{
-    children: React.ReactNode;
+  children: React.ReactNode;
 }>) {
-    return (
-        <html lang="en">
-            <body
-                className={`${manrope.variable} ${dmSans.variable} antialiased bg-background text-foreground`}
-            >
-                {children}
-            </body>
-        </html>
-    );
+  return (
+    <html lang="en" suppressHydrationWarning>
+      <body>
+        <ThemeProvider attribute="class" defaultTheme="system" enableSystem disableTransitionOnChange>
+          {children}
+        </ThemeProvider>
+      </body>
+    </html>
+  );
 }

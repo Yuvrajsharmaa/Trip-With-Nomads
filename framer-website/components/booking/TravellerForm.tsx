@@ -1,83 +1,79 @@
 "use client";
 
 import { Traveller } from "@/lib/booking-utils";
+import { Button } from "@/components/ui/button";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Checkbox } from "@/components/ui/checkbox";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 
 interface TravellerFormProps {
-    traveller: Traveller;
-    index: number;
-    onUpdate: (id: string, updates: Partial<Traveller>) => void;
-    onRemove: (id: string) => void;
-    canRemove: boolean;
+  traveller: Traveller;
+  index: number;
+  onUpdate: (id: string, updates: Partial<Traveller>) => void;
+  onRemove: (id: string) => void;
+  canRemove: boolean;
 }
 
 export function TravellerForm({ traveller, index, onUpdate, onRemove, canRemove }: TravellerFormProps) {
+  const handleToggleSelf = (checked: boolean) => {
+    if (checked) {
+      onUpdate(traveller.id, { isSelf: true, name: "Current User", age: 28 });
+      return;
+    }
 
-    const handleToggleSelf = (e: React.ChangeEvent<HTMLInputElement>) => {
-        if (e.target.checked) {
-            // Assuming 'Self' is pre-filled from auth context in real app
-            onUpdate(traveller.id, { isSelf: true, name: "Current User", age: 28 });
-        } else {
-            onUpdate(traveller.id, { isSelf: false, name: "", age: "" });
-        }
-    };
+    onUpdate(traveller.id, { isSelf: false, name: "", age: "" });
+  };
 
-    return (
-        <div className="bg-white border border-gray-100 rounded-xl p-6 shadow-sm mb-4 animate-fade-in-up">
-            <div className="flex justify-between items-center mb-4">
-                <h3 className="font-heading font-bold text-lg text-gray-900">
-                    Traveller {index + 1}
-                </h3>
-                {canRemove && (
-                    <button
-                        type="button"
-                        onClick={() => onRemove(traveller.id)}
-                        className="text-red-500 text-sm hover:text-red-700 font-medium"
-                    >
-                        Remove
-                    </button>
-                )}
-            </div>
-
-            {index === 0 && (
-                <div className="mb-4 flex items-center">
-                    <input
-                        type="checkbox"
-                        id={`self-${traveller.id}`}
-                        checked={traveller.isSelf}
-                        onChange={handleToggleSelf}
-                        className="w-4 h-4 text-primary-blue rounded border-gray-300 focus:ring-primary-blue"
-                    />
-                    <label htmlFor={`self-${traveller.id}`} className="ml-2 text-sm text-gray-700">
-                        I am this traveller (Fill with my info)
-                    </label>
-                </div>
-            )}
-
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-1">Full Name</label>
-                    <input
-                        type="text"
-                        value={traveller.name}
-                        onChange={(e) => onUpdate(traveller.id, { name: e.target.value })}
-                        className="w-full px-4 py-2 border border-gray-200 rounded-lg focus:ring-2 focus:ring-primary-blue/20 focus:border-primary-blue outline-none transition-colors"
-                        placeholder="e.g. John Doe"
-                        required
-                    />
-                </div>
-                <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-1">Age</label>
-                    <input
-                        type="number"
-                        value={traveller.age}
-                        onChange={(e) => onUpdate(traveller.id, { age: e.target.value })}
-                        className="w-full px-4 py-2 border border-gray-200 rounded-lg focus:ring-2 focus:ring-primary-blue/20 focus:border-primary-blue outline-none transition-colors"
-                        placeholder="e.g. 25"
-                        required
-                        min="18" // Assuming explicit min age policy for booking?
-                    />
-                </div>
-            </div>
+  return (
+    <Card>
+      <CardHeader className="flex flex-row items-start justify-between space-y-0 pb-3">
+        <div>
+          <CardTitle className="text-base">Traveller {index + 1}</CardTitle>
         </div>
-    );
+        {canRemove ? (
+          <Button type="button" variant="ghost" size="sm" onClick={() => onRemove(traveller.id)} className="text-destructive hover:text-destructive">
+            Remove
+          </Button>
+        ) : null}
+      </CardHeader>
+
+      <CardContent className="space-y-6">
+        {index === 0 ? (
+          <div className="flex items-center gap-3 rounded-lg border bg-muted/30 p-3">
+            <Checkbox id={`self-${traveller.id}`} checked={traveller.isSelf} onCheckedChange={handleToggleSelf} />
+            <Label htmlFor={`self-${traveller.id}`} className="text-sm font-normal">
+              I am this traveller (fill with my info)
+            </Label>
+          </div>
+        ) : null}
+
+        <div className="grid gap-4 md:grid-cols-2">
+          <div className="space-y-2">
+            <Label htmlFor={`name-${traveller.id}`}>Full name</Label>
+            <Input
+              id={`name-${traveller.id}`}
+              value={traveller.name}
+              onChange={(event) => onUpdate(traveller.id, { name: event.target.value })}
+              placeholder="e.g. John Doe"
+              required
+            />
+          </div>
+
+          <div className="space-y-2">
+            <Label htmlFor={`age-${traveller.id}`}>Age</Label>
+            <Input
+              id={`age-${traveller.id}`}
+              type="number"
+              value={traveller.age}
+              onChange={(event) => onUpdate(traveller.id, { age: event.target.value })}
+              placeholder="e.g. 25"
+              required
+              min="18"
+            />
+          </div>
+        </div>
+      </CardContent>
+    </Card>
+  );
 }

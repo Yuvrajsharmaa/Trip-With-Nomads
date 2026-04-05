@@ -47,6 +47,7 @@ framer-website/.framer_backups/
 framer-website/.tmp_project_xml.txt
 framer-website/.tmp/
 framer-website/.wrangler/
+framer-website/.next/
 
 # Local scratch repos
 skills-main/

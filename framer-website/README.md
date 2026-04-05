@@ -40,3 +40,30 @@ Check `IMPLEMENTATION_PLAN.md` for the full technical roadmap.
 
 Set `BOOKING_STATUS_TOKEN_SECRET` in Supabase Edge Function secrets to protect booking status reads on payment success/failure pages.  
 If this secret is not set, the functions fall back to `PAYU_*_SALT` values for backward compatibility.
+
+## 📊 Lead Sheet Routing
+
+Lead routing is handled in `supabase/functions/record-lead/index.ts` by the `source` value:
+
+- `booking_invite` -> `GOOGLE_SHEET_ID_NTC`
+- `trip_page_lead` -> `GOOGLE_SHEET_ID_TRIPS`
+- `custom_trip_lead` -> `GOOGLE_SHEET_ID_CUSTOM_TRIPS` (no fallback routing)
+- all other sources -> `GOOGLE_SHEET_ID_GENERAL`
+
+For custom destination inquiries that do not have pricing/dates, wire Framer forms to
+`withCustomTripLeadTracking` in `framer/EmailPopupOverride.tsx`.
+This override now captures both submitted and abandoned (`partial_fill`) custom-trip leads.
+
+Sheet write guard:
+- Sheets are written only for requests coming from live hosts (`tripwithnomads.com`, `www.tripwithnomads.com`).
+- Staging/local/dev can still store leads in DB but will skip Sheets logging.
+
+Abandoned lead tracking overrides:
+- `withBookingInviteAbandonTracking`
+- `withTripPageLeadAbandonTracking`
+- `withCustomTripLeadAbandonTracking`
+
+Apply the abandon tracking override to the corresponding form (or outer wrapper) to log
+`status = partial_fill` once per source+email+page session.
+For custom-trip forms, separate abandon override is optional because `withCustomTripLeadTracking`
+already includes abandoned lead capture.
