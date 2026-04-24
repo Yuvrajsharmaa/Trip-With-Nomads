@@ -135,6 +135,33 @@ function normalizeDateKey(value: any): string {
     return raw
 }
 
+const BOOKING_DATE_TIMEZONE = "Asia/Kolkata"
+
+function getTodayDateKey(timeZone = BOOKING_DATE_TIMEZONE): string {
+    try {
+        const parts = new Intl.DateTimeFormat("en-US", {
+            timeZone,
+            year: "numeric",
+            month: "2-digit",
+            day: "2-digit",
+        }).formatToParts(new Date())
+        const year = parts.find((part) => part.type === "year")?.value
+        const month = parts.find((part) => part.type === "month")?.value
+        const day = parts.find((part) => part.type === "day")?.value
+        if (year && month && day) return `${year}-${month}-${day}`
+    } catch (_) {
+        // Fall back to UTC when timezone formatting is unavailable.
+    }
+
+    return new Date().toISOString().slice(0, 10)
+}
+
+function isDateOnOrAfterToday(dateKey: string, todayKey = getTodayDateKey()): boolean {
+    if (!dateKey) return false
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(dateKey)) return false
+    return dateKey >= todayKey
+}
+
 function getDateValue(row: any): string {
     return normalizeDateKey(row?.start_date || row?.departure_date || row?.date || "")
 }
@@ -629,6 +656,15 @@ serve(async (req) => {
             return new Response(
                 JSON.stringify({
                     error: "Missing required fields (trip_id, departure_date, travellers, name, email)",
+                }),
+                { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+            )
+        }
+
+        if (!isDateOnOrAfterToday(departureDate)) {
+            return new Response(
+                JSON.stringify({
+                    error: "Departure date has already passed. Please choose an upcoming date.",
                 }),
                 { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
             )

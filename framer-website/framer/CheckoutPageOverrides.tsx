@@ -263,6 +263,19 @@ function normalizeDateKey(value: any): string {
     return raw
 }
 
+function getTodayDateKeyLocal(now = new Date()): string {
+    const year = now.getFullYear()
+    const month = String(now.getMonth() + 1).padStart(2, "0")
+    const day = String(now.getDate()).padStart(2, "0")
+    return `${year}-${month}-${day}`
+}
+
+function isDateOnOrAfterToday(dateKey: string, todayKey = getTodayDateKeyLocal()): boolean {
+    if (!dateKey) return false
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(dateKey)) return false
+    return dateKey >= todayKey
+}
+
 function getOrdinalSuffix(day: number): string {
     const mod100 = day % 100
     if (mod100 >= 11 && mod100 <= 13) return "th"
@@ -446,7 +459,11 @@ function getTransportValue(row: any): string {
 }
 
 function getDateOptions(pricing: any[]): string[] {
-    return [...new Set((pricing || []).map((row: any) => getDateValue(row)).filter(Boolean))].sort()
+    const uniqueSorted = [
+        ...new Set((pricing || []).map((row: any) => getDateValue(row)).filter(Boolean)),
+    ].sort()
+
+    return uniqueSorted.filter((dateKey) => isDateOnOrAfterToday(String(dateKey)))
 }
 
 function getTransportOptions(pricing: any[], date: string): string[] {

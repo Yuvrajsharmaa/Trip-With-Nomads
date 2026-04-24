@@ -1,5 +1,6 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2"
 import { Pool } from "https://deno.land/x/postgres@v0.19.3/mod.ts"
+import { getDateValue } from "../_shared/pricing.ts"
 
 const corsHeaders = {
     "Access-Control-Allow-Origin": "*",
@@ -16,6 +17,43 @@ function json(payload: any, status = 200) {
 
 function normalizeText(value: unknown): string {
     return String(value || "").trim()
+}
+
+const CHECKOUT_DATE_TIMEZONE = "Asia/Kolkata"
+
+function getTodayDateKey(timeZone = CHECKOUT_DATE_TIMEZONE): string {
+    try {
+        const parts = new Intl.DateTimeFormat("en-US", {
+            timeZone,
+            year: "numeric",
+            month: "2-digit",
+            day: "2-digit",
+        }).formatToParts(new Date())
+        const year = parts.find((part) => part.type === "year")?.value
+        const month = parts.find((part) => part.type === "month")?.value
+        const day = parts.find((part) => part.type === "day")?.value
+        if (year && month && day) return `${year}-${month}-${day}`
+    } catch (_) {
+        // Fall back to UTC when timezone formatting is unavailable.
+    }
+
+    return new Date().toISOString().slice(0, 10)
+}
+
+function isDateKeyOnOrAfterToday(dateKey: string, todayKey: string): boolean {
+    if (!dateKey) return false
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(dateKey)) return false
+    return dateKey >= todayKey
+}
+
+function filterCheckoutPricingRows(rows: any[]): any[] {
+    const todayKey = getTodayDateKey()
+    return (Array.isArray(rows) ? rows : []).filter((row) => {
+        const dateKey = getDateValue(row)
+        // Keep undated rows so invite-only trips can still be detected client-side.
+        if (!dateKey) return true
+        return isDateKeyOnOrAfterToday(dateKey, todayKey)
+    })
 }
 
 let dbPool: Pool | null = null
@@ -68,7 +106,7 @@ async function fetchPricingViaDirectDb(tripId: string) {
             from public.trip_pricing
             where trip_id = ${tripId}
         `
-        return { data: result.rows, error: null }
+        return { data: filterCheckoutPricingRows(result.rows), error: null }
     } catch (error) {
         return { data: null, error }
     } finally {
@@ -153,6 +191,7 @@ Deno.serve(async (req) => {
             }
             pricingRows = Array.isArray(fallbackPricing.data) ? fallbackPricing.data : []
         }
+        pricingRows = filterCheckoutPricingRows(pricingRows)
 
         return json({
             trip: {
@@ -161,7 +200,7 @@ Deno.serve(async (req) => {
                 title: normalizeText(trip.title),
             },
             pricing_rows: pricingRows,
-            engine_version: "checkout-v1",
+            engine_version: "checkout-v2",
         })
     } catch (err: any) {
         console.error("[get-trip-checkout-context] fatal", err)

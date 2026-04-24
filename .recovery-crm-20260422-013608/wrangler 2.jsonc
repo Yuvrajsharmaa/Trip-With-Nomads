@@ -1,0 +1,16 @@
+{
+  "name": "tripwithnomads-crm",
+  "main": ".open-next/worker.js",
+  "compatibility_date": "2025-04-01",
+  "compatibility_flags": ["nodejs_compat"],
+  "workers_dev": true,
+  "env": {
+    "production": {
+      "route": "crm.tripwithnomads.com/*"
+    }
+  },
+  "assets": {
+    "directory": ".open-next/assets",
+    "binding": "ASSETS"
+  }
+}
