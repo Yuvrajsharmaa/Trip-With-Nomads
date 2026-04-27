@@ -1,6 +1,34 @@
+const SUPABASE_TARGET = String(process.env.SUPABASE_TARGET || "staging")
+    .trim()
+    .toLowerCase();
+const STAGING_SUPABASE_URL = "https://ieuwiinbvbdvjrdqqzlb.supabase.co";
+const ALLOW_PRODUCTION = String(process.env.ALLOW_PRODUCTION || "")
+    .trim()
+    .toLowerCase() === "true";
 
-const SUPABASE_URL = "https://jxozzvwvprmnhvafmpsa.supabase.co";
-const SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imp4b3p6dnd2cHJtbmh2YWZtcHNhIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjgwNTg2NjIsImV4cCI6MjA4MzYzNDY2Mn0.KpVa9dWlJEguL1TA00Tf4QDpziJ1mgA2I0f4_l-vlOk";
+const providedSupabaseUrl = String(process.env.SUPABASE_URL || "").trim();
+if (SUPABASE_TARGET === "production") {
+    if (!ALLOW_PRODUCTION) {
+        console.error(
+            "Refusing production target. Re-run with ALLOW_PRODUCTION=true SUPABASE_TARGET=production."
+        );
+        process.exit(1);
+    }
+    if (!providedSupabaseUrl) {
+        console.error("Production target requires explicit SUPABASE_URL.");
+        process.exit(1);
+    }
+}
+
+const SUPABASE_URL = providedSupabaseUrl || STAGING_SUPABASE_URL;
+const SUPABASE_KEY = String(
+    process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_ANON_KEY || ""
+).trim();
+
+if (!SUPABASE_KEY) {
+    console.error("Missing SUPABASE_SERVICE_ROLE_KEY or SUPABASE_ANON_KEY.");
+    process.exit(1);
+}
 
 const TRIP_ID = "a1b86c67-45e9-4193-a645-ea1a74d0af09"; // Winter Spiti
 
