@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "active_feature_branch": "codex/repo-stabilization-parent-20260425",
+  "active_feature_branch": "codex/crm-lead-workflow-hardening-website-20260427",
   "active_owner": "codex",
   "allowed_long_lived_branches": ["main", "staging"],
   "allowed_feature_prefixes": ["codex/", "feat/", "fix/", "chore/", "hotfix/"],
