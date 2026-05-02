@@ -29,3 +29,15 @@
 ## Follow-up
 
 - Publish latest Framer project build so production site bundle definitely reflects the updated `BookingStatusOverride.tsx`.
+
+## 2026-04-26
+
+- Added guarded Framer override push workflow and script: `scripts/push_overrides_safe.mjs`.
+- Push flow now requires pull-first mapping (`getProjectXml` + `readCodeFile`) before update.
+- Added export parity check to block accidental override function deletion during push.
+- Added remote backup snapshot before each code override update and readback verification after update.
+- Updated wrapper scripts to route through safe workflow:
+  - `scripts/push_overrides.mjs`
+  - `scripts/push_status_override_live.mjs`
+  - `scripts/push_booking_overrides.mjs`
+- Added runbook: `docs/checkout-security/framer-override-safe-push.md`.

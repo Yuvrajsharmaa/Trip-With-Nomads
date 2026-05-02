@@ -14,6 +14,8 @@ const {
 type RuntimeEnv = "production" | "development"
 type RuntimeConfig = {
     siteBaseUrl: string
+    apiBaseUrl: string
+    fallbackApiBaseUrl?: string
     supabaseUrl: string
     supabaseAnonKey: string
 }
@@ -21,15 +23,17 @@ type RuntimeConfig = {
 const RUNTIME_CONFIG: Record<RuntimeEnv, RuntimeConfig> = {
     production: {
         siteBaseUrl: "https://tripwithnomads.com",
-        supabaseUrl: "https://jxozzvwvprmnhvafmpsa.supabase.co",
-        supabaseAnonKey:
-            "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imp4b3p6dnd2cHJtbmh2YWZtcHNhIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjgwNTg2NjIsImV4cCI6MjA4MzYzNDY2Mn0.KpVa9dWlJEguL1TA00Tf4QDpziJ1mgA2I0f4_l-vlOk",
+        apiBaseUrl: "/api/checkout",
+        fallbackApiBaseUrl: "https://twn-checkout-gateway.tripwithnomads-crm.workers.dev/api/checkout",
+        supabaseUrl: "",
+        supabaseAnonKey: "",
     },
     development: {
         siteBaseUrl: "https://maroon-aside-814100.framer.app",
+        apiBaseUrl: "http://localhost:8787/api/checkout",
         supabaseUrl: "https://ieuwiinbvbdvjrdqqzlb.supabase.co",
         supabaseAnonKey:
-            "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImlldXdpaW5idmJkdmpyZHFxemxiIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzIwNDYwMTksImV4cCI6MjA4NzYyMjAxOX0.UlTMeyvArixD7byDCrGwEDXsbc4LQfx6QXDL6Je3blE",
+            "__SUPABASE_ANON_KEY_DEVELOPMENT__",
     },
 }
 
@@ -116,14 +120,27 @@ function resolveRuntimeConfig(): RuntimeConfig {
     )
     return {
         siteBaseUrl: normalizeBaseUrl(runtimeOverride.siteBaseUrl || selected.siteBaseUrl),
+        apiBaseUrl: normalizeBaseUrl(runtimeOverride.apiBaseUrl || selected.apiBaseUrl),
+        fallbackApiBaseUrl: normalizeBaseUrl(
+            runtimeOverride.fallbackApiBaseUrl || selected.fallbackApiBaseUrl
+        ),
         supabaseUrl: resolvedSupabaseUrl,
         supabaseAnonKey: resolvedSupabaseAnonKey,
     }
 }
 
 const CURRENT_RUNTIME = resolveRuntimeConfig()
+const RUNTIME_ENV = resolveRuntimeEnv()
+const GATEWAY_BASE = CURRENT_RUNTIME.apiBaseUrl
+const GATEWAY_FALLBACK_BASE = CURRENT_RUNTIME.fallbackApiBaseUrl || ""
 const SUPABASE_URL = CURRENT_RUNTIME.supabaseUrl
 const SUPABASE_KEY = CURRENT_RUNTIME.supabaseAnonKey
+const FORCE_DIRECT_SUPABASE =
+    typeof window !== "undefined" && Boolean((window as any).__TWN_CHECKOUT_FORCE_DIRECT_SUPABASE__)
+const FORCE_GATEWAY =
+    typeof window !== "undefined" && Boolean((window as any).__TWN_CHECKOUT_FORCE_GATEWAY__)
+const USE_GATEWAY =
+    FORCE_GATEWAY || (!FORCE_DIRECT_SUPABASE && RUNTIME_ENV === "production" && Boolean(GATEWAY_BASE))
 const TAX_RATE = 0.05
 const CHECKOUT_PAGE_URL = `${CURRENT_RUNTIME.siteBaseUrl}/checkout`
 const UPCOMING_TRIPS_BASE_URL = `${CURRENT_RUNTIME.siteBaseUrl}/upcoming-trips`
@@ -874,6 +891,71 @@ function readInputValue(selectors: string[]): string {
     return ""
 }
 
+function normalizeGatewayBase(value: string): string {
+    const clean = String(value || "").trim().replace(/\/+$/, "")
+    if (!clean) return ""
+    if (/^https?:\/\//i.test(clean)) return clean
+    if (typeof window !== "undefined" && clean.startsWith("/")) {
+        return `${window.location.origin}${clean}`.replace(/\/+$/, "")
+    }
+    return clean
+}
+
+const GATEWAY_CANDIDATES = [normalizeGatewayBase(GATEWAY_BASE), normalizeGatewayBase(GATEWAY_FALLBACK_BASE)]
+    .filter(Boolean)
+    .filter((value, index, arr) => arr.indexOf(value) === index)
+
+function shouldFallbackGateway(response: Response, requestUrl: string): boolean {
+    if (response.ok) return false
+    let sameOrigin = false
+    try {
+        const parsed = new URL(requestUrl)
+        sameOrigin =
+            typeof window !== "undefined" &&
+            parsed.origin === window.location.origin
+    } catch (_) { }
+    if (sameOrigin && response.status === 404) return true
+    const server = String(response.headers.get("server") || "").toLowerCase()
+    const contentType = String(response.headers.get("content-type") || "").toLowerCase()
+    return (
+        (response.status === 404 || response.status === 405) &&
+        (server.includes("framer") || contentType.includes("text/html"))
+    )
+}
+
+function buildGatewayUrl(base: string, path: string, params?: URLSearchParams): string {
+    const endpoint = String(path || "").trim().replace(/^\/+/, "")
+    const query = params?.toString() || ""
+    return `${String(base || "").trim().replace(/\/+$/, "")}/${endpoint}${query ? `?${query}` : ""}`
+}
+
+async function fetchGateway(path: string, init: RequestInit = {}, params?: URLSearchParams): Promise<Response> {
+    const candidates = GATEWAY_CANDIDATES.length ? GATEWAY_CANDIDATES : [normalizeGatewayBase(GATEWAY_BASE)].filter(Boolean)
+    let lastError: any = null
+
+    for (let index = 0; index < candidates.length; index += 1) {
+        const requestUrl = buildGatewayUrl(candidates[index], path, params)
+        try {
+            const response = await fetch(requestUrl, {
+                ...init,
+                headers: {
+                    ...(init.headers || {}),
+                },
+            })
+            const hasFallback = index < candidates.length - 1
+            if (hasFallback && shouldFallbackGateway(response, requestUrl)) {
+                continue
+            }
+            return response
+        } catch (error) {
+            lastError = error
+            if (index >= candidates.length - 1) throw error
+        }
+    }
+
+    throw lastError || new Error("Gateway request failed")
+}
+
 function populateDropdown(select: HTMLSelectElement, options: string[]) {
     if (!select) return
 
@@ -901,6 +983,15 @@ async function fetchTripIdBySlug(slug: string): Promise<string> {
     const cleanSlug = (slug || "").trim()
     if (!cleanSlug) return ""
 
+    if (USE_GATEWAY) {
+        const query = new URLSearchParams()
+        query.set("slug", cleanSlug)
+        const res = await fetchGateway("context", { method: "GET" }, query)
+        if (!res.ok) return ""
+        const payload = await res.json().catch(() => null)
+        return String(payload?.trip?.id || "").trim()
+    }
+
     const res = await fetch(
         `${SUPABASE_URL}/rest/v1/trips?slug=eq.${encodeURIComponent(cleanSlug)}&select=id&limit=1`,
         {
@@ -920,6 +1011,20 @@ async function fetchTripIdBySlug(slug: string): Promise<string> {
 async function fetchTripContextById(tripId: string): Promise<{ id: string; slug: string; title: string } | null> {
     const cleanTripId = String(tripId || "").trim()
     if (!cleanTripId) return null
+
+    if (USE_GATEWAY) {
+        const query = new URLSearchParams()
+        query.set("trip_id", cleanTripId)
+        const res = await fetchGateway("context", { method: "GET" }, query)
+        if (!res.ok) return null
+        const payload = await res.json().catch(() => null)
+        if (!payload?.trip?.id) return null
+        return {
+            id: String(payload.trip.id || ""),
+            slug: String(payload.trip.slug || ""),
+            title: String(payload.trip.title || ""),
+        }
+    }
 
     const res = await fetch(
         `${SUPABASE_URL}/rest/v1/trips?id=eq.${encodeURIComponent(
@@ -954,6 +1059,15 @@ function isInviteOnlyTrip(pricingRows: any[]): boolean {
 async function fetchTripPricing(tripId: string): Promise<any[]> {
     const cleanTripId = (tripId || "").trim()
     if (!cleanTripId) return []
+
+    if (USE_GATEWAY) {
+        const query = new URLSearchParams()
+        query.set("trip_id", cleanTripId)
+        const res = await fetchGateway("context", { method: "GET" }, query)
+        if (!res.ok) return []
+        const payload = await res.json().catch(() => null)
+        return Array.isArray(payload?.pricing) ? payload.pricing : []
+    }
 
     const res = await fetch(
         `${SUPABASE_URL}/rest/v1/trip_pricing?trip_id=eq.${encodeURIComponent(
@@ -992,14 +1106,16 @@ async function fetchTripDisplayPrice(params: { slug?: string; tripId?: string })
     if (tripId) query.set("trip_id", tripId)
     query.set("v", "3")
 
-    const request = fetch(`${SUPABASE_URL}/functions/v1/get-trip-display-price?${query.toString()}`, {
-        method: "GET",
-        priority: "high",
-        headers: {
-            apikey: SUPABASE_KEY,
-            Authorization: `Bearer ${SUPABASE_KEY}`,
-        },
-    } as any)
+    const request = (USE_GATEWAY
+        ? fetchGateway("display-price", { method: "GET", priority: "high" as any }, query)
+        : fetch(`${SUPABASE_URL}/functions/v1/get-trip-display-price?${query.toString()}`, {
+              method: "GET",
+              priority: "high",
+              headers: {
+                  apikey: SUPABASE_KEY,
+                  Authorization: `Bearer ${SUPABASE_KEY}`,
+              },
+          } as any))
         .then(async (res) => {
             if (!res.ok) return null
             const data = await res.json().catch(() => null)
@@ -1768,15 +1884,23 @@ export function withApplyCouponButton(Component): ComponentType {
                     email: store.contactEmail || "",
                 }
 
-                const res = await fetch(`${SUPABASE_URL}/functions/v1/validate-coupon`, {
-                    method: "POST",
-                    headers: {
-                        "Content-Type": "application/json",
-                        apikey: SUPABASE_KEY,
-                        Authorization: `Bearer ${SUPABASE_KEY}`,
-                    },
-                    body: JSON.stringify(payload),
-                })
+                const res = await (USE_GATEWAY
+                    ? fetchGateway("validate-coupon", {
+                          method: "POST",
+                          headers: {
+                              "Content-Type": "application/json",
+                          },
+                          body: JSON.stringify(payload),
+                      })
+                    : fetch(`${SUPABASE_URL}/functions/v1/validate-coupon`, {
+                          method: "POST",
+                          headers: {
+                              "Content-Type": "application/json",
+                              apikey: SUPABASE_KEY,
+                              Authorization: `Bearer ${SUPABASE_KEY}`,
+                          },
+                          body: JSON.stringify(payload),
+                      }))
 
                 const data = await res.json().catch(() => ({}))
 
@@ -2290,17 +2414,27 @@ export function withCheckoutPayButton(Component): ComponentType {
             }
 
             try {
-                const headers = {
-                    "Content-Type": "application/json",
-                    apikey: SUPABASE_KEY,
-                    Authorization: `Bearer ${SUPABASE_KEY}`,
-                }
+                const headers = USE_GATEWAY
+                    ? {
+                          "Content-Type": "application/json",
+                      }
+                    : {
+                          "Content-Type": "application/json",
+                          apikey: SUPABASE_KEY,
+                          Authorization: `Bearer ${SUPABASE_KEY}`,
+                      }
 
-                let res = await fetch(`${SUPABASE_URL}/functions/v1/create-booking`, {
-                    method: "POST",
-                    headers,
-                    body: JSON.stringify(payload),
-                })
+                let res = await (USE_GATEWAY
+                    ? fetchGateway("create-booking", {
+                          method: "POST",
+                          headers,
+                          body: JSON.stringify(payload),
+                      })
+                    : fetch(`${SUPABASE_URL}/functions/v1/create-booking`, {
+                          method: "POST",
+                          headers,
+                          body: JSON.stringify(payload),
+                      }))
 
                 let data = await res.json().catch(() => ({}))
                 const legacyMissingFieldsError =
@@ -2327,15 +2461,23 @@ export function withCheckoutPayButton(Component): ComponentType {
                     form.set("coupon_code", String(payload.coupon_code || ""))
                     form.set("pricing_snapshot", JSON.stringify(payload.pricing_snapshot || {}))
 
-                    res = await fetch(`${SUPABASE_URL}/functions/v1/create-booking`, {
-                        method: "POST",
-                        headers: {
-                            apikey: SUPABASE_KEY,
-                            Authorization: `Bearer ${SUPABASE_KEY}`,
-                            "Content-Type": "application/x-www-form-urlencoded",
-                        },
-                        body: form.toString(),
-                    })
+                    res = await (USE_GATEWAY
+                        ? fetchGateway("create-booking", {
+                              method: "POST",
+                              headers: {
+                                  "Content-Type": "application/x-www-form-urlencoded",
+                              },
+                              body: form.toString(),
+                          })
+                        : fetch(`${SUPABASE_URL}/functions/v1/create-booking`, {
+                              method: "POST",
+                              headers: {
+                                  apikey: SUPABASE_KEY,
+                                  Authorization: `Bearer ${SUPABASE_KEY}`,
+                                  "Content-Type": "application/x-www-form-urlencoded",
+                              },
+                              body: form.toString(),
+                          }))
                     data = await res.json().catch(() => ({}))
                 }
 

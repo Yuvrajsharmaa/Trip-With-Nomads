@@ -3,11 +3,11 @@ import { SSEClientTransport } from "@modelcontextprotocol/sdk/client/sse.js";
 import { EventSource } from "eventsource";
 import { mkdirSync, writeFileSync } from "fs";
 import { join } from "path";
+import { resolveMcpUrl } from "./_mcp_env.mjs";
 
 global.EventSource = EventSource;
 
-const MCP_URL =
-  "https://mcp.unframer.co/sse?id=73506ef3a425ea9adf787e19fc7caddc64fe18181bcc24132d988e0397845253&secret=lxsqy1Gm5ZSDmnDuqflUOUhthJg00lBZ";
+const MCP_URL = resolveMcpUrl();
 const TARGET_ID = "jvQtnDE";
 const BACKUP_DIR = "/Users/yuvrajsharma/Desktop/Trip-With-Nomads/framer-website/.framer_backups";
 

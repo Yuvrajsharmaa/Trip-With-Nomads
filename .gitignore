@@ -44,9 +44,12 @@ yarn-error.log*
 framer-website/.booking_status_live_backup_*.tsx
 framer-website/.booking_status_rollback.tsx
 framer-website/.framer_backups/
+framer-website/backups/framer-overrides/
 framer-website/.tmp_project_xml.txt
 framer-website/.tmp/
 framer-website/.wrangler/
+framer-website/.open-next/
+framer-website/.next/
 
 # Local scratch repos
 skills-main/

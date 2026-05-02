@@ -13,6 +13,12 @@ const CLOSE_EVENT = "twn:popup:close";
 const TIMER_KEY = "__twn_popup_timer_started";
 const TIMER_AT_KEY = "__twn_popup_timer_started_at";
 const SUBMIT_LOCK_KEY = "__twn_popup_submit_lock";
+const LEAD_ABANDON_DEBOUNCE_MS = 2000;
+const LEAD_ABANDON_PREFIX = "twn_lead_abandon_v1";
+const LEAD_SUBMITTED_PREFIX = "twn_lead_submitted_v1";
+const LEAD_ID_PREFIX = "twn_lead_id_v1";
+const LEAD_IN_FLIGHT_KEY = "__twn_lead_in_flight_v1";
+const LEAD_IN_FLIGHT_TTL_MS = 10_000;
 
 const PROD_PROJECT_REF = "jxozzvwvprmnhvafmpsa";
 const STAGING_PROJECT_REF = "ieuwiinbvbdvjrdqqzlb";
@@ -94,6 +100,69 @@ function getProjectRefFromHost(): string {
     return PROD_PROJECT_REF;
 }
 
+function getLeadIdentity(source: string, email: string): string {
+    const params = new URLSearchParams(window.location.search);
+    return `${source}|${email}|${params.get("slug") || ""}|${window.location.pathname}`;
+}
+
+function getLeadSubmittedKey(source: string, email: string): string {
+    return `${LEAD_SUBMITTED_PREFIX}:${getLeadIdentity(source, email)}`;
+}
+
+function getLeadAbandonedKey(source: string, email: string): string {
+    return `${LEAD_ABANDON_PREFIX}:${getLeadIdentity(source, email)}`;
+}
+
+function markLeadTrackingState(source: string, email: string, status: string) {
+    const submittedKey = getLeadSubmittedKey(source, email);
+    const abandonedKey = getLeadAbandonedKey(source, email);
+    if (status === "submitted") {
+        sessionStorage.setItem(submittedKey, "1");
+        sessionStorage.setItem(abandonedKey, "1");
+        return;
+    }
+    if (status === "partial_fill") {
+        sessionStorage.setItem(abandonedKey, "1");
+    }
+}
+
+function wasLeadAlreadyTracked(source: string, email: string, status: string): boolean {
+    const submittedKey = getLeadSubmittedKey(source, email);
+    const abandonedKey = getLeadAbandonedKey(source, email);
+    if (status === "submitted") {
+        return sessionStorage.getItem(submittedKey) === "1";
+    }
+    return (
+        sessionStorage.getItem(submittedKey) === "1" ||
+        sessionStorage.getItem(abandonedKey) === "1"
+    );
+}
+
+function getLeadStatusIdentity(source: string, email: string, status: string): string {
+    return `${getLeadIdentity(source, email)}|${status}`;
+}
+
+function getLeadIdKey(source: string, email: string): string {
+    return `${LEAD_ID_PREFIX}:${getLeadIdentity(source, email)}`;
+}
+
+function getOrCreateLeadId(source: string, email: string): string {
+    const key = getLeadIdKey(source, email);
+    const existing = sessionStorage.getItem(key);
+    if (existing) return existing;
+    const generated = typeof crypto !== "undefined" && typeof crypto.randomUUID === "function"
+        ? crypto.randomUUID()
+        : `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+    sessionStorage.setItem(key, generated);
+    return generated;
+}
+
+function getLeadInFlightMap(): Record<string, number> {
+    const w = window as any;
+    if (!w[LEAD_IN_FLIGHT_KEY]) w[LEAD_IN_FLIGHT_KEY] = {};
+    return w[LEAD_IN_FLIGHT_KEY] as Record<string, number>;
+}
+
 async function postLead(form: HTMLFormElement | null): Promise<boolean> {
     const root = form ?? document;
     const email = normalizeEmail(
@@ -124,6 +193,10 @@ async function postLead(form: HTMLFormElement | null): Promise<boolean> {
 
     const params = new URLSearchParams(window.location.search);
     const projectRef = getProjectRefFromHost();
+    if (projectRef === PROD_PROJECT_REF) {
+        console.log("[Popup] Lead capture disabled on production runtime");
+        return true;
+    }
     const endpoint = `https://${projectRef}.supabase.co/functions/v1/record-lead`;
 
     try {
@@ -466,20 +539,38 @@ async function postLeadWithSource(
 
     const params = new URLSearchParams(window.location.search);
     const projectRef = getProjectRefFromHost();
+    if (projectRef === PROD_PROJECT_REF) {
+        console.log(`[LeadTracking:${source}] Lead capture disabled on production runtime`);
+        return true;
+    }
     const endpoint = `https://${projectRef}.supabase.co/functions/v1/record-lead`;
+    const statusValue = statusOverride || "submitted";
+    const leadStatusIdentity = getLeadStatusIdentity(source, email, statusValue);
+
+    if (wasLeadAlreadyTracked(source, email, statusValue)) {
+        return true;
+    }
+
+    const leadInFlightMap = getLeadInFlightMap();
+    const inFlightAt = Number(leadInFlightMap[leadStatusIdentity] || 0);
+    if (inFlightAt > 0 && Date.now() - inFlightAt < LEAD_IN_FLIGHT_TTL_MS) {
+        return true;
+    }
+    leadInFlightMap[leadStatusIdentity] = Date.now();
 
     try {
         const response = await fetch(endpoint, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
+                lead_id: getOrCreateLeadId(source, email),
                 email,
                 name: name || null,
                 phone: phone || null,
                 instagram_id: instagram_id || null,
                 reason: reason || null,
                 source,
-                status: statusOverride || "submitted",
+                status: statusValue,
                 page_url: window.location.href,
                 trip_id: params.get("tripId"),
                 trip_slug: params.get("slug"),
@@ -504,11 +595,203 @@ async function postLeadWithSource(
             sheetLogged: payload?.sheet_logged,
             sheetTab: payload?.sheet_tab,
         });
+        markLeadTrackingState(source, email, statusValue);
         return true;
     } catch (error) {
         console.error(`[LeadTracking:${source}] Request failed`, error);
         return false;
+    } finally {
+        delete leadInFlightMap[leadStatusIdentity];
     }
+}
+
+function resolveFormFromEvent(event: any): HTMLFormElement | null {
+    const current = event?.currentTarget as any;
+    if (current?.tagName === "FORM") return current as HTMLFormElement;
+    if (current && typeof current.closest === "function") {
+        const form = current.closest("form");
+        if (form) return form as HTMLFormElement;
+    }
+
+    const target = event?.target as any;
+    if (target?.form) return target.form as HTMLFormElement;
+    if (target && typeof target.closest === "function") {
+        const form = target.closest("form");
+        if (form) return form as HTMLFormElement;
+    }
+
+    return null;
+}
+
+async function postPartialLeadIfNeeded(
+    form: HTMLFormElement | null,
+    source: string
+): Promise<boolean> {
+    const root = form ?? document;
+    const email = normalizeEmail(
+        findInputValue(root, [
+            'input[type="email"]',
+            'input[name="email"]',
+            'input[name*="email" i]',
+            'input[placeholder*="email" i]',
+        ])
+    );
+    if (!email || !isValidEmail(email)) return false;
+    if (wasLeadAlreadyTracked(source, email, "partial_fill")) return false;
+    return await postLeadWithSource(form, source, "partial_fill");
+}
+
+function withLeadAbandonTracking(source: string) {
+    return function (Component: ComponentType): ComponentType {
+        return function LeadAbandonTracking(props: any) {
+            const formRef = React.useRef<HTMLFormElement | null>(null);
+            const timeoutRef = React.useRef<number | null>(null);
+
+            const clearTimer = () => {
+                if (timeoutRef.current != null) {
+                    window.clearTimeout(timeoutRef.current);
+                    timeoutRef.current = null;
+                }
+            };
+
+            const schedulePartial = (form: HTMLFormElement | null) => {
+                if (form) formRef.current = form;
+                clearTimer();
+                timeoutRef.current = window.setTimeout(() => {
+                    void postPartialLeadIfNeeded(formRef.current, source);
+                }, LEAD_ABANDON_DEBOUNCE_MS);
+            };
+
+            const flushPartial = () => {
+                clearTimer();
+                void postPartialLeadIfNeeded(formRef.current, source);
+            };
+
+            React.useEffect(() => {
+                const onPageHide = () => flushPartial();
+                const onVisibility = () => {
+                    if (document.visibilityState === "hidden") flushPartial();
+                };
+
+                window.addEventListener("pagehide", onPageHide);
+                document.addEventListener("visibilitychange", onVisibility);
+                return () => {
+                    window.removeEventListener("pagehide", onPageHide);
+                    document.removeEventListener("visibilitychange", onVisibility);
+                    clearTimer();
+                };
+            }, []);
+
+            return (
+                <Component
+                    {...props}
+                    onInput={(event: any) => {
+                        props.onInput?.(event);
+                        schedulePartial(resolveFormFromEvent(event));
+                    }}
+                    onChange={(event: any) => {
+                        props.onChange?.(event);
+                        schedulePartial(resolveFormFromEvent(event));
+                    }}
+                    onBlur={(event: any) => {
+                        props.onBlur?.(event);
+                        schedulePartial(resolveFormFromEvent(event));
+                    }}
+                    onSubmit={(event: any) => {
+                        props.onSubmit?.(event);
+                        const form = resolveFormFromEvent(event);
+                        if (form) formRef.current = form;
+                        clearTimer();
+                    }}
+                />
+            );
+        };
+    };
+}
+
+function withSubmitLeadTracking(source: string) {
+    return function (Component: ComponentType): ComponentType {
+        return function SubmitLeadTracking(props: any) {
+            const submitLockRef = React.useRef(false);
+            const formRef = React.useRef<HTMLFormElement | null>(null);
+            const timeoutRef = React.useRef<number | null>(null);
+
+            const clearTimer = () => {
+                if (timeoutRef.current != null) {
+                    window.clearTimeout(timeoutRef.current);
+                    timeoutRef.current = null;
+                }
+            };
+
+            const schedulePartial = (form: HTMLFormElement | null) => {
+                if (form) formRef.current = form;
+                clearTimer();
+                timeoutRef.current = window.setTimeout(() => {
+                    void postPartialLeadIfNeeded(formRef.current, source);
+                }, LEAD_ABANDON_DEBOUNCE_MS);
+            };
+
+            const flushPartial = () => {
+                clearTimer();
+                void postPartialLeadIfNeeded(formRef.current, source);
+            };
+
+            const submitFromEvent = async (event: any) => {
+                if (submitLockRef.current) return;
+                submitLockRef.current = true;
+                try {
+                    const form = resolveFormFromEvent(event);
+                    if (form) formRef.current = form;
+                    await postLeadWithSource(form, source, "submitted");
+                } finally {
+                    window.setTimeout(() => {
+                        submitLockRef.current = false;
+                    }, 900);
+                }
+            };
+
+            React.useEffect(() => {
+                const onPageHide = () => flushPartial();
+                const onVisibility = () => {
+                    if (document.visibilityState === "hidden") flushPartial();
+                };
+
+                window.addEventListener("pagehide", onPageHide);
+                document.addEventListener("visibilitychange", onVisibility);
+                return () => {
+                    window.removeEventListener("pagehide", onPageHide);
+                    document.removeEventListener("visibilitychange", onVisibility);
+                    clearTimer();
+                };
+            }, []);
+
+            return (
+                <Component
+                    {...props}
+                    onInput={(event: any) => {
+                        props.onInput?.(event);
+                        schedulePartial(resolveFormFromEvent(event));
+                    }}
+                    onChange={(event: any) => {
+                        props.onChange?.(event);
+                        schedulePartial(resolveFormFromEvent(event));
+                    }}
+                    onBlur={(event: any) => {
+                        props.onBlur?.(event);
+                        schedulePartial(resolveFormFromEvent(event));
+                    }}
+                    onClick={async (event: any) => {
+                        props.onClick?.(event);
+                        await submitFromEvent(event);
+                    }}
+                    onSubmit={async (event: any) => {
+                        props.onSubmit?.(event);
+                        await submitFromEvent(event);
+                    }}
+                />
+            );
+        };
+    };
 }
 
 /**
@@ -517,26 +800,7 @@ async function postLeadWithSource(
  * and sends to record-lead with source = "booking_invite".
  */
 export function withBookingInviteTracking(Component: ComponentType): ComponentType {
-    return function BookingInviteTracking(props: any) {
-        return (
-            <Component
-                {...props}
-                onClick={async (event: any) => {
-                    props.onClick?.(event);
-                    const form = event?.currentTarget?.closest?.("form") || null;
-                    await postLeadWithSource(form, "booking_invite");
-                }}
-                onSubmit={async (event: any) => {
-                    props.onSubmit?.(event);
-                    const form =
-                        event?.currentTarget?.tagName === "FORM"
-                            ? event.currentTarget
-                            : event?.currentTarget?.closest?.("form") || null;
-                    await postLeadWithSource(form, "booking_invite");
-                }}
-            />
-        );
-    };
+    return withSubmitLeadTracking("booking_invite")(Component);
 }
 
 /**
@@ -545,24 +809,31 @@ export function withBookingInviteTracking(Component: ComponentType): ComponentTy
  * and sends to record-lead with source = "trip_page_lead".
  */
 export function withTripPageLeadTracking(Component: ComponentType): ComponentType {
-    return function TripPageLeadTracking(props: any) {
-        return (
-            <Component
-                {...props}
-                onClick={async (event: any) => {
-                    props.onClick?.(event);
-                    const form = event?.currentTarget?.closest?.("form") || null;
-                    await postLeadWithSource(form, "trip_page_lead");
-                }}
-                onSubmit={async (event: any) => {
-                    props.onSubmit?.(event);
-                    const form =
-                        event?.currentTarget?.tagName === "FORM"
-                            ? event.currentTarget
-                            : event?.currentTarget?.closest?.("form") || null;
-                    await postLeadWithSource(form, "trip_page_lead");
-                }}
-            />
-        );
-    };
+    return withSubmitLeadTracking("trip_page_lead")(Component);
+}
+
+export function withLeadTracking(Component: ComponentType): ComponentType {
+    return withSubmitLeadTracking("general_lead")(Component);
+}
+
+export function withBookingInviteAbandonTracking(
+    Component: ComponentType
+): ComponentType {
+    return withLeadAbandonTracking("booking_invite")(Component);
+}
+
+export function withTripPageLeadAbandonTracking(
+    Component: ComponentType
+): ComponentType {
+    return withLeadAbandonTracking("trip_page_lead")(Component);
+}
+
+export function withCustomTripLeadAbandonTracking(
+    Component: ComponentType
+): ComponentType {
+    return withLeadAbandonTracking("custom_trip_lead")(Component);
+}
+
+export function withCustomTripLeadTracking(Component: ComponentType): ComponentType {
+    return withSubmitLeadTracking("custom_trip_lead")(Component);
 }
