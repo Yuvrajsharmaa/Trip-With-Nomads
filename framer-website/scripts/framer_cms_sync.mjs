@@ -1,3 +1,4 @@
+import { resolveMcpUrl } from "./_mcp_env.mjs";
 /* scripts/framer_cms_sync.mjs */
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { SSEClientTransport } from "@modelcontextprotocol/sdk/client/sse.js";
@@ -5,7 +6,7 @@ import { EventSource } from "eventsource";
 
 global.EventSource = EventSource;
 
-const MCP_URL = "https://mcp.unframer.co/sse?id=73506ef3a425ea9adf787e19fc7caddc64fe18181bcc24132d988e0397845253&secret=lxsqy1Gm5ZSDmnDuqflUOUhthJg00lBZ";
+const MCP_URL = resolveMcpUrl();
 
 async function run() {
     const transport = new SSEClientTransport(new URL(MCP_URL));

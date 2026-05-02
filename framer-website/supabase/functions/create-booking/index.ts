@@ -818,7 +818,7 @@ serve(async (req) => {
             Deno.env.get("GOOGLE_SHEET_ID")
         )
         const bookingsSheetTab = firstNonEmpty(Deno.env.get("BOOKINGS_SHEET_TAB"), "Bookings")
-        if (bookingLifecycleSheetsWriteEnabled() && sheetsEnabled() && bookingsSheetId) {
+        if (bookingSheetsWriteEnabled() && sheetsEnabled() && bookingsSheetId) {
             try {
                 const rowValues = buildBookingSheetRow({
                     booking: {
@@ -829,12 +829,13 @@ serve(async (req) => {
                     notes: "Booking initiated; awaiting payment callback.",
                 })
                 await appendRow(bookingsSheetId, bookingsSheetTab, rowValues, BOOKING_HEADERS)
+                console.log("[create-booking] booking row written to sheet", { bookingId: data.id })
             } catch (sheetErr) {
                 console.error("[create-booking] sheets append failed", sheetErr)
             }
-        } else if (bookingSheetsWriteEnabled() && sheetsEnabled() && bookingsSheetId) {
+        } else if (sheetsEnabled() && bookingsSheetId) {
             console.log(
-                "[create-booking] lifecycle sheet write skipped (BOOKING_LIFECYCLE_SHEETS_WRITE_ENABLED is false)"
+                "[create-booking] booking sheet write skipped (BOOKING_SHEETS_WRITE_ENABLED is false)"
             )
         }
 

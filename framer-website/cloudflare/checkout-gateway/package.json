@@ -1,0 +1,13 @@
+{
+  "name": "@twn/checkout-gateway",
+  "private": true,
+  "version": "0.0.1",
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy"
+  },
+  "devDependencies": {
+    "wrangler": "^4.23.0"
+  }
+}

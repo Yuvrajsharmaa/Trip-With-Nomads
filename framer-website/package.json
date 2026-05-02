@@ -3,5 +3,13 @@
     "@modelcontextprotocol/sdk": "^1.27.1",
     "@supabase/supabase-js": "^2.97.0",
     "eventsource": "^4.1.0"
+  },
+  "scripts": {
+    "framer:overrides:push": "node --env-file=.env scripts/push_overrides_safe.mjs",
+    "framer:overrides:dry-run": "node --env-file=.env scripts/push_overrides_safe.mjs --dry-run",
+    "crm:schema:verify": "node --env-file=.env scripts/verify_crm_schema_parity.mjs",
+    "crm:schema:sync-staging": "node --env-file=.env scripts/sync_crm_schema_to_staging.mjs",
+    "crm:trips:sync-from-website": "node --env-file=.env scripts/sync_crm_trips_catalog_from_website.mjs",
+    "crm:prod:profiles-only-cleanup": "node --env-file=.env scripts/run_prod_profiles_only_cleanup.mjs --confirm"
   }
 }

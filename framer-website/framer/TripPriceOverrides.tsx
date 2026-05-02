@@ -6,6 +6,8 @@ const { useEffect, useState } = React
 type RuntimeEnv = "production" | "development"
 type RuntimeConfig = {
     siteBaseUrl: string
+    apiBaseUrl: string
+    fallbackApiBaseUrl?: string
     supabaseUrl: string
     supabaseAnonKey: string
 }
@@ -13,15 +15,17 @@ type RuntimeConfig = {
 const RUNTIME_CONFIG: Record<RuntimeEnv, RuntimeConfig> = {
     production: {
         siteBaseUrl: "https://tripwithnomads.com",
-        supabaseUrl: "https://jxozzvwvprmnhvafmpsa.supabase.co",
-        supabaseAnonKey:
-            "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imp4b3p6dnd2cHJtbmh2YWZtcHNhIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjgwNTg2NjIsImV4cCI6MjA4MzYzNDY2Mn0.KpVa9dWlJEguL1TA00Tf4QDpziJ1mgA2I0f4_l-vlOk",
+        apiBaseUrl: "/api/checkout",
+        fallbackApiBaseUrl: "https://twn-checkout-gateway.tripwithnomads-crm.workers.dev/api/checkout",
+        supabaseUrl: "",
+        supabaseAnonKey: "",
     },
     development: {
         siteBaseUrl: "https://maroon-aside-814100.framer.app",
+        apiBaseUrl: "http://localhost:8787/api/checkout",
         supabaseUrl: "https://ieuwiinbvbdvjrdqqzlb.supabase.co",
         supabaseAnonKey:
-            "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImlldXdpaW5idmJkdmpyZHFxemxiIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzIwNDYwMTksImV4cCI6MjA4NzYyMjAxOX0.UlTMeyvArixD7byDCrGwEDXsbc4LQfx6QXDL6Je3blE",
+            "__SUPABASE_ANON_KEY_DEVELOPMENT__",
     },
 }
 
@@ -106,14 +110,31 @@ function resolveRuntimeConfig(): RuntimeConfig {
         siteBaseUrl: String(runtimeOverride.siteBaseUrl || selected.siteBaseUrl || "")
             .trim()
             .replace(/\/+$/, ""),
+        apiBaseUrl: String(runtimeOverride.apiBaseUrl || selected.apiBaseUrl || "")
+            .trim()
+            .replace(/\/+$/, ""),
+        fallbackApiBaseUrl: String(
+            runtimeOverride.fallbackApiBaseUrl || selected.fallbackApiBaseUrl || ""
+        )
+            .trim()
+            .replace(/\/+$/, ""),
         supabaseUrl: resolvedSupabaseUrl,
         supabaseAnonKey: resolvedSupabaseAnonKey,
     }
 }
 
 const CURRENT_RUNTIME = resolveRuntimeConfig()
+const RUNTIME_ENV = resolveRuntimeEnv()
+const GATEWAY_BASE = CURRENT_RUNTIME.apiBaseUrl
+const GATEWAY_FALLBACK_BASE = CURRENT_RUNTIME.fallbackApiBaseUrl || ""
 const SUPABASE_URL = CURRENT_RUNTIME.supabaseUrl
 const SUPABASE_KEY = CURRENT_RUNTIME.supabaseAnonKey
+const FORCE_DIRECT_SUPABASE =
+    typeof window !== "undefined" && Boolean((window as any).__TWN_CHECKOUT_FORCE_DIRECT_SUPABASE__)
+const FORCE_GATEWAY =
+    typeof window !== "undefined" && Boolean((window as any).__TWN_CHECKOUT_FORCE_GATEWAY__)
+const USE_GATEWAY =
+    FORCE_GATEWAY || (!FORCE_DIRECT_SUPABASE && RUNTIME_ENV === "production" && Boolean(GATEWAY_BASE))
 
 const cache = new Map<string, { ts: number; data: any }>()
 const inFlight = new Map<string, Promise<any | null>>()
@@ -183,6 +204,68 @@ function readTripSlugCandidate(props: any): string {
     )
 }
 
+function normalizeGatewayBase(value: string): string {
+    const clean = String(value || "").trim().replace(/\/+$/, "")
+    if (!clean) return ""
+    if (/^https?:\/\//i.test(clean)) return clean
+    if (typeof window !== "undefined" && clean.startsWith("/")) {
+        return `${window.location.origin}${clean}`.replace(/\/+$/, "")
+    }
+    return clean
+}
+
+const GATEWAY_CANDIDATES = [normalizeGatewayBase(GATEWAY_BASE), normalizeGatewayBase(GATEWAY_FALLBACK_BASE)]
+    .filter(Boolean)
+    .filter((value, index, arr) => arr.indexOf(value) === index)
+
+function shouldFallbackGateway(response: Response, requestUrl: string): boolean {
+    if (response.ok) return false
+    let sameOrigin = false
+    try {
+        const parsed = new URL(requestUrl)
+        sameOrigin =
+            typeof window !== "undefined" &&
+            parsed.origin === window.location.origin
+    } catch (_) { }
+    if (sameOrigin && response.status === 404) return true
+    const server = String(response.headers.get("server") || "").toLowerCase()
+    const contentType = String(response.headers.get("content-type") || "").toLowerCase()
+    return (
+        (response.status === 404 || response.status === 405) &&
+        (server.includes("framer") || contentType.includes("text/html"))
+    )
+}
+
+async function fetchGateway(path: string, init: RequestInit = {}, params?: URLSearchParams): Promise<Response> {
+    const endpoint = String(path || "").trim().replace(/^\/+/, "")
+    const query = params?.toString() || ""
+    const candidates = GATEWAY_CANDIDATES.length ? GATEWAY_CANDIDATES : [normalizeGatewayBase(GATEWAY_BASE)].filter(Boolean)
+    let lastError: any = null
+
+    for (let index = 0; index < candidates.length; index += 1) {
+        const base = String(candidates[index] || "").trim().replace(/\/+$/, "")
+        const requestUrl = `${base}/${endpoint}${query ? `?${query}` : ""}`
+        try {
+            const response = await fetch(requestUrl, {
+                ...init,
+                headers: {
+                    ...(init.headers || {}),
+                },
+            })
+            const hasFallback = index < candidates.length - 1
+            if (hasFallback && shouldFallbackGateway(response, requestUrl)) {
+                continue
+            }
+            return response
+        } catch (error) {
+            lastError = error
+            if (index >= candidates.length - 1) throw error
+        }
+    }
+
+    throw lastError || new Error("Gateway request failed")
+}
+
 export function withTripIdSource(Component): ComponentType {
     return (props: any) => {
         const nextTripId = readTripIdCandidate(props)
@@ -214,14 +297,16 @@ async function fetchTripDisplayPrice(params: { slug?: string; tripId?: string })
     if (tripId) query.set("trip_id", tripId)
     query.set("v", "3")
 
-    const request = fetch(`${SUPABASE_URL}/functions/v1/get-trip-display-price?${query.toString()}`, {
-        method: "GET",
-        priority: "high",
-        headers: {
-            apikey: SUPABASE_KEY,
-            Authorization: `Bearer ${SUPABASE_KEY}`,
-        },
-    } as any)
+    const request = (USE_GATEWAY
+        ? fetchGateway("display-price", { method: "GET", priority: "high" as any }, query)
+        : fetch(`${SUPABASE_URL}/functions/v1/get-trip-display-price?${query.toString()}`, {
+              method: "GET",
+              priority: "high",
+              headers: {
+                  apikey: SUPABASE_KEY,
+                  Authorization: `Bearer ${SUPABASE_KEY}`,
+              },
+          } as any))
         .then(async (res) => {
             if (!res.ok) return null
             const data = await res.json().catch(() => null)

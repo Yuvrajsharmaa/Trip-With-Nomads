@@ -1,11 +1,12 @@
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { SSEClientTransport } from "@modelcontextprotocol/sdk/client/sse.js";
 import { EventSource } from "eventsource";
+import { resolveMcpUrl } from "./_mcp_env.mjs";
 
 // Polyfill EventSource for Node environment if needed by the SDK (usually required for SSE transport in Node)
 global.EventSource = EventSource;
 
-const MCP_URL = "https://mcp.unframer.co/sse?id=73506ef3a425ea9adf787e19fc7caddc64fe18181bcc24132d988e0397845253&secret=lxsqy1Gm5ZSDmnDuqflUOUhthJg00lBZ";
+const MCP_URL = resolveMcpUrl();
 
 async function run() {
     console.log("Initializing MCP Client...");

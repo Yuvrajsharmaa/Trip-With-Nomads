@@ -1,0 +1,19 @@
+{
+  "name": "trip-with-nomads-root-ops",
+  "private": true,
+  "version": "0.0.1",
+  "scripts": {
+    "repo:guard": "node scripts/repo-guard.mjs ci",
+    "repo:guard:pre-commit": "node scripts/repo-guard.mjs pre-commit",
+    "repo:guard:pre-push": "node scripts/repo-guard.mjs pre-push",
+    "secret:scan": "node scripts/secret-scan.mjs ci",
+    "secret:scan:pre-commit": "node scripts/secret-scan.mjs pre-commit",
+    "secret:scan:pre-push": "node scripts/secret-scan.mjs pre-push",
+    "secret:audit-history": "node scripts/secret-history-audit.mjs",
+    "branch:activate": "node scripts/branch-manager.mjs activate",
+    "branch:handoff": "node scripts/branch-manager.mjs handoff",
+    "branch:cleanup": "node scripts/branch-manager.mjs cleanup",
+    "hooks:install": "node scripts/install-hooks.mjs",
+    "verify": "npm run repo:guard && npm run secret:scan"
+  }
+}

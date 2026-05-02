@@ -1,40 +1,65 @@
 # Versioning & Branch Workflow
 
-This repo is set up to prefer a **linear git history** (no merge commits) on protected branches.
+This repository now uses strict branch governance so Codex and Antigravity can hand off safely without branch sprawl or drift.
 
-## Branches
+## Protected branches
+- `main`: production only
+- `staging`: staging validation lane
+- Both are PR-only, never direct push.
 
-- `staging`: staging-first integration branch.
-- `main`: production branch.
+## Active feature branch policy
+- One active feature branch at a time.
+- Source of truth: `/.branch-policy.json`
+- Quarantine branches (`codex/wip-quarantine-*`) are preserved and excluded from cleanup.
 
-## Day-to-day workflow (recommended)
-
-1. Create a feature branch from `staging`.
-2. Open a PR back into `staging` and use **Squash and merge**.
-3. After QA on staging, open a PR from `staging` → `main` and use **Squash and merge**.
-
-This keeps protected branches linear and avoids long-running branch drift.
-
-## Local guardrails (recommended)
-
-This repo includes lightweight git hooks in `.githooks/` to:
-
-- block direct pushes to `main` / `staging`
-- block committing generated/local artifacts
-
-Enable them once per clone:
+### Commands
 
 ```bash
-git config core.hooksPath .githooks
+npm run branch:activate -- <branch> --owner codex
+npm run branch:handoff -- --to antigravity --note "context"
+npm run branch:cleanup -- --stale --grace-days 7
+npm run branch:cleanup -- --stale --grace-days 7 --apply
 ```
 
-## Releases / “what’s in production?”
+## Daily workflow
+1. `git checkout main`
+2. `git pull --ff-only`
+3. `git checkout <active-feature-branch>`
+4. `git rebase main`
+5. `npm run verify`
+6. Push feature branch and open PR to `staging`
 
-- Tag production deployments on `main` using a timestamp tag like:
-  - `prod-YYYYMMDD-HHMM` (example: `prod-20260319-0130`)
-- Keep release notes in `MASTER_HANDOFF.md` and/or the relevant `framer-website/docs/*-change-log.md`.
+## Promotion to live
+1. PR: feature -> `staging` (squash)
+2. Validate staging
+3. PR: `staging` -> `main` (squash)
+4. Deploy live from `main` only
 
-## Supabase migrations
+## Local guardrails
+Install once per clone:
 
-- Use timestamped migration filenames (already in place).
-- Do not commit Supabase CLI generated metadata from `framer-website/supabase/.temp/`.
+```bash
+npm run hooks:install
+```
+
+Enforced checks:
+- `pre-commit`: `repo:guard` + `secret:scan`
+- `pre-push`: `repo:guard` + `secret:scan` + `verify`
+
+`verify` currently runs:
+- `npm run repo:guard`
+- `npm run secret:scan`
+
+## Secret hygiene
+- Never commit `.env*` files.
+- Never hardcode JWT/API keys.
+- Run historical sweep when needed:
+
+```bash
+npm run secret:audit-history
+```
+
+Report output: `docs/security/secret-audit-report.md`
+
+## Release notes + handoff
+- Update `docs/CRM_STATUS.md` and `docs/HANDOFF_CODEX.md` after workflow/security changes.

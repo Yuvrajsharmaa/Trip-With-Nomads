@@ -4,10 +4,158 @@ import { createStore } from "https://framer.com/m/framer/store.js@^1.0.0"
 
 const { createContext, useContext, useEffect, useMemo, useCallback, useRef, useState } = React
 
-// --- CONFIGURATION ---
-const SUPABASE_URL = "https://jxozzvwvprmnhvafmpsa.supabase.co"
-const SUPABASE_KEY =
-    "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imp4b3p6dnd2cHJtbmh2YWZtcHNhIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjgwNTg2NjIsImV4cCI6MjA4MzYzNDY2Mn0.KpVa9dWlJEguL1TA00Tf4QDpziJ1mgA2I0f4_l-vlOk"
+type RuntimeEnv = "production" | "development"
+type RuntimeConfig = {
+    siteBaseUrl: string
+    apiBaseUrl: string
+    fallbackApiBaseUrl?: string
+    supabaseUrl: string
+    supabaseAnonKey: string
+}
+
+const RUNTIME_CONFIG: Record<RuntimeEnv, RuntimeConfig> = {
+    production: {
+        siteBaseUrl: "https://tripwithnomads.com",
+        apiBaseUrl: "/api/checkout",
+        fallbackApiBaseUrl: "https://twn-checkout-gateway.tripwithnomads-crm.workers.dev/api/checkout",
+        supabaseUrl: "https://jxozzvwvprmnhvafmpsa.supabase.co",
+        supabaseAnonKey: "",
+    },
+    development: {
+        siteBaseUrl: "https://maroon-aside-814100.framer.app",
+        apiBaseUrl: "http://localhost:8787/api/checkout",
+        supabaseUrl: "https://ieuwiinbvbdvjrdqqzlb.supabase.co",
+        supabaseAnonKey: "__SUPABASE_ANON_KEY_DEVELOPMENT__",
+    },
+}
+
+function resolveRuntimeEnv(): RuntimeEnv {
+    if (typeof window === "undefined") return "production"
+    const host = String(window.location.hostname || "").trim().toLowerCase()
+    if (host === "tripwithnomads.com" || host === "www.tripwithnomads.com") return "production"
+    if (
+        host === "maroon-aside-814100.framer.app" ||
+        host === "localhost" ||
+        host === "127.0.0.1"
+    ) {
+        return "development"
+    }
+    return "production"
+}
+
+function resolveRuntimeConfig(): RuntimeConfig {
+    const env = resolveRuntimeEnv()
+    const selected = RUNTIME_CONFIG[env]
+    const runtimeOverride =
+        typeof window !== "undefined" ? (window as any).__TWN_RUNTIME_CONFIG__ || {} : {}
+
+    return {
+        siteBaseUrl: String(runtimeOverride.siteBaseUrl || selected.siteBaseUrl || "")
+            .trim()
+            .replace(/\/+$/, ""),
+        apiBaseUrl: String(runtimeOverride.apiBaseUrl || selected.apiBaseUrl || "")
+            .trim()
+            .replace(/\/+$/, ""),
+        fallbackApiBaseUrl: String(
+            runtimeOverride.fallbackApiBaseUrl || selected.fallbackApiBaseUrl || ""
+        )
+            .trim()
+            .replace(/\/+$/, ""),
+        supabaseUrl: String(runtimeOverride.supabaseUrl || selected.supabaseUrl || "").trim(),
+        supabaseAnonKey: String(
+            runtimeOverride.supabaseAnonKey || selected.supabaseAnonKey || ""
+        ).trim(),
+    }
+}
+
+const CURRENT_RUNTIME = resolveRuntimeConfig()
+const RUNTIME_ENV = resolveRuntimeEnv()
+const GATEWAY_BASE = CURRENT_RUNTIME.apiBaseUrl
+const GATEWAY_FALLBACK_BASE = CURRENT_RUNTIME.fallbackApiBaseUrl || ""
+const SUPABASE_URL = CURRENT_RUNTIME.supabaseUrl
+const SUPABASE_KEY = CURRENT_RUNTIME.supabaseAnonKey
+const FORCE_DIRECT_SUPABASE =
+    typeof window !== "undefined" && Boolean((window as any).__TWN_CHECKOUT_FORCE_DIRECT_SUPABASE__)
+const FORCE_GATEWAY =
+    typeof window !== "undefined" && Boolean((window as any).__TWN_CHECKOUT_FORCE_GATEWAY__)
+const USE_GATEWAY =
+    FORCE_GATEWAY || (!FORCE_DIRECT_SUPABASE && RUNTIME_ENV === "production" && Boolean(GATEWAY_BASE))
+
+function normalizeGatewayBase(value: string): string {
+    const clean = String(value || "").trim().replace(/\/+$/, "")
+    if (!clean) return ""
+    if (/^https?:\/\//i.test(clean)) return clean
+    if (typeof window !== "undefined" && clean.startsWith("/")) {
+        return `${window.location.origin}${clean}`.replace(/\/+$/, "")
+    }
+    return clean
+}
+
+const GATEWAY_CANDIDATES = [normalizeGatewayBase(GATEWAY_BASE), normalizeGatewayBase(GATEWAY_FALLBACK_BASE)]
+    .filter(Boolean)
+    .filter((value, index, arr) => arr.indexOf(value) === index)
+
+function shouldFallbackGateway(response: Response, requestUrl: string): boolean {
+    if (response.ok) return false
+    let sameOrigin = false
+    try {
+        const parsed = new URL(requestUrl)
+        sameOrigin =
+            typeof window !== "undefined" &&
+            parsed.origin === window.location.origin
+    } catch (_) { }
+    if (sameOrigin && response.status === 404) return true
+    const server = String(response.headers.get("server") || "").toLowerCase()
+    const contentType = String(response.headers.get("content-type") || "").toLowerCase()
+    return (
+        (response.status === 404 || response.status === 405) &&
+        (server.includes("framer") || contentType.includes("text/html"))
+    )
+}
+
+function buildGatewayUrl(base: string, path: string): string {
+    const endpoint = String(path || "").trim().replace(/^\/+/, "")
+    return `${String(base || "").trim().replace(/\/+$/, "")}/${endpoint}`
+}
+
+async function fetchGateway(path: string, init?: RequestInit): Promise<Response> {
+    const candidates = GATEWAY_CANDIDATES.length ? GATEWAY_CANDIDATES : [normalizeGatewayBase(GATEWAY_BASE)].filter(Boolean)
+    let lastError: any = null
+
+    for (let index = 0; index < candidates.length; index += 1) {
+        const requestUrl = buildGatewayUrl(candidates[index], path)
+        try {
+            const response = await fetch(requestUrl, {
+                ...(init || {}),
+                headers: {
+                    ...((init && init.headers) || {}),
+                },
+            })
+            const hasFallback = index < candidates.length - 1
+            if (hasFallback && shouldFallbackGateway(response, requestUrl)) {
+                continue
+            }
+            return response
+        } catch (error) {
+            lastError = error
+            if (index >= candidates.length - 1) throw error
+        }
+    }
+
+    throw lastError || new Error("Gateway request failed")
+}
+
+function buildSupabaseAuthHeaders(base?: HeadersInit): HeadersInit {
+    const headers: Record<string, string> = {
+        ...(base as Record<string, string>),
+    }
+    if (SUPABASE_KEY) {
+        headers.apikey = SUPABASE_KEY
+        headers.Authorization = `Bearer ${SUPABASE_KEY}`
+    }
+    return headers
+}
+
 const TAX_RATE = 0.02
 
 // --- CONTEXT ---
@@ -134,21 +282,28 @@ export function withTripIdSource(Component): ComponentType {
                 return
             }
 
-            fetch(
-                `${SUPABASE_URL}/rest/v1/trip_pricing?trip_id=eq.${id}&select=*`,
-                {
+            const requestPromise = USE_GATEWAY
+                ? fetchGateway(`context?trip_id=${encodeURIComponent(id)}`, {
+                    method: "GET",
+                })
+                : fetch(`${SUPABASE_URL}/rest/v1/trip_pricing?trip_id=eq.${id}&select=*`, {
                     priority: "high",
-                    headers: {
-                        apikey: SUPABASE_KEY,
-                        Authorization: `Bearer ${SUPABASE_KEY}`,
-                    },
-                } as any
-            )
+                    headers: buildSupabaseAuthHeaders(),
+                } as any)
+
+            requestPromise
                 .then((res) => res.json())
                 .then((data) => {
+                    const rows = USE_GATEWAY
+                        ? Array.isArray(data?.pricing)
+                            ? data.pricing
+                            : []
+                        : Array.isArray(data)
+                            ? data
+                            : []
                     const today = new Date()
                     today.setHours(0, 0, 0, 0)
-                    const validRows = (Array.isArray(data) ? data : []).filter(
+                    const validRows = rows.filter(
                         (row: any) => new Date(row.start_date) >= today
                     )
                         ; (window as any)[cacheKey] = validRows
@@ -474,15 +629,21 @@ export function withPayButton(Component): ComponentType {
             console.log("[Booking] Initiating payment setup...", payload)
 
             try {
-                const res = await fetch(`${SUPABASE_URL}/functions/v1/create-booking`, {
-                    method: "POST",
-                    headers: {
-                        "Content-Type": "application/json",
-                        apikey: SUPABASE_KEY,
-                        Authorization: `Bearer ${SUPABASE_KEY}`,
-                    },
-                    body: JSON.stringify(payload),
-                })
+                const res = await (USE_GATEWAY
+                    ? fetchGateway("create-booking", {
+                        method: "POST",
+                        headers: {
+                            "Content-Type": "application/json",
+                        },
+                        body: JSON.stringify(payload),
+                    })
+                    : fetch(`${SUPABASE_URL}/functions/v1/create-booking`, {
+                        method: "POST",
+                        headers: buildSupabaseAuthHeaders({
+                            "Content-Type": "application/json",
+                        }),
+                        body: JSON.stringify(payload),
+                    }))
 
                 console.log("[Booking] Edge Function Status:", res.status)
 

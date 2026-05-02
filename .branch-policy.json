@@ -1,0 +1,14 @@
+{
+  "version": 1,
+  "active_feature_branch": "codex/crm-lead-workflow-hardening-website-20260427",
+  "active_owner": "codex",
+  "allowed_long_lived_branches": ["main", "staging"],
+  "allowed_feature_prefixes": ["codex/", "feat/", "fix/", "chore/", "hotfix/"],
+  "protected_quarantine_patterns": [
+    "^codex/wip-quarantine-",
+    "^antigravity/wip-quarantine-",
+    "^wip-quarantine-"
+  ],
+  "grace_days": 7,
+  "handoff_note": ""
+}

@@ -48,6 +48,8 @@ const { useEffect, useRef, useState } = React
 type RuntimeEnv = "production" | "development"
 type RuntimeConfig = {
     siteBaseUrl: string
+    apiBaseUrl: string
+    fallbackApiBaseUrl?: string
     supabaseUrl: string
     supabaseAnonKey: string
 }
@@ -55,15 +57,17 @@ type RuntimeConfig = {
 const RUNTIME_CONFIG: Record<RuntimeEnv, RuntimeConfig> = {
     production: {
         siteBaseUrl: "https://tripwithnomads.com",
-        supabaseUrl: "https://jxozzvwvprmnhvafmpsa.supabase.co",
-        supabaseAnonKey:
-            "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imp4b3p6dnd2cHJtbmh2YWZtcHNhIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjgwNTg2NjIsImV4cCI6MjA4MzYzNDY2Mn0.KpVa9dWlJEguL1TA00Tf4QDpziJ1mgA2I0f4_l-vlOk",
+        apiBaseUrl: "/api/checkout",
+        fallbackApiBaseUrl: "https://twn-checkout-gateway.tripwithnomads-crm.workers.dev/api/checkout",
+        supabaseUrl: "",
+        supabaseAnonKey: "",
     },
     development: {
         siteBaseUrl: "https://maroon-aside-814100.framer.app",
+        apiBaseUrl: "http://localhost:8787/api/checkout",
         supabaseUrl: "https://ieuwiinbvbdvjrdqqzlb.supabase.co",
         supabaseAnonKey:
-            "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImlldXdpaW5idmJkdmpyZHFxemxiIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzIwNDYwMTksImV4cCI6MjA4NzYyMjAxOX0.UlTMeyvArixD7byDCrGwEDXsbc4LQfx6QXDL6Je3blE",
+            "__SUPABASE_ANON_KEY_DEVELOPMENT__",
     },
 }
 
@@ -100,6 +104,10 @@ function resolveRuntimeConfig(): RuntimeConfig {
         typeof window !== "undefined" ? (window as any).__TWN_RUNTIME_CONFIG__ || {} : {}
     return {
         siteBaseUrl: normalizeBaseUrl(runtimeOverride.siteBaseUrl || selected.siteBaseUrl),
+        apiBaseUrl: normalizeBaseUrl(runtimeOverride.apiBaseUrl || selected.apiBaseUrl),
+        fallbackApiBaseUrl: normalizeBaseUrl(
+            runtimeOverride.fallbackApiBaseUrl || selected.fallbackApiBaseUrl
+        ),
         supabaseUrl: String(runtimeOverride.supabaseUrl || selected.supabaseUrl || "").trim(),
         supabaseAnonKey: String(
             runtimeOverride.supabaseAnonKey || selected.supabaseAnonKey || ""
@@ -108,8 +116,17 @@ function resolveRuntimeConfig(): RuntimeConfig {
 }
 
 const CURRENT_RUNTIME = resolveRuntimeConfig()
+const RUNTIME_ENV = resolveRuntimeEnv()
+const GATEWAY_BASE = CURRENT_RUNTIME.apiBaseUrl
+const GATEWAY_FALLBACK_BASE = CURRENT_RUNTIME.fallbackApiBaseUrl || ""
 const SUPABASE_URL = CURRENT_RUNTIME.supabaseUrl
 const SUPABASE_KEY = CURRENT_RUNTIME.supabaseAnonKey
+const FORCE_DIRECT_SUPABASE =
+    typeof window !== "undefined" && Boolean((window as any).__TWN_CHECKOUT_FORCE_DIRECT_SUPABASE__)
+const FORCE_GATEWAY =
+    typeof window !== "undefined" && Boolean((window as any).__TWN_CHECKOUT_FORCE_GATEWAY__)
+const USE_GATEWAY =
+    FORCE_GATEWAY || (!FORCE_DIRECT_SUPABASE && RUNTIME_ENV === "production" && Boolean(GATEWAY_BASE))
 const DOMESTIC_TRIPS_BASE_URL = `${CURRENT_RUNTIME.siteBaseUrl}/domestic-trips`
 
 
@@ -143,6 +160,70 @@ interface BookingData {
     created_at: string
     // Populated from trips table join
     trip_title?: string
+}
+
+function normalizeGatewayBase(value: string): string {
+    const clean = String(value || "").trim().replace(/\/+$/, "")
+    if (!clean) return ""
+    if (/^https?:\/\//i.test(clean)) return clean
+    if (typeof window !== "undefined" && clean.startsWith("/")) {
+        return `${window.location.origin}${clean}`.replace(/\/+$/, "")
+    }
+    return clean
+}
+
+const GATEWAY_CANDIDATES = [normalizeGatewayBase(GATEWAY_BASE), normalizeGatewayBase(GATEWAY_FALLBACK_BASE)]
+    .filter(Boolean)
+    .filter((value, index, arr) => arr.indexOf(value) === index)
+
+function shouldFallbackGateway(response: Response, requestUrl: string): boolean {
+    if (response.ok) return false
+    let sameOrigin = false
+    try {
+        const parsed = new URL(requestUrl)
+        sameOrigin =
+            typeof window !== "undefined" &&
+            parsed.origin === window.location.origin
+    } catch (_) { }
+    if (sameOrigin && response.status === 404) return true
+    const server = String(response.headers.get("server") || "").toLowerCase()
+    const contentType = String(response.headers.get("content-type") || "").toLowerCase()
+    return (
+        (response.status === 404 || response.status === 405) &&
+        (server.includes("framer") || contentType.includes("text/html"))
+    )
+}
+
+function buildGatewayUrl(base: string, path: string): string {
+    const endpoint = String(path || "").trim().replace(/^\/+/, "")
+    return `${String(base || "").trim().replace(/\/+$/, "")}/${endpoint}`
+}
+
+async function fetchGateway(path: string, init: RequestInit): Promise<Response> {
+    const candidates = GATEWAY_CANDIDATES.length ? GATEWAY_CANDIDATES : [normalizeGatewayBase(GATEWAY_BASE)].filter(Boolean)
+    let lastError: any = null
+
+    for (let index = 0; index < candidates.length; index += 1) {
+        const requestUrl = buildGatewayUrl(candidates[index], path)
+        try {
+            const response = await fetch(requestUrl, {
+                ...init,
+                headers: {
+                    ...(init.headers || {}),
+                },
+            })
+            const hasFallback = index < candidates.length - 1
+            if (hasFallback && shouldFallbackGateway(response, requestUrl)) {
+                continue
+            }
+            return response
+        } catch (error) {
+            lastError = error
+            if (index >= candidates.length - 1) throw error
+        }
+    }
+
+    throw lastError || new Error("Gateway request failed")
 }
 
 type LoadState = "loading" | "ready" | "error"
@@ -333,18 +414,29 @@ export function withBookingStatus(Component): ComponentType {
                 if (!bookingId) return { error: "No booking_id" }
 
                 try {
-                    const statusRes = await fetch(`${SUPABASE_URL}/functions/v1/get-booking-status`, {
-                        method: "POST",
-                        headers: {
-                            "Content-Type": "application/json",
-                            apikey: SUPABASE_KEY,
-                            Authorization: `Bearer ${SUPABASE_KEY}`,
-                        },
-                        body: JSON.stringify({
-                            booking_id: bookingId,
-                            status_token: statusToken,
-                        }),
-                    })
+                    const statusRes = await (USE_GATEWAY
+                        ? fetchGateway("booking-status", {
+                              method: "POST",
+                              headers: {
+                                  "Content-Type": "application/json",
+                              },
+                              body: JSON.stringify({
+                                  booking_id: bookingId,
+                                  status_token: statusToken,
+                              }),
+                          })
+                        : fetch(`${SUPABASE_URL}/functions/v1/get-booking-status`, {
+                              method: "POST",
+                              headers: {
+                                  "Content-Type": "application/json",
+                                  apikey: SUPABASE_KEY,
+                                  Authorization: `Bearer ${SUPABASE_KEY}`,
+                              },
+                              body: JSON.stringify({
+                                  booking_id: bookingId,
+                                  status_token: statusToken,
+                              }),
+                          }))
                     if (statusRes.ok) {
                         const payload = await statusRes.json()
                         if (payload?.booking) return { data: payload.booking }
@@ -857,18 +949,29 @@ export function withRetryButton(Component): ComponentType {
             setIsRetrying(true)
 
             try {
-                const res = await fetch(`${SUPABASE_URL}/functions/v1/retry-payment`, {
-                    method: "POST",
-                    headers: {
-                        "Content-Type": "application/json",
-                        apikey: SUPABASE_KEY,
-                        Authorization: `Bearer ${SUPABASE_KEY}`,
-                    },
-                    body: JSON.stringify({
-                        booking_id: data.id,
-                        email: String(data.email || "").trim(),
-                    }),
-                })
+                const res = await (USE_GATEWAY
+                    ? fetchGateway("retry-payment", {
+                          method: "POST",
+                          headers: {
+                              "Content-Type": "application/json",
+                          },
+                          body: JSON.stringify({
+                              booking_id: data.id,
+                              email: String(data.email || "").trim(),
+                          }),
+                      })
+                    : fetch(`${SUPABASE_URL}/functions/v1/retry-payment`, {
+                          method: "POST",
+                          headers: {
+                              "Content-Type": "application/json",
+                              apikey: SUPABASE_KEY,
+                              Authorization: `Bearer ${SUPABASE_KEY}`,
+                          },
+                          body: JSON.stringify({
+                              booking_id: data.id,
+                              email: String(data.email || "").trim(),
+                          }),
+                      }))
                 if (!res.ok) throw new Error(`Retry failed (${res.status})`)
 
                 const payload = await res.json().catch(() => null)
