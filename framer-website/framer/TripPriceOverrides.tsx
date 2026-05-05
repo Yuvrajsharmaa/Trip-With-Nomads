@@ -4,6 +4,14 @@ import type { ComponentType } from "react";
 const { useEffect, useState, useMemo } = React;
 const UUID_REGEX =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const UUID_GLOBAL_REGEX =
+  /[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}/ig;
+const TRIP_ID_PROP_KEYS = [
+  "tripId",
+  "trip_id",
+  "tripid",
+  "awOOt0Clm",
+];
 
 function isFramerRuntimeHost(): boolean {
   if (typeof window === "undefined") return false;
@@ -117,6 +125,35 @@ function normalizeTripId(value: any): string {
   return clean;
 }
 
+function findTripIdInValue(value: any, depth = 0): string {
+  if (depth > 3 || value == null) return "";
+  if (typeof value === "string" || typeof value === "number") {
+    const raw = String(value);
+    const direct = normalizeTripId(raw);
+    if (direct) return direct;
+    const matches = raw.match(UUID_GLOBAL_REGEX);
+    return normalizeTripId(matches?.[0] || "");
+  }
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      const found = findTripIdInValue(item, depth + 1);
+      if (found) return found;
+    }
+    return "";
+  }
+  if (typeof value === "object") {
+    for (const key of TRIP_ID_PROP_KEYS) {
+      const found = findTripIdInValue((value as any)?.[key], depth + 1);
+      if (found) return found;
+    }
+    for (const key of Object.keys(value as any)) {
+      const found = findTripIdInValue((value as any)[key], depth + 1);
+      if (found) return found;
+    }
+  }
+  return "";
+}
+
 function createSoldOutData() {
   return {
     __soldOut: true,
@@ -196,12 +233,16 @@ function fetchDisplayFallbackFromContext(
 }
 
 function readTripIdCandidate(props: any): string {
-  return normalizeTripId(
+  const direct = normalizeTripId(
     props?.tripId ||
+      props?.trip_id ||
+      props?.tripid ||
+      props?.awOOt0Clm ||
       props?.["data-trip-id"] ||
       props?.text ||
       (typeof props?.children === "string" ? props.children : ""),
   );
+  return direct || findTripIdInValue(props);
 }
 
 function readTripSlugCandidate(props: any): string {
