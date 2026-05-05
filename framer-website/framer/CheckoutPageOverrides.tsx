@@ -65,6 +65,8 @@ const INR = new Intl.NumberFormat("en-IN", {
 
 const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const PHONE_REGEX = /^\+?[\d\s\-()]{10,15}$/;
+const UUID_REGEX =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const tripDisplayCache = new Map<string, { ts: number; data: any }>();
 const tripDisplayInFlight = new Map<string, Promise<any | null>>();
 let forcedTripId = "";
@@ -98,6 +100,9 @@ type PricingBreakdown = {
   >;
 };
 
+type CheckoutFieldErrors = Record<string, string>;
+type CheckoutTouchedFields = Record<string, boolean>;
+
 type CheckoutStore = {
   tripId: string;
   slug: string;
@@ -118,6 +123,10 @@ type CheckoutStore = {
   submitting: boolean;
   inviteOnly: boolean;
   pricingBreakdown: PricingBreakdown | null;
+  fieldErrors: CheckoutFieldErrors;
+  touchedFields: CheckoutTouchedFields;
+  validationSubmitAttempted: boolean;
+  checkoutMessage: string;
 };
 
 const TravellerContext = createContext<{ id: string; index: number } | null>(
@@ -125,6 +134,17 @@ const TravellerContext = createContext<{ id: string; index: number } | null>(
 );
 type SummaryLineContextValue = { key: string; label: string; amount: number };
 const SummaryLineContext = createContext<SummaryLineContextValue | null>(null);
+const CONTACT_NAME_FIELD = "contact_name";
+const CONTACT_PHONE_FIELD = "contact_phone";
+const CONTACT_EMAIL_FIELD = "contact_email";
+const DEPARTURE_DATE_FIELD = "departure_date";
+
+function travellerFieldKey(
+  travellerId: string,
+  field: "name" | "sharing" | "vehicle",
+): string {
+  return `traveller.${travellerId}.${field}`;
+}
 
 const useStore = createStore({
   tripId: "",
@@ -146,6 +166,10 @@ const useStore = createStore({
   submitting: false,
   inviteOnly: false,
   pricingBreakdown: null,
+  fieldErrors: {},
+  touchedFields: {},
+  validationSubmitAttempted: false,
+  checkoutMessage: "",
 });
 
 function toNumber(value: any): number {
@@ -483,23 +507,36 @@ function formatNextBatchDate(dateStr: string): string {
   });
 }
 
-function getValidationErrors(store: CheckoutStore): string[] {
-  const errors: string[] = [];
+function getValidationState(store: CheckoutStore): {
+  fieldErrors: CheckoutFieldErrors;
+  globalErrors: string[];
+} {
+  const fieldErrors: CheckoutFieldErrors = {};
+  const globalErrors: string[] = [];
+
   if (!store?.tripId) {
-    errors.push("Trip context is missing. Try re-opening the checkout.");
-    return errors;
-  }
-  if (!store?.date) errors.push("Departure date is required");
-
-  if (!store?.contactName?.trim()) errors.push("Contact name is required");
-  if (!store?.contactPhone?.trim()) errors.push("Phone number is required");
-  else if (!PHONE_REGEX.test(store.contactPhone.trim())) {
-    errors.push("Phone number is invalid");
+    globalErrors.push("Trip context is missing. Try re-opening the checkout.");
+    return { fieldErrors, globalErrors };
   }
 
-  if (!store?.contactEmail?.trim()) errors.push("Email is required");
-  else if (!EMAIL_REGEX.test(store.contactEmail.trim())) {
-    errors.push("Email is invalid");
+  if (!store?.date) {
+    fieldErrors[DEPARTURE_DATE_FIELD] = "Departure date is required";
+  }
+
+  if (!store?.contactName?.trim()) {
+    fieldErrors[CONTACT_NAME_FIELD] = "Contact name is required";
+  }
+
+  if (!store?.contactPhone?.trim()) {
+    fieldErrors[CONTACT_PHONE_FIELD] = "Phone number is required";
+  } else if (!PHONE_REGEX.test(store.contactPhone.trim())) {
+    fieldErrors[CONTACT_PHONE_FIELD] = "Phone number is invalid";
+  }
+
+  if (!store?.contactEmail?.trim()) {
+    fieldErrors[CONTACT_EMAIL_FIELD] = "Email is required";
+  } else if (!EMAIL_REGEX.test(store.contactEmail.trim())) {
+    fieldErrors[CONTACT_EMAIL_FIELD] = "Email is invalid";
   }
 
   const travellers = normalizeTravellers(store?.travellers || []);
@@ -507,27 +544,77 @@ function getValidationErrors(store: CheckoutStore): string[] {
     store?.pricingData || [],
     store?.date || "",
   );
+
   travellers.forEach((t, index) => {
-    if (!t.name.trim()) errors.push(`Name required for Traveller ${index + 1}`);
-    if (requireVehicle && !t.transport) {
-      errors.push(`Vehicle required for Traveller ${index + 1}`);
+    if (!t.name.trim()) {
+      fieldErrors[travellerFieldKey(t.id, "name")] =
+        `Name required for Traveller ${index + 1}`;
     }
-    if (!t.sharing) errors.push(`Sharing required for Traveller ${index + 1}`);
+    if (requireVehicle && !t.transport) {
+      fieldErrors[travellerFieldKey(t.id, "vehicle")] =
+        `Vehicle required for Traveller ${index + 1}`;
+    }
+    if (!t.sharing) {
+      fieldErrors[travellerFieldKey(t.id, "sharing")] =
+        `Sharing required for Traveller ${index + 1}`;
+    }
   });
 
   const totals = computeTotals(store);
-  if (totals.total <= 0) errors.push("Total amount must be greater than zero");
+  if (totals.total <= 0) {
+    globalErrors.push("Total amount must be greater than zero");
+  }
 
-  return errors;
+  return { fieldErrors, globalErrors };
 }
 
-function formatInlineError(errors: string | string[]): string {
-  const messages = (Array.isArray(errors) ? errors : [errors]).map((message) =>
-    String(message || "").trim()
-  ).filter(Boolean);
-  if (messages.length === 0) return "Please check your inputs and try again.";
-  if (messages.length === 1) return messages[0];
-  return `Please complete: ${messages.join(" • ")}`;
+function getValidationErrors(store: CheckoutStore): string[] {
+  const validation = getValidationState(store);
+  return [...Object.values(validation.fieldErrors), ...validation.globalErrors];
+}
+
+function applyValidationPatch(
+  store: CheckoutStore,
+  patch: Partial<CheckoutStore>,
+): Partial<CheckoutStore> {
+  const nextStore = { ...store, ...patch } as CheckoutStore;
+  const validation = getValidationState(nextStore);
+  return {
+    ...patch,
+    fieldErrors: validation.fieldErrors,
+  };
+}
+
+function markFieldTouched(store: CheckoutStore, fieldKey: string) {
+  return {
+    ...(store.touchedFields || {}),
+    [fieldKey]: true,
+  };
+}
+
+function getVisibleFieldError(store: CheckoutStore, fieldKey: string): string {
+  const show = Boolean(
+    store.validationSubmitAttempted || store.touchedFields?.[fieldKey],
+  );
+  if (!show) return "";
+  return String(store.fieldErrors?.[fieldKey] || "").trim();
+}
+
+function buildAllTouchedFields(store: CheckoutStore): CheckoutTouchedFields {
+  const touched: CheckoutTouchedFields = {
+    ...(store.touchedFields || {}),
+    [CONTACT_NAME_FIELD]: true,
+    [CONTACT_PHONE_FIELD]: true,
+    [CONTACT_EMAIL_FIELD]: true,
+    [DEPARTURE_DATE_FIELD]: true,
+  };
+  const travellers = normalizeTravellers(store.travellers || []);
+  travellers.forEach((traveller) => {
+    touched[travellerFieldKey(traveller.id, "name")] = true;
+    touched[travellerFieldKey(traveller.id, "sharing")] = true;
+    touched[travellerFieldKey(traveller.id, "vehicle")] = true;
+  });
+  return touched;
 }
 
 function firstNonEmpty(...values: any[]): string {
@@ -661,11 +748,30 @@ function fetchTripPricing(tripId: string): Promise<any[]> {
     .catch(() => []);
 }
 
+function createSoldOutTripData() {
+  return {
+    __soldOut: true,
+    display_summary: {
+      base_price: 0,
+      payable_price: 0,
+      save_amount: 0,
+      has_discount: false,
+    },
+    next_batch_date: "",
+  };
+}
+
+function isSoldOutTripData(value: any): boolean {
+  return Boolean(value?.__soldOut);
+}
+
 function fetchTripDisplayPrice(
   params: { slug?: string; tripId?: string },
 ): Promise<any | null> {
-  const slug = String(params.slug || "").trim();
-  const tripId = String(params.tripId || "").trim();
+  const rawSlug = String(params.slug || "").trim();
+  const rawTripId = String(params.tripId || "").trim();
+  const slug = normalizeSlug(rawSlug);
+  const tripId = normalizeTripId(rawTripId) || normalizeTripId(rawSlug);
   if (!slug && !tripId) return Promise.resolve(null);
 
   const cacheKey = `${slug}::${tripId}`;
@@ -687,6 +793,17 @@ function fetchTripDisplayPrice(
     priority: "high" as any,
   }, query)
     .then((res) => {
+      if (res.status === 404) {
+        return res.json().catch(() => ({})).then((data) => {
+          const message = String(data?.error || "").toLowerCase();
+          if (message.includes("no future pricing found")) {
+            const soldOutData = createSoldOutTripData();
+            tripDisplayCache.set(cacheKey, { ts: Date.now(), data: soldOutData });
+            return soldOutData;
+          }
+          return null;
+        });
+      }
       if (!res.ok) return null;
       return res.json().catch(() => null).then((data) => {
         if (data) tripDisplayCache.set(cacheKey, { ts: Date.now(), data });
@@ -810,8 +927,7 @@ export function withCheckoutBootstrap(Component): ComponentType {
               if (!disposed) {
                 setStore({
                   loading: false,
-                  couponMessageType: "error",
-                  couponMessage:
+                  checkoutMessage:
                     "Missing trip context. Open checkout from Book now button.",
                 });
               }
@@ -872,6 +988,10 @@ export function withCheckoutBootstrap(Component): ComponentType {
                 inviteOnly,
                 pricingBreakdown,
                 loading: false,
+                fieldErrors: {},
+                touchedFields: {},
+                validationSubmitAttempted: false,
+                checkoutMessage: "",
               });
 
               console.log("[Checkout] Opened", {
@@ -889,8 +1009,7 @@ export function withCheckoutBootstrap(Component): ComponentType {
           if (!disposed) {
             setStore({
               loading: false,
-              couponMessageType: "error",
-              couponMessage:
+              checkoutMessage:
                 "Missing trip context. Open checkout from Book now button.",
             });
           }
@@ -952,6 +1071,10 @@ export function withCheckoutBootstrap(Component): ComponentType {
             inviteOnly,
             pricingBreakdown,
             loading: false,
+            fieldErrors: {},
+            touchedFields: {},
+            validationSubmitAttempted: false,
+            checkoutMessage: "",
           });
 
           console.log("[Checkout] Opened", {
@@ -971,8 +1094,7 @@ export function withCheckoutBootstrap(Component): ComponentType {
           if (!disposed) {
             setStore({
               loading: false,
-              couponMessageType: "error",
-              couponMessage: "Could not initialize checkout",
+              checkoutMessage: "Could not initialize checkout",
             });
           }
         });
@@ -1096,11 +1218,24 @@ export function withCheckoutDateSelect(Component): ComponentType {
         normalizeTravellers(store.travellers || []),
         nextTransport,
       );
-      setStore({
-        date: nextDate,
-        transport: nextTransport,
-        travellers,
-      });
+      setStore(
+        applyValidationPatch(store, {
+          date: nextDate,
+          transport: nextTransport,
+          travellers,
+          checkoutMessage: "",
+        }),
+      );
+    };
+    const handleBlur = (e: any) => {
+      const touchedFields = markFieldTouched(store, DEPARTURE_DATE_FIELD);
+      setStore(
+        applyValidationPatch(store, {
+          touchedFields,
+          checkoutMessage: "",
+        }),
+      );
+      props?.onBlur?.(e);
     };
 
     useEffect(() => {
@@ -1129,6 +1264,7 @@ export function withCheckoutDateSelect(Component): ComponentType {
           value={store.date || ""}
           onValueChange={handleDateChange}
           onChange={(e: any) => handleDateChange(e?.target?.value || "")}
+          onBlur={handleBlur}
         />
       </div>
     );
@@ -1238,7 +1374,22 @@ export function withTravellerName(Component): ComponentType {
     const traveller = getTravellerByContext(store, ctx);
     const handleChange = (value: string) => {
       const next = updateTravellerById(store, ctx.id, { name: value });
-      setStore({ travellers: next });
+      setStore(
+        applyValidationPatch(store, {
+          travellers: next,
+          checkoutMessage: "",
+        }),
+      );
+    };
+    const handleBlur = (e: any) => {
+      const touchedFields = markFieldTouched(store, travellerFieldKey(ctx.id, "name"));
+      setStore(
+        applyValidationPatch(store, {
+          touchedFields,
+          checkoutMessage: "",
+        }),
+      );
+      props?.onBlur?.(e);
     };
 
     return (
@@ -1247,6 +1398,7 @@ export function withTravellerName(Component): ComponentType {
         value={traveller?.name || ""}
         onValueChange={handleChange}
         onChange={(e: any) => handleChange(e.target.value)}
+        onBlur={handleBlur}
         placeholder="Guest Name"
       />
     );
@@ -1276,7 +1428,25 @@ export function withTravellerSharing(Component): ComponentType {
     const handleChange = (value: string) => {
       const normalized = normalizeSharing(value);
       const next = updateTravellerById(store, ctx.id, { sharing: normalized });
-      setStore({ travellers: next });
+      setStore(
+        applyValidationPatch(store, {
+          travellers: next,
+          checkoutMessage: "",
+        }),
+      );
+    };
+    const handleBlur = (e: any) => {
+      const touchedFields = markFieldTouched(
+        store,
+        travellerFieldKey(ctx.id, "sharing"),
+      );
+      setStore(
+        applyValidationPatch(store, {
+          touchedFields,
+          checkoutMessage: "",
+        }),
+      );
+      props?.onBlur?.(e);
     };
 
     useEffect(() => {
@@ -1302,7 +1472,11 @@ export function withTravellerSharing(Component): ComponentType {
       );
       if (!fallback) return;
       const next = updateTravellerById(store, ctx.id, { sharing: fallback });
-      setStore({ travellers: next });
+      setStore(
+        applyValidationPatch(store, {
+          travellers: next,
+        }),
+      );
     }, [
       ctx.id,
       traveller?.sharing,
@@ -1318,6 +1492,7 @@ export function withTravellerSharing(Component): ComponentType {
           value={traveller?.sharing || ""}
           onValueChange={handleChange}
           onChange={(e: any) => handleChange(e?.target?.value || "")}
+          onBlur={handleBlur}
         />
       </div>
     );
@@ -1370,7 +1545,25 @@ export function withTravellerVehicleSelect(Component): ComponentType {
         transport: normalized,
         sharing: nextSharing,
       });
-      setStore({ travellers: next });
+      setStore(
+        applyValidationPatch(store, {
+          travellers: next,
+          checkoutMessage: "",
+        }),
+      );
+    };
+    const handleBlur = (e: any) => {
+      const touchedFields = markFieldTouched(
+        store,
+        travellerFieldKey(ctx.id, "vehicle"),
+      );
+      setStore(
+        applyValidationPatch(store, {
+          touchedFields,
+          checkoutMessage: "",
+        }),
+      );
+      props?.onBlur?.(e);
     };
 
     useEffect(() => {
@@ -1395,7 +1588,11 @@ export function withTravellerVehicleSelect(Component): ComponentType {
         const next = updateTravellerById(store, ctx.id, {
           transport: selectedTransport,
         });
-        setStore({ travellers: next });
+        setStore(
+          applyValidationPatch(store, {
+            travellers: next,
+          }),
+        );
       }
     }, [ctx.id, traveller?.transport, selectedTransport]);
 
@@ -1406,6 +1603,7 @@ export function withTravellerVehicleSelect(Component): ComponentType {
           value={selectedTransport || ""}
           onValueChange={handleChange}
           onChange={(e: any) => handleChange(e?.target?.value || "")}
+          onBlur={handleBlur}
           style={{
             ...(props.style || {}),
             ...(hasMultipleVehicleOptions ? {} : {
@@ -1441,7 +1639,12 @@ export function withRemoveTraveller(Component): ComponentType {
           e?.preventDefault?.();
           e?.stopPropagation?.();
           const list = removeTravellerById(store, ctx.id);
-          setStore({ travellers: list });
+          setStore(
+            applyValidationPatch(store, {
+              travellers: list,
+              checkoutMessage: "",
+            }),
+          );
         }}
       />
     );
@@ -1476,7 +1679,12 @@ export function withAddTraveller(Component): ComponentType {
             transport: fallbackTransport,
             sharing: fallbackSharing,
           });
-          setStore({ travellers: normalizeTravellers(list) });
+          setStore(
+            applyValidationPatch(store, {
+              travellers: normalizeTravellers(list),
+              checkoutMessage: "",
+            }),
+          );
         }}
       />
     );
@@ -1486,13 +1694,30 @@ export function withAddTraveller(Component): ComponentType {
 export function withCheckoutContactName(Component): ComponentType {
   return (props: any) => {
     const [store, setStore] = useStore();
-    const handleChange = (value: string) => setStore({ contactName: value });
+    const handleChange = (value: string) =>
+      setStore(
+        applyValidationPatch(store, {
+          contactName: value,
+          checkoutMessage: "",
+        }),
+      );
+    const handleBlur = (e: any) => {
+      const touchedFields = markFieldTouched(store, CONTACT_NAME_FIELD);
+      setStore(
+        applyValidationPatch(store, {
+          touchedFields,
+          checkoutMessage: "",
+        }),
+      );
+      props?.onBlur?.(e);
+    };
     return (
       <Component
         {...props}
         value={store.contactName || ""}
         onValueChange={handleChange}
         onChange={(e: any) => handleChange(e.target.value)}
+        onBlur={handleBlur}
       />
     );
   };
@@ -1502,9 +1727,22 @@ export function withCheckoutContactPhone(Component): ComponentType {
   return (props: any) => {
     const [store, setStore] = useStore();
     const handleChange = (value: string) =>
-      setStore({
-        contactPhone: String(value || "").replace(/[^\d\s\-+()]/g, ""),
-      });
+      setStore(
+        applyValidationPatch(store, {
+          contactPhone: String(value || "").replace(/[^\d\s\-+()]/g, ""),
+          checkoutMessage: "",
+        }),
+      );
+    const handleBlur = (e: any) => {
+      const touchedFields = markFieldTouched(store, CONTACT_PHONE_FIELD);
+      setStore(
+        applyValidationPatch(store, {
+          touchedFields,
+          checkoutMessage: "",
+        }),
+      );
+      props?.onBlur?.(e);
+    };
 
     return (
       <Component
@@ -1512,6 +1750,7 @@ export function withCheckoutContactPhone(Component): ComponentType {
         value={store.contactPhone || ""}
         onValueChange={handleChange}
         onChange={(e: any) => handleChange(e.target.value)}
+        onBlur={handleBlur}
       />
     );
   };
@@ -1520,7 +1759,23 @@ export function withCheckoutContactPhone(Component): ComponentType {
 export function withCheckoutContactEmail(Component): ComponentType {
   return (props: any) => {
     const [store, setStore] = useStore();
-    const handleChange = (value: string) => setStore({ contactEmail: value });
+    const handleChange = (value: string) =>
+      setStore(
+        applyValidationPatch(store, {
+          contactEmail: value,
+          checkoutMessage: "",
+        }),
+      );
+    const handleBlur = (e: any) => {
+      const touchedFields = markFieldTouched(store, CONTACT_EMAIL_FIELD);
+      setStore(
+        applyValidationPatch(store, {
+          touchedFields,
+          checkoutMessage: "",
+        }),
+      );
+      props?.onBlur?.(e);
+    };
 
     return (
       <Component
@@ -1528,6 +1783,7 @@ export function withCheckoutContactEmail(Component): ComponentType {
         value={store.contactEmail || ""}
         onValueChange={handleChange}
         onChange={(e: any) => handleChange(e.target.value)}
+        onBlur={handleBlur}
       />
     );
   };
@@ -1925,13 +2181,144 @@ export function withCheckoutTotal(Component): ComponentType {
 }
 
 export function withCheckoutValidationHint(Component): ComponentType {
-  return (props: any) => (
-    <Component
-      {...props}
-      text=""
-      style={{ ...(props.style || {}), display: "none" }}
-    />
-  );
+  return (props: any) => {
+    const [store] = useStore();
+    const validation = getValidationState(store);
+    const message = String(
+      store.checkoutMessage ||
+        (store.validationSubmitAttempted ? validation.globalErrors[0] || "" : ""),
+    ).trim();
+
+    if (!message) {
+      return (
+        <Component
+          {...props}
+          text=""
+          style={{ ...(props.style || {}), display: "none" }}
+        />
+      );
+    }
+    return <Component {...props} text={message} style={props.style} />;
+  };
+}
+
+function withFieldErrorText(fieldKeyResolver: (store: CheckoutStore) => string) {
+  return function (Component: ComponentType): ComponentType {
+    return (props: any) => {
+      const [store] = useStore();
+      const fieldKey = fieldKeyResolver(store);
+      const text = getVisibleFieldError(store, fieldKey);
+      if (!text) {
+        return (
+          <Component
+            {...props}
+            text=""
+            style={{ ...(props.style || {}), display: "none" }}
+          />
+        );
+      }
+      return <Component {...props} text={text} style={props.style} />;
+    };
+  };
+}
+
+export function withCheckoutNameError(Component): ComponentType {
+  return withFieldErrorText(() => CONTACT_NAME_FIELD)(Component);
+}
+
+export function withCheckoutPhoneError(Component): ComponentType {
+  return withFieldErrorText(() => CONTACT_PHONE_FIELD)(Component);
+}
+
+export function withCheckoutEmailError(Component): ComponentType {
+  return withFieldErrorText(() => CONTACT_EMAIL_FIELD)(Component);
+}
+
+export function withTravellerNameError(Component): ComponentType {
+  return (props: any) => {
+    const [store] = useStore();
+    const ctx = useContext(TravellerContext);
+    if (!ctx) {
+      return (
+        <Component
+          {...props}
+          text=""
+          style={{ ...(props.style || {}), display: "none" }}
+        />
+      );
+    }
+    const text = getVisibleFieldError(store, travellerFieldKey(ctx.id, "name"));
+    if (!text) {
+      return (
+        <Component
+          {...props}
+          text=""
+          style={{ ...(props.style || {}), display: "none" }}
+        />
+      );
+    }
+    return <Component {...props} text={text} style={props.style} />;
+  };
+}
+
+export function withTravellerSharingError(Component): ComponentType {
+  return (props: any) => {
+    const [store] = useStore();
+    const ctx = useContext(TravellerContext);
+    if (!ctx) {
+      return (
+        <Component
+          {...props}
+          text=""
+          style={{ ...(props.style || {}), display: "none" }}
+        />
+      );
+    }
+    const text = getVisibleFieldError(
+      store,
+      travellerFieldKey(ctx.id, "sharing"),
+    );
+    if (!text) {
+      return (
+        <Component
+          {...props}
+          text=""
+          style={{ ...(props.style || {}), display: "none" }}
+        />
+      );
+    }
+    return <Component {...props} text={text} style={props.style} />;
+  };
+}
+
+export function withTravellerVehicleError(Component): ComponentType {
+  return (props: any) => {
+    const [store] = useStore();
+    const ctx = useContext(TravellerContext);
+    if (!ctx) {
+      return (
+        <Component
+          {...props}
+          text=""
+          style={{ ...(props.style || {}), display: "none" }}
+        />
+      );
+    }
+    const text = getVisibleFieldError(
+      store,
+      travellerFieldKey(ctx.id, "vehicle"),
+    );
+    if (!text) {
+      return (
+        <Component
+          {...props}
+          text=""
+          style={{ ...(props.style || {}), display: "none" }}
+        />
+      );
+    }
+    return <Component {...props} text={text} style={props.style} />;
+  };
 }
 
 function inferPaymentModeFromProps(props: any): PaymentMode {
@@ -2104,33 +2491,12 @@ export function withCheckoutPayButton(Component): ComponentType {
   return (props: any) => {
     const [store, setStore] = useStore();
     const totals = computeTotals(store);
-    const errors = getValidationErrors(store);
-    const isValid = errors.length === 0;
+    const currentValidation = getValidationState(store);
+    const isValid = currentValidation.globalErrors.length === 0 &&
+      Object.keys(currentValidation.fieldErrors).length === 0;
 
     const submit = () => {
-      if (!isValid || store.submitting) return;
-
-      if (store?.inviteOnly) {
-        setStore({
-          couponMessageType: "error",
-          couponMessage: formatInlineError(
-            "This trip is invite-only. Please contact support to book.",
-          ),
-        });
-        return;
-      }
-
-      setStore({ submitting: true });
-      console.log("[Checkout] Pay initiated", {
-        tripId: store.tripId,
-        date: store.date,
-        transport: store.transport,
-        coupon: store.appliedCoupon?.code || null,
-        total: totals.total,
-        paymentMode: totals.paymentMode,
-        payableNow: totals.payableNow,
-        dueAmount: totals.dueAmount,
-      });
+      if (store.submitting) return;
 
       const fallbackName = readInputValue([
         'input[name="contact_name"]',
@@ -2154,6 +2520,62 @@ export function withCheckoutPayButton(Component): ComponentType {
       const contactName = firstNonEmpty(store.contactName, fallbackName);
       const contactPhone = firstNonEmpty(store.contactPhone, fallbackPhone);
       const contactEmail = firstNonEmpty(store.contactEmail, fallbackEmail);
+      const hydratedStore = {
+        ...store,
+        contactName,
+        contactPhone,
+        contactEmail,
+      } as CheckoutStore;
+      const touchedFields = buildAllTouchedFields(hydratedStore);
+      const validation = getValidationState(hydratedStore);
+      const hasValidationErrors = validation.globalErrors.length > 0 ||
+        Object.keys(validation.fieldErrors).length > 0;
+
+      if (hasValidationErrors) {
+        setStore({
+          contactName,
+          contactPhone,
+          contactEmail,
+          touchedFields,
+          validationSubmitAttempted: true,
+          fieldErrors: validation.fieldErrors,
+          checkoutMessage: validation.globalErrors[0] || "",
+        });
+        return;
+      }
+
+      if (store?.inviteOnly) {
+        setStore({
+          touchedFields,
+          validationSubmitAttempted: true,
+          fieldErrors: validation.fieldErrors,
+          checkoutMessage:
+            "This trip is invite-only. Please contact support to book.",
+        });
+        return;
+      }
+
+      setStore({
+        submitting: true,
+        contactName,
+        contactPhone,
+        contactEmail,
+        touchedFields,
+        validationSubmitAttempted: true,
+        fieldErrors: validation.fieldErrors,
+        checkoutMessage: "",
+      });
+      console.log("[Checkout] Pay initiated", {
+        tripId: store.tripId,
+        date: store.date,
+        transport: store.transport,
+        coupon: store.appliedCoupon?.code || null,
+        total: totals.total,
+        paymentMode: totals.paymentMode,
+        payableNow: totals.payableNow,
+        dueAmount: totals.dueAmount,
+      });
+
       const normalizedTravellers = normalizeTravellers(store.travellers || [])
         .map((t) => ({
           id: t.id,
@@ -2251,10 +2673,8 @@ export function withCheckoutPayButton(Component): ComponentType {
               });
               setStore({
                 submitting: false,
-                couponMessageType: "error",
-                couponMessage: formatInlineError(
-                  data?.error || `Payment setup failed (HTTP ${res.status})`,
-                ),
+                checkoutMessage: data?.error ||
+                  `Payment setup failed (HTTP ${res.status})`,
               });
               return;
             }
@@ -2263,10 +2683,7 @@ export function withCheckoutPayButton(Component): ComponentType {
             if (!payu?.action) {
               setStore({
                 submitting: false,
-                couponMessageType: "error",
-                couponMessage: formatInlineError(
-                  "Payment gateway payload missing",
-                ),
+                checkoutMessage: "Payment gateway payload missing",
               });
               return;
             }
@@ -2291,8 +2708,7 @@ export function withCheckoutPayButton(Component): ComponentType {
             console.error("[Checkout] pay error", err);
             setStore({
               submitting: false,
-              couponMessageType: "error",
-              couponMessage: formatInlineError("Could not start payment"),
+              checkoutMessage: "Could not start payment",
             });
           });
       };
@@ -2320,9 +2736,13 @@ export function withCheckoutPayButton(Component): ComponentType {
             onClick={(e: any) => {
               e?.preventDefault?.();
               e?.stopPropagation?.();
+              const touchedFields = buildAllTouchedFields(store);
+              const validation = getValidationState(store);
               setStore({
-                couponMessageType: "error",
-                couponMessage: formatInlineError(errors),
+                touchedFields,
+                validationSubmitAttempted: true,
+                fieldErrors: validation.fieldErrors,
+                checkoutMessage: validation.globalErrors[0] || "",
               });
             }}
             style={{
@@ -2350,15 +2770,13 @@ function normalizeSlug(value: any): string {
 
   const fromUrl = raw.match(/\/upcoming-trips\/([^/?#]+)/i);
   const candidate = fromUrl?.[1] ? decodeURIComponent(fromUrl[1]) : raw;
+  if (UUID_REGEX.test(candidate)) return "";
   return /^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(candidate) ? candidate : "";
 }
 
 function normalizeTripId(value: any): string {
   const clean = String(value || "").trim();
-  if (
-    !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
-      .test(clean)
-  ) {
+  if (!UUID_REGEX.test(clean)) {
     return "";
   }
   return clean;
@@ -2433,6 +2851,9 @@ function useTripDisplayData(props?: any) {
 export function withTripPrimaryPrice(Component): ComponentType {
   return (props: any) => {
     const tripData = useTripDisplayData(props);
+    if (isSoldOutTripData(tripData)) {
+      return <Component {...props} text="No upcoming batches" />;
+    }
     const summary = tripData?.display_summary;
     const value = toNumber(summary?.payable_price);
     const text = value > 0 ? fmtINR(value) : "\u20b90";
@@ -2515,6 +2936,20 @@ export function withTripHideWhenNoDiscount(Component): ComponentType {
 
 export function withTripStartsFromText(Component): ComponentType {
   return (props: any) => {
+    const tripData = useTripDisplayData(props);
+    if (isSoldOutTripData(tripData)) {
+      return (
+        <Component
+          {...props}
+          text=""
+          style={{
+            ...(props.style || {}),
+            display: "none",
+            pointerEvents: "none",
+          }}
+        />
+      );
+    }
     const text = "Starts from";
     return <Component {...props} text={text} />;
   };

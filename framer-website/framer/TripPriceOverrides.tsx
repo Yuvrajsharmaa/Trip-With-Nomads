@@ -2,6 +2,8 @@ import React from "react";
 import type { ComponentType } from "react";
 
 const { useEffect, useState, useMemo } = React;
+const UUID_REGEX =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 function isFramerRuntimeHost(): boolean {
   if (typeof window === "undefined") return false;
@@ -103,18 +105,33 @@ function normalizeSlug(value: any): string {
 
   const fromUrl = raw.match(/\/upcoming-trips\/([^/?#]+)/i);
   const candidate = fromUrl?.[1] ? decodeURIComponent(fromUrl[1]) : raw;
+  if (UUID_REGEX.test(candidate)) return "";
   return /^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(candidate) ? candidate : "";
 }
 
 function normalizeTripId(value: any): string {
   const clean = String(value || "").trim();
-  if (
-    !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
-      .test(clean)
-  ) {
+  if (!UUID_REGEX.test(clean)) {
     return "";
   }
   return clean;
+}
+
+function createSoldOutData() {
+  return {
+    __soldOut: true,
+    display_summary: {
+      base_price: 0,
+      payable_price: 0,
+      save_amount: 0,
+      has_discount: false,
+    },
+    next_batch_date: "",
+  };
+}
+
+function isSoldOutData(data: any): boolean {
+  return Boolean(data?.__soldOut);
 }
 
 function readTripIdCandidate(props: any): string {
@@ -154,8 +171,10 @@ export function withTripIdSource(Component): ComponentType {
 function fetchTripDisplayPrice(
   params: { slug?: string; tripId?: string },
 ): Promise<any | null> {
-  const slug = String(params.slug || "").trim();
-  const tripId = String(params.tripId || "").trim();
+  const rawSlug = String(params.slug || "").trim();
+  const rawTripId = String(params.tripId || "").trim();
+  const slug = normalizeSlug(rawSlug);
+  const tripId = normalizeTripId(rawTripId) || normalizeTripId(rawSlug);
   if (!slug && !tripId) return Promise.resolve(null);
 
   const cacheKey = `${slug}::${tripId}`;
@@ -176,6 +195,17 @@ function fetchTripDisplayPrice(
     query,
   )
     .then((res) => {
+      if (res.status === 404) {
+        return res.json().catch(() => ({})).then((data) => {
+          const message = String(data?.error || "").toLowerCase();
+          if (message.includes("no future pricing found")) {
+            const soldOut = createSoldOutData();
+            cache.set(cacheKey, { ts: Date.now(), data: soldOut });
+            return soldOut;
+          }
+          return null;
+        });
+      }
       if (!res.ok) return null;
       return res.json().then((data) => {
         if (data) cache.set(cacheKey, { ts: Date.now(), data });
@@ -226,6 +256,7 @@ function withTripPriceText(
 
 export function withTripPrimaryPrice(Component): ComponentType {
   return withTripPriceText((data) => {
+    if (isSoldOutData(data)) return "No upcoming batches";
     const value = toNumber(data?.display_summary?.payable_price);
     return value > 0 ? fmtINR(value) : "₹0";
   }, "₹0")(Component);
@@ -313,6 +344,20 @@ export function withTripHideWhenNoDiscount(Component): ComponentType {
 
 export function withTripStartsFromText(Component): ComponentType {
   return (props: any) => {
+    const tripData = useTripDisplayData(props);
+    if (isSoldOutData(tripData)) {
+      return (
+        <Component
+          {...props}
+          text=""
+          style={{
+            ...(props.style || {}),
+            display: "none",
+            pointerEvents: "none",
+          }}
+        />
+      );
+    }
     return <Component {...props} text="Starts from" />;
   };
 }
