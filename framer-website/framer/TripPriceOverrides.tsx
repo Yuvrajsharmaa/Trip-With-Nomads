@@ -6,8 +6,6 @@ const UUID_REGEX =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const UUID_GLOBAL_REGEX =
   /[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}/ig;
-const UPCOMING_TRIP_SLUG_REGEX = /\/upcoming-trips\/([a-z0-9-]+)/i;
-const SLUG_QUERY_REGEX = /(?:\?|&)slug=([a-z0-9-]+)/i;
 const TRIP_ID_PROP_KEYS = [
   "tripId",
   "trip_id",
@@ -115,6 +113,7 @@ function normalizeSlug(value: any): string {
 
   const fromUrl = raw.match(/\/upcoming-trips\/([^/?#]+)/i);
   const candidate = fromUrl?.[1] ? decodeURIComponent(fromUrl[1]) : raw;
+  if (candidate.startsWith("framer-")) return "";
   if (UUID_REGEX.test(candidate)) return "";
   return /^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(candidate) ? candidate : "";
 }
@@ -150,33 +149,6 @@ function findTripIdInValue(value: any, depth = 0): string {
     }
     for (const key of Object.keys(value as any)) {
       const found = findTripIdInValue((value as any)[key], depth + 1);
-      if (found) return found;
-    }
-  }
-  return "";
-}
-
-function findSlugInValue(value: any, depth = 0): string {
-  if (depth > 3 || value == null) return "";
-  if (typeof value === "string" || typeof value === "number") {
-    const raw = String(value || "");
-    const direct = normalizeSlug(raw);
-    if (direct) return direct;
-    const fromPath = raw.match(UPCOMING_TRIP_SLUG_REGEX);
-    const fromQuery = raw.match(SLUG_QUERY_REGEX);
-    const candidate = fromPath?.[1] || fromQuery?.[1] || "";
-    return normalizeSlug(candidate);
-  }
-  if (Array.isArray(value)) {
-    for (const item of value) {
-      const found = findSlugInValue(item, depth + 1);
-      if (found) return found;
-    }
-    return "";
-  }
-  if (typeof value === "object") {
-    for (const key of Object.keys(value as any)) {
-      const found = findSlugInValue((value as any)[key], depth + 1);
       if (found) return found;
     }
   }
@@ -275,15 +247,26 @@ function readTripIdCandidate(props: any): string {
 }
 
 function readTripSlugCandidate(props: any): string {
-  const direct = normalizeSlug(
-    props?.slug ||
-      props?.["data-trip-slug"] ||
-      props?.href ||
-      props?.link ||
-      props?.text ||
-      (typeof props?.children === "string" ? props.children : ""),
-  );
-  return direct || findSlugInValue(props);
+  const direct = normalizeSlug(props?.slug || props?.["data-trip-slug"]);
+  if (direct) return direct;
+
+  const href = String(props?.href || "").trim();
+  const hrefMatch = href.match(/\/upcoming-trips\/([^/?#]+)/i);
+  if (hrefMatch?.[1]) return normalizeSlug(hrefMatch[1]);
+
+  const linkCandidates = [
+    props?.link,
+    props?.link?.href,
+    props?.link?.url,
+    props?.link?.path,
+  ];
+  for (const candidate of linkCandidates) {
+    const link = String(candidate || "").trim();
+    const linkMatch = link.match(/\/upcoming-trips\/([^/?#]+)/i);
+    if (linkMatch?.[1]) return normalizeSlug(linkMatch[1]);
+  }
+
+  return "";
 }
 
 export function withTripIdSource(Component): ComponentType {
@@ -307,17 +290,17 @@ function fetchTripDisplayPrice(
   const rawTripId = String(params.tripId || "").trim();
   const slug = normalizeSlug(rawSlug);
   const tripId = normalizeTripId(rawTripId) || normalizeTripId(rawSlug);
-  if (!slug && !tripId) return Promise.resolve(null);
+  const activeTripId = tripId;
+  const activeSlug = activeTripId ? "" : slug;
+  if (!activeSlug && !activeTripId) return Promise.resolve(null);
 
-  const cacheKey = `${slug}::${tripId}`;
+  const cacheKey = `${activeSlug}::${activeTripId}`;
   const now = Date.now();
   const cached = cache.get(cacheKey);
   if (cached && now - cached.ts < 120000) return Promise.resolve(cached.data);
   const pending = inFlight.get(cacheKey);
   if (pending) return pending;
 
-  const activeSlug = slug;
-  const activeTripId = activeSlug ? "" : tripId;
   const query = new URLSearchParams();
   if (activeSlug) query.set("slug", activeSlug);
   if (activeTripId) query.set("trip_id", activeTripId);
@@ -326,10 +309,7 @@ function fetchTripDisplayPrice(
   const resolveFromContext = (preloaded?: any | null) => {
     const pendingContext = preloaded !== undefined
       ? Promise.resolve(preloaded)
-      : fetchDisplayFallbackFromContext({
-        slug: activeSlug,
-        tripId: activeTripId,
-      });
+      : fetchDisplayFallbackFromContext({ slug: activeSlug, tripId: activeTripId });
     return pendingContext.then((fallbackData) => {
       const resolved = fallbackData || createSoldOutData();
       cache.set(cacheKey, { ts: Date.now(), data: resolved });
