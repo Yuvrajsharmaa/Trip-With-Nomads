@@ -1,2598 +1,2521 @@
-import React from "react"
-import type { ComponentType } from "react"
-import { createStore } from "https://framer.com/m/framer/store.js@^1.0.0"
+import React from "react";
+import type { ComponentType } from "react";
+import { createStore } from "https://framer.com/m/framer/store.js@^1.0.0";
 
 const {
-    createContext,
-    useContext,
-    useEffect,
-    useMemo,
-    useRef,
-    useState,
-} = React
+  createContext,
+  useContext,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} = React;
 
-type RuntimeEnv = "production" | "development"
-type RuntimeConfig = {
-    siteBaseUrl: string
-    supabaseUrl: string
-    supabaseAnonKey: string
+/**
+ * useHydrated: A helper hook to prevent React hydration mismatches (#418).
+ * Ensures that components render the same content on server and first client pass.
+ */
+function useHydrated() {
+  const [hydrated, setHydrated] = useState(false);
+  useEffect(() => setHydrated(true), []);
+  return hydrated;
 }
 
-const RUNTIME_CONFIG: Record<RuntimeEnv, RuntimeConfig> = {
-    production: {
-        siteBaseUrl: "https://tripwithnomads.com",
-        supabaseUrl: "https://jxozzvwvprmnhvafmpsa.supabase.co",
-        supabaseAnonKey:
-            "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imp4b3p6dnd2cHJtbmh2YWZtcHNhIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjgwNTg2NjIsImV4cCI6MjA4MzYzNDY2Mn0.KpVa9dWlJEguL1TA00Tf4QDpziJ1mgA2I0f4_l-vlOk",
-    },
-    development: {
-        siteBaseUrl: "https://maroon-aside-814100.framer.app",
-        supabaseUrl: "https://ieuwiinbvbdvjrdqqzlb.supabase.co",
-        supabaseAnonKey:
-            "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImlldXdpaW5idmJkdmpyZHFxemxiIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzIwNDYwMTksImV4cCI6MjA4NzYyMjAxOX0.UlTMeyvArixD7byDCrGwEDXsbc4LQfx6QXDL6Je3blE",
-    },
-}
+/**
+ * CURRENT_RUNTIME: Dynamic configuration based on the environment.
+ * Ensures the app knows whether to route to staging or production gateways.
+ */
+const CURRENT_RUNTIME =
+  (typeof window !== "undefined"
+    ? (window as any).__TWN_RUNTIME_CONFIG__
+    : null) || {
+    siteBaseUrl: (typeof window !== "undefined" &&
+        (window.location.hostname.includes("framer.app") ||
+          window.location.hostname.includes("framer.website")))
+      ? "https://maroon-aside-814100.framer.app"
+      : "https://tripwithnomads.com",
+    apiBaseUrl: (typeof window !== "undefined" &&
+        (window.location.hostname.includes("framer.app") ||
+          window.location.hostname.includes("framer.website")))
+      ? "https://twn-checkout-gateway-staging.tripwithnomads-crm.workers.dev"
+      : "https://twn-checkout-gateway.tripwithnomads-crm.workers.dev",
+    supabaseUrl: "https://ieuwiinbvbdvjrdqqzlb.supabase.co",
+    supabaseAnonKey: "", // Not used when gateway is active
+  };
 
-function normalizeBaseUrl(value: string): string {
-    return String(value || "").trim().replace(/\/+$/, "")
-}
+const GATEWAY_BASE = CURRENT_RUNTIME.apiBaseUrl;
 
-function resolveRuntimeEnv(): RuntimeEnv {
-    if (typeof window === "undefined") return "production"
-    const host = String(window.location.hostname || "").trim().toLowerCase()
-    if (host === "tripwithnomads.com" || host === "www.tripwithnomads.com") return "production"
-    if (
-        host === "maroon-aside-814100.framer.app" ||
-        host === "localhost" ||
-        host === "127.0.0.1"
-    ) {
-        return "development"
-    }
-    return "production"
-}
+const TAX_RATE = 0.05;
+const CHECKOUT_PAGE_URL = `${CURRENT_RUNTIME.siteBaseUrl}/checkout`;
+const UPCOMING_TRIPS_BASE_URL = `${CURRENT_RUNTIME.siteBaseUrl}/upcoming-trips`;
 
-function extractProjectRefFromSupabaseUrl(url: string): string {
-    const match = String(url || "")
-        .trim()
-        .match(/^https:\/\/([a-z0-9-]+)\.supabase\.co(?:\/|$)/i)
-    return String(match?.[1] || "").trim().toLowerCase()
-}
+const INR = new Intl.NumberFormat("en-IN", {
+  style: "currency",
+  currency: "INR",
+  maximumFractionDigits: 0,
+});
 
-function decodeBase64Url(value: string): string {
-    const normalized = String(value || "")
-        .trim()
-        .replace(/-/g, "+")
-        .replace(/_/g, "/")
-    if (!normalized) return ""
-    const padded = normalized + "=".repeat((4 - (normalized.length % 4 || 4)) % 4)
-    try {
-        if (typeof atob === "function") return atob(padded)
-    } catch (_) { }
-    try {
-        // @ts-ignore Framer runtime may expose Buffer in some contexts.
-        if (typeof Buffer !== "undefined") return Buffer.from(padded, "base64").toString("utf8")
-    } catch (_) { }
-    return ""
-}
+const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+const PHONE_REGEX = /^\+?[\d\s\-()]{10,15}$/;
+const tripDisplayCache = new Map<string, { ts: number; data: any }>();
+const tripDisplayInFlight = new Map<string, Promise<any | null>>();
+let forcedTripId = "";
 
-function extractProjectRefFromAnonKey(key: string): string {
-    const parts = String(key || "").trim().split(".")
-    if (parts.length < 2) return ""
-    const payloadRaw = decodeBase64Url(parts[1])
-    if (!payloadRaw) return ""
-    try {
-        const payload = JSON.parse(payloadRaw)
-        return String(payload?.ref || "").trim().toLowerCase()
-    } catch (_) {
-        return ""
-    }
-}
-
-function pickSupabaseAnonKey(url: string, overrideKey: string, selectedKey: string): string {
-    const targetRef = extractProjectRefFromSupabaseUrl(url)
-    const cleanOverride = String(overrideKey || "").trim()
-    const cleanSelected = String(selectedKey || "").trim()
-    if (!targetRef) return cleanOverride || cleanSelected
-
-    const overrideRef = extractProjectRefFromAnonKey(cleanOverride)
-    if (cleanOverride && overrideRef === targetRef) return cleanOverride
-
-    const selectedRef = extractProjectRefFromAnonKey(cleanSelected)
-    if (cleanSelected && selectedRef === targetRef) return cleanSelected
-
-    return cleanOverride || cleanSelected
-}
-
-function resolveRuntimeConfig(): RuntimeConfig {
-    const env = resolveRuntimeEnv()
-    const selected = RUNTIME_CONFIG[env]
-    const runtimeOverride =
-        typeof window !== "undefined" ? (window as any).__TWN_RUNTIME_CONFIG__ || {} : {}
-    const resolvedSupabaseUrl = String(runtimeOverride.supabaseUrl || selected.supabaseUrl || "").trim()
-    const resolvedSupabaseAnonKey = pickSupabaseAnonKey(
-        resolvedSupabaseUrl,
-        String(runtimeOverride.supabaseAnonKey || ""),
-        String(selected.supabaseAnonKey || "")
-    )
-    return {
-        siteBaseUrl: normalizeBaseUrl(runtimeOverride.siteBaseUrl || selected.siteBaseUrl),
-        supabaseUrl: resolvedSupabaseUrl,
-        supabaseAnonKey: resolvedSupabaseAnonKey,
-    }
-}
-
-const CURRENT_RUNTIME = resolveRuntimeConfig()
-const SUPABASE_URL = CURRENT_RUNTIME.supabaseUrl
-const SUPABASE_KEY = CURRENT_RUNTIME.supabaseAnonKey
-const TAX_RATE = 0.05
-const CHECKOUT_PAGE_URL = `${CURRENT_RUNTIME.siteBaseUrl}/checkout`
-const UPCOMING_TRIPS_BASE_URL = `${CURRENT_RUNTIME.siteBaseUrl}/upcoming-trips`
-const SHARING_VALUES = ["Quad", "Triple", "Double"] as const
-type SharingValue = (typeof SHARING_VALUES)[number]
-type PaymentMode = "full" | "partial_25"
-
-const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
-const PHONE_REGEX = /^\+?[\d\s\-()]{10,15}$/
-const tripDisplayCache = new Map<string, { ts: number; data: any }>()
-const tripDisplayInFlight = new Map<string, Promise<any | null>>()
-let forcedTripId = ""
-
+type PaymentMode = "full" | "partial_25";
 type Traveller = {
-    id: number
-    name: string
-    transport: string
-    sharing: SharingValue | ""
-}
-
-type CouponResult = {
-    valid: boolean
-    code?: string
-    discount_type?: "percent" | "fixed"
-    discount_value?: number
-    discount_amount?: number
-    min_subtotal?: number
-    coupon_wins?: boolean
-    final_applied_source?: "none" | "early_bird" | "coupon"
-    base_subtotal?: number
-    early_bird_discount_amount?: number
-    coupon_discount_amount?: number
-    applied_discount_source?: "none" | "early_bird" | "coupon"
-    applied_discount_code?: string | null
-    discount_amount_total?: number
-    taxable_amount?: number
-    tax_amount?: number
-    total_amount?: number
-    line_items?: Array<{
-        traveller_id: number
-        sharing: string
-        transport: string
-        unit_price: number
-    }>
-    message?: string
-}
-
+  id: string;
+  name: string;
+  transport: string;
+  sharing: string;
+};
 type PricingBreakdown = {
-    base_subtotal: number
-    early_bird_discount_amount: number
-    coupon_discount_amount: number
-    applied_discount_source: "none" | "early_bird" | "coupon"
-    applied_discount_code: string | null
-    discount_amount_total: number
-    taxable_amount: number
-    tax_amount: number
-    total_amount: number
-    line_items: Array<{
-        traveller_id: number
-        sharing: string
-        transport: string
-        unit_price: number
-    }>
-}
+  base_subtotal: number;
+  early_bird_discount_amount: number;
+  coupon_discount_amount: number;
+  applied_discount_source: "none" | "early_bird" | "coupon" | "both";
+  applied_discount_code: string | null;
+  discount_amount_total: number;
+  taxable_amount: number;
+  tax_amount: number;
+  total_amount: number;
+  payable_now_amount: number;
+  due_amount: number;
+  payment_mode: PaymentMode;
+  line_items: Array<
+    {
+      label: string;
+      amount: number;
+      type: "base" | "discount" | "tax" | "total";
+    }
+  >;
+};
 
-type TravellerContextValue = { id: number; index: number }
-const TravellerContext = createContext<TravellerContextValue | null>(null)
-type SummaryLineContextValue = { key: string; label: string; amount: number }
-const SummaryLineContext = createContext<SummaryLineContextValue | null>(null)
+type CheckoutStore = {
+  tripId: string;
+  slug: string;
+  tripName: string;
+  pricingData: any[];
+  date: string;
+  transport: string;
+  travellers: Traveller[];
+  paymentMode: PaymentMode;
+  contactName: string;
+  contactPhone: string;
+  contactEmail: string;
+  couponCode: string;
+  appliedCoupon: any | null;
+  couponMessage: string;
+  couponMessageType: "neutral" | "success" | "error";
+  loading: boolean;
+  submitting: boolean;
+  inviteOnly: boolean;
+  pricingBreakdown: PricingBreakdown | null;
+};
+
+const TravellerContext = createContext<{ id: string; index: number } | null>(
+  null,
+);
+type SummaryLineContextValue = { key: string; label: string; amount: number };
+const SummaryLineContext = createContext<SummaryLineContextValue | null>(null);
 
 const useStore = createStore({
-    tripId: "",
-    slug: "",
-    tripName: "",
-    pricingData: [] as any[],
-    date: "",
-    transport: "",
-    travellers: [{ id: 1, name: "", transport: "", sharing: "" }] as Traveller[],
-    inviteOnly: false,
-    contactName: "",
-    contactPhone: "",
-    contactEmail: "",
-    paymentMode: "full" as PaymentMode,
-    couponCode: "",
-    appliedCoupon: null as CouponResult | null,
-    pricingBreakdown: null as PricingBreakdown | null,
-    couponMessage: "Enter a coupon code and tap Apply.",
-    couponMessageType: "neutral" as "neutral" | "success" | "error",
-    loading: false,
-    submitting: false,
-})
+  tripId: "",
+  slug: "",
+  tripName: "",
+  pricingData: [],
+  date: "",
+  transport: "",
+  travellers: [{ id: "t1", name: "", transport: "", sharing: "" }],
+  paymentMode: "full",
+  contactName: "",
+  contactPhone: "",
+  contactEmail: "",
+  couponCode: "",
+  appliedCoupon: null,
+  couponMessage: "",
+  couponMessageType: "neutral",
+  loading: false,
+  submitting: false,
+  inviteOnly: false,
+  pricingBreakdown: null,
+});
 
 function toNumber(value: any): number {
-    const parsed = Number(value)
-    return Number.isFinite(parsed) ? parsed : 0
-}
-
-function pickFirstNumber(source: any, keys: string[], fallback = 0): number {
-    if (!source || typeof source !== "object") return fallback
-    for (const key of keys) {
-        if (!(key in source)) continue
-        const parsed = Number(source[key])
-        if (Number.isFinite(parsed)) return parsed
-    }
-    return fallback
-}
-
-function round2(value: number): number {
-    return Math.round((Number(value) + Number.EPSILON) * 100) / 100
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : 0;
 }
 
 function fmtINR(value: number): string {
-    return "₹" + toNumber(value).toLocaleString("en-IN")
-}
-
-function formatNextBatchDate(value: any): string {
-    const raw = String(value || "").trim()
-    if (!raw) return ""
-    const parsed = Date.parse(raw)
-    if (!Number.isFinite(parsed)) return ""
-
-    return new Intl.DateTimeFormat("en-GB", {
-        day: "numeric",
-        month: "short",
-    }).format(new Date(parsed))
-}
-
-function buildPricingBreakdownFromQuote(source: any, fallbackStore: any): PricingBreakdown {
-    const fallback = buildLocalPricingBreakdown(fallbackStore)
-    const baseSubtotal = round2(
-        pickFirstNumber(source, ["base_subtotal", "subtotal_amount", "subtotal"], fallback.base_subtotal)
-    )
-    const earlyBirdDiscountAmount = round2(
-        pickFirstNumber(
-            source,
-            ["early_bird_discount_amount", "earlyBirdDiscountAmount"],
-            fallback.early_bird_discount_amount
-        )
-    )
-    const couponDiscountAmount = round2(
-        pickFirstNumber(
-            source,
-            ["coupon_discount_amount", "couponDiscountAmount"],
-            fallback.coupon_discount_amount
-        )
-    )
-    const discountAmountTotal = round2(
-        pickFirstNumber(
-            source,
-            ["discount_amount_total", "discount_amount", "discountAmount"],
-            fallback.discount_amount_total
-        )
-    )
-
-    const appliedDiscountSource = ((
-        String(source?.applied_discount_source || source?.final_applied_source || "")
-            .trim()
-            .toLowerCase() || fallback.applied_discount_source
-    ) as PricingBreakdown["applied_discount_source"]) || "none"
-
-    const appliedDiscountCodeRaw = String(
-        source?.applied_discount_code || source?.code || fallback.applied_discount_code || ""
-    )
-        .trim()
-        .toUpperCase()
-
-    const taxableAmount = round2(
-        pickFirstNumber(
-            source,
-            ["taxable_amount", "taxableSubtotal"],
-            Math.max(0, baseSubtotal - discountAmountTotal)
-        )
-    )
-    const fallbackTax = round2(Math.max(0, taxableAmount) * TAX_RATE)
-    const taxAmount = round2(pickFirstNumber(source, ["tax_amount", "taxAmount"], fallbackTax))
-    const totalAmount = round2(
-        pickFirstNumber(source, ["total_amount", "totalAmount"], Math.max(0, taxableAmount + taxAmount))
-    )
-
-    return {
-        base_subtotal: baseSubtotal,
-        early_bird_discount_amount: earlyBirdDiscountAmount,
-        coupon_discount_amount: couponDiscountAmount,
-        applied_discount_source: appliedDiscountSource,
-        applied_discount_code: appliedDiscountCodeRaw || null,
-        discount_amount_total: discountAmountTotal,
-        taxable_amount: taxableAmount,
-        tax_amount: taxAmount,
-        total_amount: totalAmount,
-        line_items: Array.isArray(source?.line_items) ? source.line_items : fallback.line_items,
-    }
-}
-
-function normalizeTravellerId(id: any, index: number): number {
-    const parsed = Number(id)
-    if (Number.isFinite(parsed) && parsed > 0) return parsed
-    return index + 1
-}
-
-function normalizeTravellers(input: any[]): Traveller[] {
-    const base = Array.isArray(input) ? input : []
-    const seen = new Set<number>()
-
-    const out: Traveller[] = base.map((item, index) => {
-        let id = normalizeTravellerId(item?.id, index)
-        while (seen.has(id)) id += 1
-        seen.add(id)
-        return {
-            id,
-            name: typeof item?.name === "string" ? item.name : "",
-            transport: typeof item?.transport === "string" ? item.transport : "",
-            sharing: normalizeSharing(typeof item?.sharing === "string" ? item.sharing : ""),
-        }
-    })
-
-    if (out.length === 0) {
-        return [{ id: 1, name: "", transport: "", sharing: "" }]
-    }
-
-    return out
-}
-
-function getTravellerByContext(store: any, ctx: TravellerContextValue | null): Traveller | null {
-    const travellers = normalizeTravellers(store?.travellers || [])
-    if (!ctx) return null
-    const byId = travellers.find((t) => toNumber(t.id) === toNumber(ctx.id))
-    if (byId) return byId
-    return travellers[ctx.index] || null
-}
-
-function updateTravellerById(store: any, id: number, patch: Partial<Traveller>): Traveller[] {
-    const list = normalizeTravellers(store?.travellers || [])
-    const idx = list.findIndex((t) => toNumber(t.id) === toNumber(id))
-    if (idx >= 0) {
-        list[idx] = { ...list[idx], ...patch }
-    }
-    return normalizeTravellers(list)
-}
-
-function removeTravellerById(store: any, id: number): Traveller[] {
-    const list = normalizeTravellers(store?.travellers || [])
-    const next = list.filter((t) => toNumber(t.id) !== toNumber(id))
-    return normalizeTravellers(next)
-}
-
-function nextTravellerId(store: any): number {
-    const travellers = normalizeTravellers(store?.travellers || [])
-    return Math.max(0, ...travellers.map((t) => toNumber(t.id))) + 1
-}
-
-function getDateValue(row: any): string {
-    return row?.start_date || row?.departure_date || ""
-}
-
-function normalizeSharing(value: string): SharingValue | "" {
-    const clean = String(value || "").trim().replace(/\s+/g, " ")
-    if (!clean) return ""
-    const lower = clean.toLowerCase()
-    if (lower.includes("quad")) return "Quad"
-    if (lower.includes("triple")) return "Triple"
-    if (lower.includes("double")) return "Double"
-    return ""
+  return INR.format(Math.round(value));
 }
 
 function getVariantValue(row: any): string {
-    return normalizeSharing(String(row?.sharing || ""))
+  if (!row) return "";
+  return String(row.sharing || row.variant_name || row.variant || "").trim();
 }
 
 function getTransportValue(row: any): string {
-    const vehicle = String(row?.vehicle || "").trim()
-    if (vehicle) return vehicle
-    const transport = String(row?.transport || "").trim()
-    if (transport) return transport
-    return ""
+  if (!row) return "";
+  return String(row.transport || row.vehicle || "").trim();
 }
 
 function getDateOptions(pricing: any[]): string[] {
-    return [...new Set((pricing || []).map((row: any) => getDateValue(row)).filter(Boolean))].sort()
+  const dates = pricing
+    .map((p) => String(p.departure_date || "").trim())
+    .filter((d) => d && d !== "null");
+  return Array.from(new Set(dates)).sort();
 }
 
 function getTransportOptions(pricing: any[], date: string): string[] {
-    const filtered = (pricing || []).filter((row: any) => !date || getDateValue(row) === date)
-    const options = [...new Set(filtered.map((row: any) => getTransportValue(row)).filter(Boolean))].sort()
-    return options
+  if (!date) return [];
+  const options = pricing
+    .filter((p) => String(p.departure_date || "").trim() === date)
+    .map((p) => getTransportValue(p))
+    .filter(Boolean);
+  return Array.from(new Set(options)).sort();
 }
 
-function hasVehicleOptions(pricing: any[], date: string): boolean {
-    return getTransportOptions(pricing, date).length > 1
-}
-
-function getDatePricingRows(pricing: any[], date: string): any[] {
-    return (pricing || []).filter((row: any) => !date || getDateValue(row) === date)
-}
-
-function getCheapestPricingRow(pricing: any[], date: string, transport = ""): any | null {
-    const byDate = getDatePricingRows(pricing, date).filter(
-        (row: any) => toNumber(row?.price) > 0 && Boolean(getVariantValue(row))
-    )
-    if (byDate.length === 0) return null
-
-    const byTransport = transport
-        ? byDate.filter((row: any) => getTransportValue(row) === transport)
-        : byDate
-    const bestMatch = pickBestPricingRow(byTransport)
-    if (bestMatch) return bestMatch
-
-    if (transport) return pickBestPricingRow(byDate)
-    return null
+function getSharingOptions(
+  pricing: any[],
+  date: string,
+  transport: string,
+): string[] {
+  if (!date) return [];
+  const options = pricing
+    .filter((p) => {
+      const dMatch = String(p.departure_date || "").trim() === date;
+      const tMatch = !transport || getTransportValue(p) === transport;
+      return dMatch && tMatch;
+    })
+    .map((p) => getVariantValue(p))
+    .filter(Boolean);
+  return Array.from(new Set(options));
 }
 
 function getDefaultTransportForDate(
-    pricing: any[],
-    date: string,
-    preferredTransport = ""
+  pricing: any[],
+  date: string,
+  current: string,
 ): string {
-    const options = getTransportOptions(pricing, date)
-    if (options.length === 0) return ""
-    if (preferredTransport && options.includes(preferredTransport)) return preferredTransport
-
-    const cheapestRow = getCheapestPricingRow(pricing, date)
-    const cheapestTransport = getTransportValue(cheapestRow)
-    if (cheapestTransport && options.includes(cheapestTransport)) return cheapestTransport
-
-    return options[0] || ""
+  const options = getTransportOptions(pricing, date);
+  if (options.includes(current)) return current;
+  return options[0] || "";
 }
 
 function getDefaultSharingForDate(
-    pricing: any[],
-    date: string,
-    transport = ""
-): SharingValue | "" {
-    const options = getSharingOptions(pricing, date, transport)
-    if (options.length === 0) return ""
-
-    const cheapestForTransport = getCheapestPricingRow(pricing, date, transport)
-    const cheapestSharing = normalizeSharing(getVariantValue(cheapestForTransport))
-    if (cheapestSharing && options.includes(cheapestSharing)) return cheapestSharing
-
-    const cheapestOverall = getCheapestPricingRow(pricing, date)
-    const cheapestOverallSharing = normalizeSharing(getVariantValue(cheapestOverall))
-    if (cheapestOverallSharing && options.includes(cheapestOverallSharing)) {
-        return cheapestOverallSharing
-    }
-
-    return (options[0] as SharingValue) || ""
-}
-
-function getSharingOptions(pricing: any[], date: string, transport?: string): string[] {
-    const filtered = (pricing || []).filter(
-        (row: any) =>
-            (!date || getDateValue(row) === date) &&
-            (!transport || getTransportValue(row) === transport)
-    )
-    const valueSet = new Set(
-        filtered
-            .map((row: any) => getVariantValue(row))
-            .filter((value) => SHARING_VALUES.includes(value as SharingValue))
-    )
-    return SHARING_VALUES.filter((value) => valueSet.has(value))
-}
-
-function pickBestPricingRow(rows: any[]): any | null {
-    if (!Array.isArray(rows) || rows.length === 0) return null
-    return rows.reduce((best, row) => {
-        if (!best) return row
-        const bestPrice = toNumber(best?.price)
-        const nextPrice = toNumber(row?.price)
-        if (nextPrice < bestPrice) return row
-        if (nextPrice > bestPrice) return best
-        const bestCreated = Date.parse(String(best?.created_at || ""))
-        const nextCreated = Date.parse(String(row?.created_at || ""))
-        if (Number.isFinite(nextCreated) && Number.isFinite(bestCreated) && nextCreated > bestCreated) {
-            return row
-        }
-        return best
-    }, rows[0] || null)
-}
-
-function resolvePriceForTraveller(pricing: any[], date: string, transport: string, sharing: string): number {
-    if (!date || !sharing) return 0
-    const row = (pricing || []).find(
-        (item: any) =>
-            getDateValue(item) === date &&
-            (!transport || getTransportValue(item) === transport) &&
-            getVariantValue(item) === sharing
-    )
-    return toNumber(row?.price)
-}
-
-function resolvePricingRowForTraveller(
-    pricing: any[],
-    date: string,
-    transport: string,
-    sharing: string
-): any | null {
-    if (!date || !sharing) return null
-    const byTransportRows = (pricing || []).filter(
-        (item: any) =>
-            getDateValue(item) === date &&
-            (!transport || getTransportValue(item) === transport) &&
-            getVariantValue(item) === sharing
-    )
-    const byTransport = pickBestPricingRow(byTransportRows)
-    if (byTransport) return byTransport
-    const fallbackRows = (pricing || []).filter(
-        (item: any) => getDateValue(item) === date && getVariantValue(item) === sharing
-    )
-    return pickBestPricingRow(fallbackRows)
-}
-
-function isEarlyBirdActive(row: any): boolean {
-    if (!row?.early_bird_enabled) return false
-    const now = Date.now()
-    const start = row?.early_bird_starts_at ? Date.parse(String(row.early_bird_starts_at)) : null
-    const end = row?.early_bird_ends_at ? Date.parse(String(row.early_bird_ends_at)) : null
-    if (Number.isFinite(start) && now < (start as number)) return false
-    if (Number.isFinite(end) && now > (end as number)) return false
-    return true
-}
-
-function computeEarlyBirdDiscountForRow(row: any, unitPrice: number): number {
-    if (!isEarlyBirdActive(row) || unitPrice <= 0) return 0
-    const type = String(row?.early_bird_discount_type || "").toLowerCase()
-    const value = toNumber(row?.early_bird_discount_value)
-    if (value <= 0) return 0
-
-    let discount = type === "percent" ? unitPrice * (value / 100) : value
-    const maxDiscount =
-        row?.early_bird_max_discount != null ? toNumber(row.early_bird_max_discount) : null
-    if (maxDiscount != null && maxDiscount > 0) discount = Math.min(discount, maxDiscount)
-    return round2(Math.max(0, Math.min(discount, unitPrice)))
-}
-
-function buildLocalPricingBreakdown(store: any): PricingBreakdown {
-    const pricingData = store?.pricingData || []
-    const travellers = normalizeTravellers(store?.travellers || [])
-
-    let subtotal = 0
-    let earlyBirdDiscount = 0
-    const lineItems: PricingBreakdown["line_items"] = []
-
-    for (const traveller of travellers) {
-        const transport = traveller.transport || ""
-        const sharing = traveller.sharing
-        if (!sharing) continue
-
-        const row = resolvePricingRowForTraveller(pricingData, store.date, transport, sharing)
-        const price = toNumber(row?.price)
-        if (price <= 0) continue
-        const resolvedTransport = getTransportValue(row)
-
-        subtotal += price
-        earlyBirdDiscount += computeEarlyBirdDiscountForRow(row, price)
-        lineItems.push({
-            traveller_id: toNumber(traveller.id),
-            sharing,
-            transport: resolvedTransport,
-            unit_price: round2(price),
-        })
-    }
-
-    const coupon = store?.appliedCoupon || null
-    const couponType = String(coupon?.discount_type || "").toLowerCase()
-    const couponValue = toNumber(coupon?.discount_value)
-    const meetsCouponMinSubtotal =
-        toNumber(coupon?.min_subtotal) <= 0 || subtotal >= toNumber(coupon?.min_subtotal)
-    const couponRaw =
-        couponType === "percent"
-            ? round2((subtotal * couponValue) / 100)
-            : couponType === "fixed"
-                ? couponValue
-                : toNumber(coupon?.discount_amount)
-    const couponDiscount = meetsCouponMinSubtotal
-        ? round2(Math.max(0, Math.min(couponRaw, subtotal)))
-        : 0
-    const earlyDiscount = round2(Math.max(0, Math.min(earlyBirdDiscount, subtotal)))
-
-    const appliedSource: "none" | "early_bird" | "coupon" =
-        couponDiscount > 0 ? "coupon" : earlyDiscount > 0 ? "early_bird" : "none"
-
-    const discountTotal = round2(Math.max(0, Math.min(subtotal, earlyDiscount + couponDiscount)))
-    const taxable = round2(Math.max(0, subtotal - discountTotal))
-    const tax = round2(taxable * TAX_RATE)
-    const total = round2(taxable + tax)
-
-    return {
-        base_subtotal: round2(subtotal),
-        early_bird_discount_amount: appliedSource === "early_bird" ? discountTotal : earlyDiscount,
-        coupon_discount_amount: couponDiscount,
-        applied_discount_source: appliedSource,
-        applied_discount_code:
-            couponDiscount > 0 ? String(coupon?.code || "").trim().toUpperCase() || null : null,
-        discount_amount_total: round2(discountTotal),
-        taxable_amount: taxable,
-        tax_amount: tax,
-        total_amount: total,
-        line_items: lineItems,
-    }
-}
-
-function normalizeTravellerTransport(
-    pricing: any[],
-    date: string,
-    value: string,
-    fallback = ""
+  pricing: any[],
+  date: string,
+  transport: string,
 ): string {
-    const options = getTransportOptions(pricing, date)
-    if (options.length === 0) return ""
-    if (value && options.includes(value)) return value
-    if (fallback && options.includes(fallback)) return fallback
-    return getDefaultTransportForDate(pricing, date, fallback || value || "")
+  const options = getSharingOptions(pricing, date, transport);
+  return options[0] || "";
+}
+
+function hasVehicleOptions(pricing: any[], date: string): boolean {
+  return getTransportOptions(pricing, date).length > 0;
+}
+
+function normalizeTravellers(list: any[]): Traveller[] {
+  const raw = Array.isArray(list) ? list : [];
+  if (raw.length === 0) {
+    return [{ id: "t1", name: "", transport: "", sharing: "" }];
+  }
+  return raw.map((item, index) => ({
+    id: String(item.id || `t${index + 1}`),
+    name: String(item.name || "").trim(),
+    transport: String(item.transport || "").trim(),
+    sharing: String(item.sharing || "").trim(),
+  }));
 }
 
 function sanitizeTravellersForDate(
-    pricing: any[],
-    date: string,
-    travellersInput: Traveller[],
-    fallbackTransport = ""
+  pricing: any[],
+  date: string,
+  travellers: Traveller[],
+  defaultTransport: string,
 ): Traveller[] {
-    const travellers = normalizeTravellers(travellersInput || [])
-    return travellers.map((traveller) => {
-        const transport = normalizeTravellerTransport(
-            pricing,
-            date,
-            traveller.transport,
-            fallbackTransport
-        )
-        const sharingOptions = getSharingOptions(pricing, date, transport)
-        const sharing =
-            traveller.sharing && sharingOptions.includes(traveller.sharing)
-                ? traveller.sharing
-                : getDefaultSharingForDate(pricing, date, transport)
-
-        return {
-            ...traveller,
-            transport,
-            sharing,
-        }
-    })
+  const vehicleRequired = hasVehicleOptions(pricing, date);
+  return travellers.map((t) => {
+    const transport = vehicleRequired
+      ? t.transport && getTransportOptions(pricing, date).includes(t.transport)
+        ? t.transport
+        : defaultTransport
+      : "";
+    const sharingOptions = getSharingOptions(pricing, date, transport);
+    const sharing = t.sharing && sharingOptions.includes(t.sharing)
+      ? t.sharing
+      : sharingOptions[0] || "";
+    return { ...t, transport, sharing };
+  });
 }
 
-function computeTotals(store: any) {
-    const pricingBreakdown = store?.pricingBreakdown || buildLocalPricingBreakdown(store)
-    const groups: Record<string, { count: number; unit: number }> = {}
-    for (const line of pricingBreakdown.line_items || []) {
-        const transport = String(line.transport || "")
-        const sharing = String(line.sharing || "")
-        const key = `${transport}__${sharing}`
-        if (!groups[key]) groups[key] = { count: 0, unit: toNumber(line.unit_price) }
-        groups[key].count += 1
+function getTravellerByContext(
+  store: any,
+  ctx: { id: string },
+): Traveller | null {
+  return store.travellers.find((t) => t.id === ctx.id) || null;
+}
+
+function updateTravellerById(
+  store: any,
+  id: string,
+  patch: Partial<Traveller>,
+): Traveller[] {
+  return store.travellers.map((t) => (t.id === id ? { ...t, ...patch } : t));
+}
+
+function removeTravellerById(store: any, id: string): Traveller[] {
+  const next = store.travellers.filter((t) => t.id !== id);
+  return next.length > 0
+    ? next
+    : [{ id: "t1", name: "", transport: "", sharing: "" }];
+}
+
+function nextTravellerId(store: any): string {
+  const ids = store.travellers.map((t) =>
+    parseInt(t.id.replace(/\D/g, "") || "0")
+  );
+  const max = Math.max(0, ...ids);
+  return `t${max + 1}`;
+}
+
+function normalizeSharing(value: any): string {
+  return String(value || "").trim();
+}
+
+function normalizeTravellerTransport(
+  pricing: any[],
+  date: string,
+  value: any,
+  fallback: string,
+): string {
+  const clean = String(value || "").trim();
+  const options = getTransportOptions(pricing, date);
+  if (options.includes(clean)) return clean;
+  return options.includes(fallback) ? fallback : options[0] || "";
+}
+
+function findBestPricingRow(
+  pricing: any[],
+  date: string,
+  transport: string,
+  sharing: string,
+): any | null {
+  const rows = pricing.filter((p) => {
+    const dMatch = String(p.departure_date || "").trim() === date;
+    const tMatch = !transport || getTransportValue(p) === transport;
+    const sMatch = getVariantValue(p) === sharing;
+    return dMatch && tMatch && sMatch;
+  });
+  if (rows.length === 0) return null;
+  return rows.reduce((best, curr) => {
+    const bestEarly = Boolean(best.is_early_bird);
+    const currEarly = Boolean(curr.is_early_bird);
+    if (currEarly && !bestEarly) return curr;
+    if (currEarly && bestEarly) {
+      return (curr.price || 0) < (best.price || 0) ? curr : best;
     }
+    return best;
+  }, rows[0] || null);
+}
 
-    const breakdown = Object.entries(groups).map(([key, data]) => {
-        const [transport, variant] = key.split("__")
-        return {
-            label: `${data.count}x Guest (${variant}${transport ? ` · ${transport}` : ""})`,
-            count: data.count,
-            variant,
-            transport,
-            unit_price: round2(data.unit),
-            price: round2(data.unit * data.count),
-        }
-    })
+function resolvePriceForTraveller(
+  pricing: any[],
+  date: string,
+  transport: string,
+  sharing: string,
+): number {
+  if (!date || !sharing) return 0;
+  const row = findBestPricingRow(pricing, date, transport, sharing);
+  return toNumber(row?.price || row?.amount || 0);
+}
 
-    const lineItemsSubtotal = round2(
-        (pricingBreakdown.line_items || []).reduce(
-            (sum: number, item: any) => sum + toNumber(item?.unit_price),
-            0
-        )
-    )
-    const subtotal = round2(
-        pricingBreakdown.base_subtotal > 0 ? pricingBreakdown.base_subtotal : lineItemsSubtotal
-    )
-    const discount = round2(
-        pricingBreakdown.discount_amount_total > 0
-            ? pricingBreakdown.discount_amount_total
-            : pricingBreakdown.applied_discount_source === "coupon"
-                ? pricingBreakdown.coupon_discount_amount
-                : pricingBreakdown.applied_discount_source === "early_bird"
-                    ? pricingBreakdown.early_bird_discount_amount
-                    : 0
-    )
-    const taxableSubtotal = round2(
-        pricingBreakdown.taxable_amount > 0
-            ? pricingBreakdown.taxable_amount
-            : Math.max(0, subtotal - discount)
-    )
-    const computedTaxFromTaxable = round2(taxableSubtotal * TAX_RATE)
-    const taxFromServerTotal = round2(
-        Math.max(0, round2(pricingBreakdown.total_amount) - taxableSubtotal)
-    )
-    const tax =
-        round2(pricingBreakdown.tax_amount) > 0
-            ? round2(pricingBreakdown.tax_amount)
-            : computedTaxFromTaxable > 0
-                ? computedTaxFromTaxable
-                : taxFromServerTotal
-    const total =
-        round2(pricingBreakdown.total_amount) > 0
-            ? round2(pricingBreakdown.total_amount)
-            : round2(taxableSubtotal + tax)
-    const paymentMode: PaymentMode =
-        String(store?.paymentMode || "").trim().toLowerCase() === "partial_25"
-            ? "partial_25"
-            : "full"
-    // Deposit is computed from final payable amount (after discount + tax).
-    const partialDeposit = round2(total * 0.25)
-    const payableNow =
-        paymentMode === "partial_25"
-            ? round2(Math.min(Math.max(0, partialDeposit), total))
-            : round2(total)
-    const dueAmount = round2(Math.max(0, total - payableNow))
+function buildLocalPricingBreakdown(store: CheckoutStore): PricingBreakdown {
+  const travellers = normalizeTravellers(store.travellers || []);
+  const date = store.date;
+  const pricing = store.pricingData || [];
 
-    return {
-        subtotal,
-        discount,
-        taxableSubtotal,
-        tax,
-        total,
-        paymentMode,
-        payableNow,
-        dueAmount,
-        earlyBirdDiscount: round2(pricingBreakdown.early_bird_discount_amount),
-        couponDiscount: round2(pricingBreakdown.coupon_discount_amount),
-        appliedDiscountSource: pricingBreakdown.applied_discount_source,
-        appliedDiscountCode: pricingBreakdown.applied_discount_code,
-        breakdown,
-        lineItems: pricingBreakdown.line_items || [],
+  let subtotal = 0;
+  let earlyBirdDiscount = 0;
+  const lineItems: any[] = [];
+
+  travellers.forEach((t) => {
+    const row = findBestPricingRow(pricing, date, t.transport, t.sharing);
+    const basePrice = toNumber(row?.base_price || row?.price || 0);
+    const actualPrice = toNumber(row?.price || 0);
+    const isEarlyBird = Boolean(row?.is_early_bird);
+
+    subtotal += basePrice;
+    if (isEarlyBird && basePrice > actualPrice) {
+      earlyBirdDiscount += basePrice - actualPrice;
     }
+  });
+
+  const taxableBeforeCoupon = subtotal - earlyBirdDiscount;
+  const tax = taxableBeforeCoupon * TAX_RATE;
+  const total = taxableBeforeCoupon + tax;
+
+  const paymentMode = store.paymentMode || "full";
+  const payableNow = paymentMode === "partial_25" ? total * 0.25 : total;
+  const dueAmount = total - payableNow;
+
+  return {
+    base_subtotal: subtotal,
+    early_bird_discount_amount: earlyBirdDiscount,
+    coupon_discount_amount: 0,
+    applied_discount_source: earlyBirdDiscount > 0 ? "early_bird" : "none",
+    applied_discount_code: null,
+    discount_amount_total: earlyBirdDiscount,
+    taxable_amount: taxableBeforeCoupon,
+    tax_amount: tax,
+    total_amount: total,
+    payable_now_amount: payableNow,
+    due_amount: dueAmount,
+    payment_mode: paymentMode,
+    line_items: [
+      { label: "Trip Subtotal", amount: subtotal, type: "base" },
+      ...(earlyBirdDiscount > 0
+        ? [{
+          label: "Early Bird Discount",
+          amount: -earlyBirdDiscount,
+          type: "discount",
+        }]
+        : []),
+      { label: "Tax (5%)", amount: tax, type: "tax" },
+      { label: "Total Amount", amount: total, type: "total" },
+    ],
+  };
 }
 
-function subtotalLineItemsText(store: any): string {
-    const totals = computeTotals(store)
-    if (!totals.breakdown?.length) return "Subtotal"
+function buildPricingBreakdownFromQuote(
+  data: any,
+  store: CheckoutStore,
+): PricingBreakdown {
+  const paymentMode = store.paymentMode || "full";
+  const total = toNumber(data.total_amount);
+  const payableNow = paymentMode === "partial_25" ? total * 0.25 : total;
+  const dueAmount = total - payableNow;
 
-    const lines = totals.breakdown
-        .map((item: any) => {
-            const count = Math.max(1, toNumber(item?.count))
-            const variant = String(item?.variant || "").trim() || "Sharing"
-            return `${count} x ${variant}`
-        })
-        .filter(Boolean)
-
-    return lines.length ? lines.join(" + ") : "Subtotal"
+  return {
+    base_subtotal: toNumber(data.base_subtotal),
+    early_bird_discount_amount: toNumber(data.early_bird_discount_amount),
+    coupon_discount_amount: toNumber(data.coupon_discount_amount),
+    applied_discount_source: data.applied_discount_source || "coupon",
+    applied_discount_code: data.applied_discount_code || data.code || null,
+    discount_amount_total: toNumber(data.discount_amount_total),
+    taxable_amount: toNumber(data.taxable_amount),
+    tax_amount: toNumber(data.tax_amount),
+    total_amount: total,
+    payable_now_amount: payableNow,
+    due_amount: dueAmount,
+    payment_mode: paymentMode,
+    line_items: Array.isArray(data.line_items) ? data.line_items : [],
+  };
 }
 
-function getSummaryLineRows(store: any): Array<{ key: string; label: string; amount: number }> {
-    const totals = computeTotals(store)
-    if (!Array.isArray(totals.breakdown) || totals.breakdown.length === 0) return []
-    return totals.breakdown.map((item: any, index: number) => ({
-        key: `${item.variant || "variant"}-${item.transport || "transport"}-${index}`,
-        label: `${Math.max(1, toNumber(item?.count))} × ${String(item?.variant || "Sharing")}`,
-        amount: round2(toNumber(item?.price)),
-    }))
+function computeTotals(store: CheckoutStore) {
+  const breakdown = store.pricingBreakdown || buildLocalPricingBreakdown(store);
+  return {
+    subtotal: breakdown.base_subtotal,
+    discount: breakdown.discount_amount_total,
+    earlyBirdDiscount: breakdown.early_bird_discount_amount,
+    couponDiscount: breakdown.coupon_discount_amount,
+    appliedDiscountSource: breakdown.applied_discount_source,
+    appliedDiscountCode: breakdown.applied_discount_code,
+    tax: breakdown.tax_amount,
+    total: breakdown.total_amount,
+    payableNow: breakdown.payable_now_amount,
+    dueAmount: breakdown.due_amount,
+    paymentMode: breakdown.payment_mode,
+    breakdown,
+  };
 }
 
-function getValidationErrors(store: any): string[] {
-    const errors: string[] = []
+function getSummaryLineRows(store: CheckoutStore): SummaryLineContextValue[] {
+  const breakdown = store.pricingBreakdown || buildLocalPricingBreakdown(store);
+  return (breakdown.line_items || []).map((item, i) => ({
+    key: `line-${i}-${item.label}`,
+    label: item.label,
+    amount: item.amount,
+  }));
+}
 
-    if (!store?.tripId) errors.push("Trip ID missing")
-    if (store?.inviteOnly) {
-        errors.push("This trip is invite-only. Contact support to complete booking.")
-        return errors
+function subtotalLineItemsText(store: CheckoutStore): string {
+  const count = normalizeTravellers(store.travellers || []).length;
+  return `Subtotal (${count} Traveller${count === 1 ? "" : "s"})`;
+}
+
+function formatNextBatchDate(dateStr: string): string {
+  if (!dateStr) return "";
+  const date = new Date(dateStr);
+  if (isNaN(date.getTime())) return "";
+  return date.toLocaleDateString("en-US", {
+    day: "numeric",
+    month: "short",
+    year: "numeric",
+  });
+}
+
+function getValidationErrors(store: CheckoutStore): string[] {
+  const errors: string[] = [];
+  if (!store?.tripId) {
+    errors.push("Trip context is missing. Try re-opening the checkout.");
+    return errors;
+  }
+  if (!store?.date) errors.push("Departure date is required");
+
+  if (!store?.contactName?.trim()) errors.push("Contact name is required");
+  if (!store?.contactPhone?.trim()) errors.push("Phone number is required");
+  else if (!PHONE_REGEX.test(store.contactPhone.trim())) {
+    errors.push("Phone number is invalid");
+  }
+
+  if (!store?.contactEmail?.trim()) errors.push("Email is required");
+  else if (!EMAIL_REGEX.test(store.contactEmail.trim())) {
+    errors.push("Email is invalid");
+  }
+
+  const travellers = normalizeTravellers(store?.travellers || []);
+  const requireVehicle = hasVehicleOptions(
+    store?.pricingData || [],
+    store?.date || "",
+  );
+  travellers.forEach((t, index) => {
+    if (!t.name.trim()) errors.push(`Name required for Traveller ${index + 1}`);
+    if (requireVehicle && !t.transport) {
+      errors.push(`Vehicle required for Traveller ${index + 1}`);
     }
-    if (!store?.date) errors.push("Departure date is required")
+    if (!t.sharing) errors.push(`Sharing required for Traveller ${index + 1}`);
+  });
 
-    if (!store?.contactName?.trim()) errors.push("Contact name is required")
-    if (!store?.contactPhone?.trim()) errors.push("Phone number is required")
-    else if (!PHONE_REGEX.test(store.contactPhone.trim())) errors.push("Phone number is invalid")
+  const totals = computeTotals(store);
+  if (totals.total <= 0) errors.push("Total amount must be greater than zero");
 
-    if (!store?.contactEmail?.trim()) errors.push("Email is required")
-    else if (!EMAIL_REGEX.test(store.contactEmail.trim())) errors.push("Email is invalid")
-
-    const travellers = normalizeTravellers(store?.travellers || [])
-    const requireVehicle = hasVehicleOptions(store?.pricingData || [], store?.date || "")
-    travellers.forEach((t, index) => {
-        if (!t.name.trim()) errors.push(`Name required for Traveller ${index + 1}`)
-        if (requireVehicle && !t.transport) errors.push(`Vehicle required for Traveller ${index + 1}`)
-        if (!t.sharing) errors.push(`Sharing required for Traveller ${index + 1}`)
-    })
-
-    const totals = computeTotals(store)
-    if (totals.total <= 0) errors.push("Total amount must be greater than zero")
-
-    return errors
+  return errors;
 }
 
 function showInlineError(errors: string | string[]) {
-    const existing = document.getElementById("__checkout_error_toast")
-    if (existing) existing.remove()
+  if (typeof document === "undefined") return;
+  const existing = document.getElementById("__checkout_error_toast");
+  if (existing) existing.remove();
 
-    const messages = Array.isArray(errors) ? errors : [errors]
-    const toast = document.createElement("div")
-    toast.id = "__checkout_error_toast"
+  const messages = Array.isArray(errors) ? errors : [errors];
+  const toast = document.createElement("div");
+  toast.id = "__checkout_error_toast";
 
-    toast.innerHTML = `
-        <div style="font-weight:700; margin-bottom:${messages.length > 1 ? "8px" : "0"};">⚠️ ${messages.length === 1 ? messages[0] : "Please complete:"
-        }</div>
-        ${messages.length > 1
-            ? '<div style="opacity:.9;font-size:13px;line-height:1.5;">' +
-            messages.map((m) => `• ${m}`).join("<br>") +
-            "</div>"
-            : ""
-        }
-    `
+  toast.innerHTML = `
+        <div style="font-weight:700; margin-bottom:${
+    messages.length > 1 ? "8px" : "0"
+  };">⚠️ ${messages.length === 1 ? messages[0] : "Please complete:"}</div>
+        ${
+    messages.length > 1
+      ? '<div style="opacity:.9;font-size:13px;line-height:1.5;">' +
+        messages.map((m) => `• ${m}`).join("<br>") +
+        "</div>"
+      : ""
+  }
+    `;
 
-    Object.assign(toast.style, {
-        position: "fixed",
-        top: "20px",
-        left: "50%",
-        transform: "translateX(-50%)",
-        background: "rgba(30,30,50,.95)",
-        color: "#fff",
-        padding: "14px 20px",
-        borderRadius: "12px",
-        fontSize: "14px",
-        zIndex: "99999",
-        boxShadow: "0 10px 28px rgba(0,0,0,.28)",
-        maxWidth: "92vw",
-    })
+  Object.assign(toast.style, {
+    position: "fixed",
+    top: "20px",
+    left: "50%",
+    transform: "translateX(-50%)",
+    background: "rgba(30,30,50,.95)",
+    color: "#fff",
+    padding: "14px 20px",
+    borderRadius: "12px",
+    fontSize: "14px",
+    zIndex: "99999",
+    boxShadow: "0 10px 28px rgba(0,0,0,.28)",
+    maxWidth: "92vw",
+  });
 
-    document.body.appendChild(toast)
-    setTimeout(() => {
-        toast.style.opacity = "0"
-        toast.style.transition = "opacity .25s ease"
-        setTimeout(() => toast.remove(), 250)
-    }, 3200)
+  document.body.appendChild(toast);
+  setTimeout(() => {
+    toast.style.opacity = "0";
+    toast.style.transition = "opacity .25s ease";
+    setTimeout(() => toast.remove(), 250);
+  }, 3200);
 }
 
 function firstNonEmpty(...values: any[]): string {
-    for (const value of values) {
-        const next = String(value || "").trim()
-        if (next) return next
-    }
-    return ""
+  for (const value of values) {
+    const next = String(value || "").trim();
+    if (next) return next;
+  }
+  return "";
 }
 
 function readInputValue(selectors: string[]): string {
-    if (typeof document === "undefined") return ""
-    for (const selector of selectors) {
-        const el = document.querySelector(selector) as
-            | HTMLInputElement
-            | HTMLTextAreaElement
-            | null
-        const value = String(el?.value || "").trim()
-        if (value) return value
-    }
-    return ""
+  if (typeof document === "undefined") return "";
+  for (const selector of selectors) {
+    const el = document.querySelector(selector) as
+      | HTMLInputElement
+      | HTMLTextAreaElement
+      | null;
+    const value = String(el?.value || "").trim();
+    if (value) return value;
+  }
+  return "";
+}
+
+function buildGatewayUrl(path: string, params?: URLSearchParams): string {
+  const base = String(GATEWAY_BASE || "").trim().replace(/\/+$/, "");
+  const endpoint = String(path || "").trim().replace(/^\/+/, "");
+  const query = params?.toString() || "";
+  return `${base}/${endpoint}${query ? `?${query}` : ""}`;
+}
+
+function fetchGateway(
+  path: string,
+  init: RequestInit = {},
+  params?: URLSearchParams,
+): Promise<Response> {
+  const url = buildGatewayUrl(path, params);
+  return fetch(url, {
+    ...init,
+    headers: {
+      "Content-Type": "application/json",
+      ...(init.headers || {}),
+    },
+  });
 }
 
 function populateDropdown(select: HTMLSelectElement, options: string[]) {
-    if (!select) return
+  if (!select) return;
 
-    const firstOption = select.options[0]
-    const placeholderText =
-        firstOption && (firstOption.value === "" || /select/i.test(firstOption.text))
-            ? firstOption.text
-            : "Select option"
+  const firstOption = select.options[0];
+  const placeholderText = firstOption &&
+      (firstOption.value === "" || /select/i.test(firstOption.text))
+    ? firstOption.text
+    : "Select option";
 
-    select.innerHTML = ""
-    const placeholder = document.createElement("option")
-    placeholder.value = ""
-    placeholder.text = placeholderText
-    select.add(placeholder)
+  select.innerHTML = "";
+  const placeholder = document.createElement("option");
+  placeholder.value = "";
+  placeholder.text = placeholderText;
+  select.add(placeholder);
 
-    options.forEach((value) => {
-        const opt = document.createElement("option")
-        opt.value = value
-        opt.text = value
-        select.add(opt)
+  options.forEach((value) => {
+    const opt = document.createElement("option");
+    opt.value = value;
+    opt.text = value;
+    select.add(opt);
+  });
+}
+
+function fetchTripIdBySlug(slug: string): Promise<string> {
+  const cleanSlug = (slug || "").trim();
+  if (!cleanSlug) return Promise.resolve("");
+  const query = new URLSearchParams();
+  query.set("slug", cleanSlug);
+  return fetchGateway("get-trip-checkout-context", { method: "GET" }, query)
+    .then((res) => {
+      if (!res.ok) return "";
+      return res.json().then((payload) =>
+        String(payload?.trip?.id || "").trim()
+      );
     })
+    .catch(() => "");
 }
 
-async function fetchTripIdBySlug(slug: string): Promise<string> {
-    const cleanSlug = (slug || "").trim()
-    if (!cleanSlug) return ""
-
-    const res = await fetch(
-        `${SUPABASE_URL}/rest/v1/trips?slug=eq.${encodeURIComponent(cleanSlug)}&select=id&limit=1`,
-        {
-            priority: "high",
-            headers: {
-                apikey: SUPABASE_KEY,
-                Authorization: `Bearer ${SUPABASE_KEY}`,
-            },
-        } as any
-    )
-
-    if (!res.ok) return ""
-    const rows = await res.json()
-    return rows?.[0]?.id || ""
-}
-
-async function fetchTripContextById(tripId: string): Promise<{ id: string; slug: string; title: string } | null> {
-    const cleanTripId = String(tripId || "").trim()
-    if (!cleanTripId) return null
-
-    const res = await fetch(
-        `${SUPABASE_URL}/rest/v1/trips?id=eq.${encodeURIComponent(
-            cleanTripId
-        )}&select=id,slug,title&limit=1`,
-        {
-            priority: "high",
-            headers: {
-                apikey: SUPABASE_KEY,
-                Authorization: `Bearer ${SUPABASE_KEY}`,
-            },
-        } as any
-    )
-    if (!res.ok) return null
-    const rows = await res.json().catch(() => [])
-    const row = Array.isArray(rows) ? rows[0] : null
-    if (!row?.id) return null
-    return {
-        id: String(row.id || ""),
-        slug: String(row.slug || ""),
-        title: String(row.title || ""),
-    }
+function fetchTripContextById(
+  tripId: string,
+): Promise<{ id: string; slug: string; title: string } | null> {
+  const cleanTripId = String(tripId || "").trim();
+  if (!cleanTripId) return Promise.resolve(null);
+  const query = new URLSearchParams();
+  query.set("trip_id", cleanTripId);
+  return fetchGateway("get-trip-checkout-context", { method: "GET" }, query)
+    .then((res) => {
+      if (!res.ok) return null;
+      return res.json().then((payload) => {
+        if (!payload?.trip?.id) return null;
+        return {
+          id: String(payload.trip.id || ""),
+          slug: String(payload.trip.slug || ""),
+          title: String(payload.trip.title || ""),
+        };
+      });
+    })
+    .catch(() => null);
 }
 
 function isInviteOnlyTrip(pricingRows: any[]): boolean {
-    const rows = Array.isArray(pricingRows) ? pricingRows : []
-    if (rows.length === 0) return false
-    const hasSharingRows = rows.some((row) => Boolean(getVariantValue(row)))
-    return !hasSharingRows
+  const rows = Array.isArray(pricingRows) ? pricingRows : [];
+  if (rows.length === 0) return false;
+  const hasSharingRows = rows.some((row) => Boolean(getVariantValue(row)));
+  return !hasSharingRows;
 }
 
-async function fetchTripPricing(tripId: string): Promise<any[]> {
-    const cleanTripId = (tripId || "").trim()
-    if (!cleanTripId) return []
+function fetchTripPricing(tripId: string): Promise<any[]> {
+  const cleanTripId = (tripId || "").trim();
+  if (!cleanTripId) return Promise.resolve([]);
 
-    const res = await fetch(
-        `${SUPABASE_URL}/rest/v1/trip_pricing?trip_id=eq.${encodeURIComponent(
-            cleanTripId
-        )}&select=*`,
-        {
-            priority: "high",
-            headers: {
-                apikey: SUPABASE_KEY,
-                Authorization: `Bearer ${SUPABASE_KEY}`,
-            },
-        } as any
-    )
-
-    if (!res.ok) return []
-    const rows = await res.json()
-    return Array.isArray(rows) ? rows : []
+  const query = new URLSearchParams();
+  query.set("trip_id", cleanTripId);
+  return fetchGateway("get-trip-checkout-context", { method: "GET" }, query)
+    .then((res) => {
+      if (!res.ok) return [];
+      return res.json().catch(() => null).then((payload) => {
+        return Array.isArray(payload?.pricing) ? payload.pricing : [];
+      });
+    })
+    .catch(() => []);
 }
 
-async function fetchTripDisplayPrice(params: { slug?: string; tripId?: string }): Promise<any | null> {
-    const slug = String(params.slug || "").trim()
-    const tripId = String(params.tripId || "").trim()
-    if (!slug && !tripId) return null
+function fetchTripDisplayPrice(
+  params: { slug?: string; tripId?: string },
+): Promise<any | null> {
+  const slug = String(params.slug || "").trim();
+  const tripId = String(params.tripId || "").trim();
+  if (!slug && !tripId) return Promise.resolve(null);
 
-    const cacheKey = `${slug}::${tripId}`
-    const now = Date.now()
-    const cached = tripDisplayCache.get(cacheKey)
-    if (cached && now - cached.ts < 120000) {
-        return cached.data
-    }
-    const inFlight = tripDisplayInFlight.get(cacheKey)
-    if (inFlight) return inFlight
+  const cacheKey = `${slug}::${tripId}`;
+  const now = Date.now();
+  const cached = tripDisplayCache.get(cacheKey);
+  if (cached && now - cached.ts < 120000) {
+    return cached.data;
+  }
+  const inFlight = tripDisplayInFlight.get(cacheKey);
+  if (inFlight) return inFlight;
 
-    const query = new URLSearchParams()
-    if (slug) query.set("slug", slug)
-    if (tripId) query.set("trip_id", tripId)
-    query.set("v", "3")
+  const query = new URLSearchParams();
+  if (slug) query.set("slug", slug);
+  if (tripId) query.set("trip_id", tripId);
+  query.set("v", "3");
 
-    const request = fetch(`${SUPABASE_URL}/functions/v1/get-trip-display-price?${query.toString()}`, {
-        method: "GET",
-        priority: "high",
-        headers: {
-            apikey: SUPABASE_KEY,
-            Authorization: `Bearer ${SUPABASE_KEY}`,
-        },
-    } as any)
-        .then(async (res) => {
-            if (!res.ok) return null
-            const data = await res.json().catch(() => null)
-            if (data) tripDisplayCache.set(cacheKey, { ts: Date.now(), data })
-            return data
-        })
-        .catch(() => null)
-        .finally(() => {
-            tripDisplayInFlight.delete(cacheKey)
-        })
+  const request = fetchGateway("get-trip-display-price", {
+    method: "GET",
+    priority: "high" as any,
+  }, query)
+    .then((res) => {
+      if (!res.ok) return null;
+      return res.json().catch(() => null).then((data) => {
+        if (data) tripDisplayCache.set(cacheKey, { ts: Date.now(), data });
+        return data;
+      });
+    })
+    .catch(() => null)
+    .finally(() => {
+      tripDisplayInFlight.delete(cacheKey);
+    });
 
-    tripDisplayInFlight.set(cacheKey, request)
-    return request
+  tripDisplayInFlight.set(cacheKey, request);
+  return request;
 }
 
 function toTitleFromSlug(slug: string): string {
-    const clean = String(slug || "").trim()
-    if (!clean) return ""
-    return clean
-        .replace(/[-_]+/g, " ")
-        .replace(/\s+/g, " ")
-        .trim()
+  const clean = String(slug || "").trim();
+  if (!clean) return "";
+  return clean
+    .replace(/[-_]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
 }
 
 function readCheckoutRouteContext() {
-    if (typeof window === "undefined") {
-        return { tripId: "", slug: "", date: "", transport: "" }
-    }
-    const query = new URLSearchParams(window.location.search)
-    return {
-        tripId: String(query.get("tripId") || query.get("trip_id") || "").trim(),
-        slug: String(query.get("slug") || "").trim(),
-        date: String(query.get("date") || "").trim(),
-        transport: String(query.get("vehicle") || query.get("transport") || "").trim(),
-    }
+  if (typeof window === "undefined") {
+    return { tripId: "", slug: "", date: "", transport: "" };
+  }
+  const query = new URLSearchParams(window.location.search);
+  return {
+    tripId: String(query.get("tripId") || query.get("trip_id") || "").trim(),
+    slug: String(query.get("slug") || "").trim(),
+    date: String(query.get("date") || "").trim(),
+    transport: String(query.get("vehicle") || query.get("transport") || "")
+      .trim(),
+  };
 }
 
 function routeContextKey(ctx: {
-    tripId: string
-    slug: string
-    date: string
-    transport: string
+  tripId: string;
+  slug: string;
+  date: string;
+  transport: string;
 }): string {
-    return [ctx.tripId, ctx.slug, ctx.date, ctx.transport].join("|")
+  return [ctx.tripId, ctx.slug, ctx.date, ctx.transport].join("|");
 }
 
-function withTextFromState(getText: (store: any) => string, fallback = "—") {
-    return function (Component: ComponentType): ComponentType {
-        return (props: any) => {
-            const [store] = useStore()
-            const text = getText(store) || fallback
-            return <Component {...props} text={text} />
-        }
-    }
+function withTextFromState(
+  getText: (store: any) => string,
+  fallback = "\u2014",
+) {
+  return function (Component: ComponentType): ComponentType {
+    return (props: any) => {
+      const [store] = useStore();
+      const isHydrated = useHydrated();
+      const text = isHydrated ? (getText(store) || fallback) : fallback;
+      return <Component {...props} text={text} />;
+    };
+  };
 }
 
 function readNodeText(value: any): string {
-    if (value == null) return ""
-    if (typeof value === "string" || typeof value === "number") return String(value)
-    if (Array.isArray(value)) return value.map((item) => readNodeText(item)).join(" ")
-    if (React.isValidElement(value)) return readNodeText((value as any)?.props?.children)
-    if (typeof value === "object" && value?.props) return readNodeText(value.props.children)
-    return ""
+  if (value == null) return "";
+  if (typeof value === "string" || typeof value === "number") {
+    return String(value);
+  }
+  if (Array.isArray(value)) {
+    return value.map((item) => readNodeText(item)).join(" ");
+  }
+  if (React.isValidElement(value)) {
+    return readNodeText((value as any)?.props?.children);
+  }
+  if (typeof value === "object" && value?.props) {
+    return readNodeText(value.props.children);
+  }
+  return "";
 }
 
 export function withCheckoutBootstrap(Component): ComponentType {
-    return (props: any) => {
-        const [store, setStore] = useStore()
-        const bootKeyRef = useRef("")
-        const [routeKey, setRouteKey] = useState(() =>
-            routeContextKey(readCheckoutRouteContext())
-        )
+  return (props: any) => {
+    const [store, setStore] = useStore();
+    const bootKeyRef = useRef("");
+    const [routeKey, setRouteKey] = useState(() =>
+      routeContextKey(readCheckoutRouteContext())
+    );
 
-        useEffect(() => {
-            const refreshRouteKey = () => {
-                const key = routeContextKey(readCheckoutRouteContext())
-                setRouteKey((prev) => (prev === key ? prev : key))
-            }
+    useEffect(() => {
+      const refreshRouteKey = () => {
+        const key = routeContextKey(readCheckoutRouteContext());
+        setRouteKey((prev) => (prev === key ? prev : key));
+      };
 
-            const interval = window.setInterval(refreshRouteKey, 500)
-            window.addEventListener("popstate", refreshRouteKey)
-            refreshRouteKey()
+      const interval = window.setInterval(refreshRouteKey, 500);
+      window.addEventListener("popstate", refreshRouteKey);
+      refreshRouteKey();
 
-            return () => {
-                window.clearInterval(interval)
-                window.removeEventListener("popstate", refreshRouteKey)
-            }
-        }, [])
+      return () => {
+        window.clearInterval(interval);
+        window.removeEventListener("popstate", refreshRouteKey);
+      };
+    }, []);
 
-        useEffect(() => {
-            let disposed = false
+    useEffect(() => {
+      let disposed = false;
 
-            const run = async () => {
-                const ctx = readCheckoutRouteContext()
-                if (!ctx.tripId && !ctx.slug) return
+      const run = () => {
+        const ctx = readCheckoutRouteContext();
+        if (!ctx.tripId && !ctx.slug) return;
 
-                if (bootKeyRef.current === routeKey) return
-                bootKeyRef.current = routeKey
+        if (bootKeyRef.current === routeKey) return;
+        bootKeyRef.current = routeKey;
 
-                setStore({ loading: true })
-                let tripId = ctx.tripId
-                let slug = ctx.slug
+        setStore({ loading: true });
+        let tripId = ctx.tripId;
+        let slug = ctx.slug;
 
-                if (!tripId && slug) {
-                    tripId = await fetchTripIdBySlug(slug)
-                }
-
-                if (!tripId) {
-                    if (!disposed) {
-                        setStore({
-                            loading: false,
-                            couponMessageType: "error",
-                            couponMessage: "Missing trip context. Open checkout from Book now button.",
-                        })
-                    }
-                    return
-                }
-
-                const [pricing, tripContext] = await Promise.all([
-                    fetchTripPricing(tripId),
-                    fetchTripContextById(tripId),
-                ])
-                if (disposed) return
-
-                slug = slug || String(tripContext?.slug || "").trim()
-                const tripName = firstNonEmpty(
-                    String(tripContext?.title || "").trim(),
-                    toTitleFromSlug(slug),
-                    tripId
-                )
-
-                const inviteOnly = isInviteOnlyTrip(pricing)
-                const dates = getDateOptions(pricing)
-                const date = dates.includes(ctx.date) ? ctx.date : dates[0] || ""
-                const transport = getDefaultTransportForDate(pricing, date, ctx.transport)
-                const travellers = inviteOnly
-                    ? normalizeTravellers(store.travellers || [])
-                    : sanitizeTravellersForDate(
-                        pricing,
-                        date,
-                        normalizeTravellers(store.travellers || []),
-                        transport
-                    )
-
-                const nextState = {
-                    ...store,
-                    tripId,
-                    slug,
-                    tripName,
-                    pricingData: pricing,
-                    date,
-                    transport,
-                    travellers,
-                    inviteOnly,
-                    loading: false,
-                }
-                const pricingBreakdown = buildLocalPricingBreakdown(nextState)
-
+        if (!tripId && slug) {
+          return fetchTripIdBySlug(slug).then((resolvedTripId) => {
+            tripId = resolvedTripId;
+            if (!tripId) {
+              if (!disposed) {
                 setStore({
-                    tripId,
-                    slug,
-                    tripName,
-                    pricingData: pricing,
-                    date,
-                    transport,
-                    travellers,
-                    inviteOnly,
-                    pricingBreakdown,
-                    loading: false,
-                })
-
-                console.log("[Checkout] Opened", {
-                    tripId,
-                    slug,
-                    date,
-                    defaultTransport: transport,
-                    inviteOnly,
-                })
+                  loading: false,
+                  couponMessageType: "error",
+                  couponMessage:
+                    "Missing trip context. Open checkout from Book now button.",
+                });
+              }
+              return;
             }
+            return Promise.all([
+              fetchTripPricing(tripId),
+              fetchTripContextById(tripId),
+            ]).then(([pricing, tripContext]) => {
+              if (disposed) return;
 
-            run().catch((err) => {
-                console.error("[Checkout] Bootstrap failed", err)
-                if (!disposed) {
-                    setStore({
-                        loading: false,
-                        couponMessageType: "error",
-                        couponMessage: "Could not initialize checkout",
-                    })
-                }
-            })
+              slug = slug || String(tripContext?.slug || "").trim();
+              const tripName = firstNonEmpty(
+                String(tripContext?.title || "").trim(),
+                toTitleFromSlug(slug),
+                tripId,
+              );
 
-            return () => {
-                disposed = true
-            }
-        }, [routeKey])
+              const inviteOnly = isInviteOnlyTrip(pricing);
+              const dates = getDateOptions(pricing);
+              const date = dates.includes(ctx.date) ? ctx.date : dates[0] || "";
+              const transport = getDefaultTransportForDate(
+                pricing,
+                date,
+                ctx.transport,
+              );
+              const travellers = inviteOnly
+                ? normalizeTravellers(store.travellers || [])
+                : sanitizeTravellersForDate(
+                  pricing,
+                  date,
+                  normalizeTravellers(store.travellers || []),
+                  transport,
+                );
 
-        useEffect(() => {
-            if (!store?.tripId) return
+              const nextState = {
+                ...store,
+                tripId,
+                slug,
+                tripName,
+                pricingData: pricing,
+                date,
+                transport,
+                travellers,
+                inviteOnly,
+                loading: false,
+              };
+              const pricingBreakdown = buildLocalPricingBreakdown(nextState);
+
+              setStore({
+                tripId,
+                slug,
+                tripName,
+                pricingData: pricing,
+                date,
+                transport,
+                travellers,
+                inviteOnly,
+                pricingBreakdown,
+                loading: false,
+              });
+
+              console.log("[Checkout] Opened", {
+                tripId,
+                slug,
+                date,
+                defaultTransport: transport,
+                inviteOnly,
+              });
+            });
+          });
+        }
+
+        if (!tripId) {
+          if (!disposed) {
             setStore({
-                pricingBreakdown: buildLocalPricingBreakdown(store),
-            })
-        }, [store.tripId, store.pricingData, store.date, store.travellers, store.appliedCoupon])
+              loading: false,
+              couponMessageType: "error",
+              couponMessage:
+                "Missing trip context. Open checkout from Book now button.",
+            });
+          }
+          return;
+        }
 
-        return <Component {...props} />
-    }
+        return Promise.all([
+          fetchTripPricing(tripId),
+          fetchTripContextById(tripId),
+        ]).then(([pricing, tripContext]) => {
+          if (disposed) return;
+
+          slug = slug || String(tripContext?.slug || "").trim();
+          const tripName = firstNonEmpty(
+            String(tripContext?.title || "").trim(),
+            toTitleFromSlug(slug),
+            tripId,
+          );
+
+          const inviteOnly = isInviteOnlyTrip(pricing);
+          const dates = getDateOptions(pricing);
+          const date = dates.includes(ctx.date) ? ctx.date : dates[0] || "";
+          const transport = getDefaultTransportForDate(
+            pricing,
+            date,
+            ctx.transport,
+          );
+          const travellers = inviteOnly
+            ? normalizeTravellers(store.travellers || [])
+            : sanitizeTravellersForDate(
+              pricing,
+              date,
+              normalizeTravellers(store.travellers || []),
+              transport,
+            );
+
+          const nextState = {
+            ...store,
+            tripId,
+            slug,
+            tripName,
+            pricingData: pricing,
+            date,
+            transport,
+            travellers,
+            inviteOnly,
+            loading: false,
+          };
+          const pricingBreakdown = buildLocalPricingBreakdown(nextState);
+
+          setStore({
+            tripId,
+            slug,
+            tripName,
+            pricingData: pricing,
+            date,
+            transport,
+            travellers,
+            inviteOnly,
+            pricingBreakdown,
+            loading: false,
+          });
+
+          console.log("[Checkout] Opened", {
+            tripId,
+            slug,
+            date,
+            defaultTransport: transport,
+            inviteOnly,
+          });
+        });
+      };
+
+      Promise.resolve()
+        .then(() => run())
+        .catch((err) => {
+          console.error("[Checkout] Bootstrap failed", err);
+          if (!disposed) {
+            setStore({
+              loading: false,
+              couponMessageType: "error",
+              couponMessage: "Could not initialize checkout",
+            });
+          }
+        });
+
+      return () => {
+        disposed = true;
+      };
+    }, [routeKey]);
+
+    useEffect(() => {
+      if (!store?.tripId) return;
+      setStore({
+        pricingBreakdown: buildLocalPricingBreakdown(store),
+      });
+    }, [
+      store.tripId,
+      store.pricingData,
+      store.date,
+      store.travellers,
+      store.appliedCoupon,
+    ]);
+
+    return <Component {...props} />;
+  };
 }
 
 export function withBookNowToCheckout(Component): ComponentType {
-    return (props: any) => {
-        const [store] = useStore()
+  return (props: any) => {
+    const [store] = useStore();
 
-        const handleClick = (e: any) => {
-            e?.preventDefault?.()
-            e?.stopPropagation?.()
+    const handleClick = (e: any) => {
+      e?.preventDefault?.();
+      e?.stopPropagation?.();
 
-            const current = window.location.pathname
-            const slugFromPath = current.includes("/upcoming-trips/")
-                ? current.split("/").pop() || ""
-                : ""
+      const current = window.location.pathname;
+      const slugFromPath = current.includes("/upcoming-trips/")
+        ? current.split("/").pop() || ""
+        : "";
 
-            const tripId = props?.tripId || props?.["data-trip-id"] || store.tripId || ""
-            const slug = props?.slug || props?.["data-trip-slug"] || slugFromPath || store.slug || ""
+      const tripId = props?.tripId || props?.["data-trip-id"] || store.tripId ||
+        "";
+      const slug = props?.slug || props?.["data-trip-slug"] || slugFromPath ||
+        store.slug || "";
 
-            const next = new URLSearchParams()
-            if (tripId) next.set("tripId", tripId)
-            if (slug) next.set("slug", slug)
-            if (store.date) next.set("date", store.date)
-            const travellers = normalizeTravellers(store.travellers || [])
-            const firstTransport = travellers[0]?.transport || store.transport
-            if (firstTransport) next.set("vehicle", firstTransport)
+      const next = new URLSearchParams();
+      if (tripId) next.set("tripId", tripId);
+      if (slug) next.set("slug", slug);
+      if (store.date) next.set("date", store.date);
+      const travellers = normalizeTravellers(store.travellers || []);
+      const firstTransport = travellers[0]?.transport || store.transport;
+      if (firstTransport) next.set("vehicle", firstTransport);
 
-            const qs = next.toString()
-            window.location.href = qs ? `${CHECKOUT_PAGE_URL}?${qs}` : CHECKOUT_PAGE_URL
-        }
+      const qs = next.toString();
+      window.location.href = qs
+        ? `${CHECKOUT_PAGE_URL}?${qs}`
+        : CHECKOUT_PAGE_URL;
+    };
 
-        return <Component {...props} onClick={handleClick} />
-    }
+    return <Component {...props} onClick={handleClick} />;
+  };
 }
 
 export function withCheckoutTripId(Component): ComponentType {
-    return withTextFromState((store) => store.tripId || "—")(Component)
+  return withTextFromState((store) => store.tripId || "\u2014")(Component);
 }
 
 export function withCheckoutSelectionText(Component): ComponentType {
-    return withTextFromState((store) => {
-        const tripName = store.tripName || store.slug || store.tripId || "trip name"
-        return `Checkout for ${tripName}`
-    })(Component)
+  return withTextFromState((store) => {
+    const tripName = store.tripName || store.slug || store.tripId ||
+      "trip name";
+    return `Checkout for ${tripName}`;
+  })(Component);
 }
 
 export function withTravellerCount(Component): ComponentType {
-    return withTextFromState((store) => {
-        const count = normalizeTravellers(store?.travellers || []).length
-        return `${count} Traveller${count === 1 ? "" : "s"}`
-    })(Component)
+  return withTextFromState((store) => {
+    const count = normalizeTravellers(store?.travellers || []).length;
+    return `${count} Traveller${count === 1 ? "" : "s"}`;
+  })(Component);
 }
 
 export function withCheckoutBackButton(Component): ComponentType {
-    return (props: any) => {
-        const [store] = useStore()
+  return (props: any) => {
+    const [store] = useStore();
 
-        const handleClick = (e: any) => {
-            e?.preventDefault?.()
-            e?.stopPropagation?.()
+    const handleClick = (e: any) => {
+      e?.preventDefault?.();
+      e?.stopPropagation?.();
 
-            const slug = String(store?.slug || "").trim()
-            if (slug) {
-                window.location.href = `${UPCOMING_TRIPS_BASE_URL}/${slug}`
-                return
-            }
+      const slug = String(store?.slug || "").trim();
+      if (slug) {
+        window.location.href = `${UPCOMING_TRIPS_BASE_URL}/${slug}`;
+        return;
+      }
 
-            if (window.history.length > 1) {
-                window.history.back()
-                return
-            }
+      if (window.history.length > 1) {
+        window.history.back();
+        return;
+      }
 
-            window.location.href = UPCOMING_TRIPS_BASE_URL
-        }
+      window.location.href = UPCOMING_TRIPS_BASE_URL;
+    };
 
-        return <Component {...props} onClick={handleClick} />
-    }
+    return <Component {...props} onClick={handleClick} />;
+  };
 }
 
 export function withCheckoutDateSelect(Component): ComponentType {
-    return (props: any) => {
-        const [store, setStore] = useStore()
-        const wrapperRef = useRef<HTMLDivElement>(null)
-        const handleDateChange = (nextDate: string) => {
-            const nextTransport = getDefaultTransportForDate(
-                store.pricingData || [],
-                nextDate,
-                store.transport
-            )
-            const travellers = sanitizeTravellersForDate(
-                store.pricingData || [],
-                nextDate,
-                normalizeTravellers(store.travellers || []),
-                nextTransport
-            )
-            setStore({
-                date: nextDate,
-                transport: nextTransport,
-                travellers,
-            })
-        }
+  return (props: any) => {
+    const [store, setStore] = useStore();
+    const wrapperRef = useRef<HTMLDivElement>(null);
+    const handleDateChange = (nextDate: string) => {
+      const nextTransport = getDefaultTransportForDate(
+        store.pricingData || [],
+        nextDate,
+        store.transport,
+      );
+      const travellers = sanitizeTravellersForDate(
+        store.pricingData || [],
+        nextDate,
+        normalizeTravellers(store.travellers || []),
+        nextTransport,
+      );
+      setStore({
+        date: nextDate,
+        transport: nextTransport,
+        travellers,
+      });
+    };
 
-        useEffect(() => {
-            if (!wrapperRef.current) return
-            const select = wrapperRef.current.querySelector("select") as HTMLSelectElement | null
-            if (!select) return
+    useEffect(() => {
+      if (!wrapperRef.current) return;
+      const select = wrapperRef.current.querySelector("select") as
+        | HTMLSelectElement
+        | null;
+      if (!select) return;
 
-            const options = getDateOptions(store.pricingData || [])
-            const signature = JSON.stringify(options)
-            if (select.getAttribute("data-populated") !== signature) {
-                populateDropdown(select, options)
-                select.setAttribute("data-populated", signature)
-            }
+      const options = getDateOptions(store.pricingData || []);
+      const signature = JSON.stringify(options);
+      if (select.getAttribute("data-populated") !== signature) {
+        populateDropdown(select, options);
+        select.setAttribute("data-populated", signature);
+      }
 
-            if (store.date && select.value !== store.date) {
-                select.value = store.date
-            }
-        }, [store.pricingData, store.date, store.transport, store.travellers])
+      if (store.date && select.value !== store.date) {
+        select.value = store.date;
+      }
+    }, [store.pricingData, store.date, store.transport, store.travellers]);
 
-        return (
-            <div ref={wrapperRef} style={{ display: "contents" }}>
-                <Component
-                    {...props}
-                    value={store.date || ""}
-                    onValueChange={handleDateChange}
-                    onChange={(e: any) => handleDateChange(e?.target?.value || "")}
-                />
-            </div>
-        )
-    }
+    return (
+      <div ref={wrapperRef} style={{ display: "contents" }}>
+        <Component
+          {...props}
+          value={store.date || ""}
+          onValueChange={handleDateChange}
+          onChange={(e: any) => handleDateChange(e?.target?.value || "")}
+        />
+      </div>
+    );
+  };
 }
 
 export function withCheckoutVehicleSelect(Component): ComponentType {
-    return (props: any) => {
-        const [store] = useStore()
-        const wrapperRef = useRef<HTMLDivElement>(null)
+  return (props: any) => {
+    const [store] = useStore();
+    const wrapperRef = useRef<HTMLDivElement>(null);
 
-        useEffect(() => {
-            if (!wrapperRef.current) return
-            const select = wrapperRef.current.querySelector("select") as HTMLSelectElement | null
-            if (!select) return
+    useEffect(() => {
+      if (!wrapperRef.current) return;
+      const select = wrapperRef.current.querySelector("select") as
+        | HTMLSelectElement
+        | null;
+      if (!select) return;
 
-            const options = getTransportOptions(store.pricingData || [], store.date)
-            const signature = JSON.stringify(options)
-            if (select.getAttribute("data-populated") !== signature) {
-                populateDropdown(select, options)
-                select.setAttribute("data-populated", signature)
-            }
-            if (!select.value) select.value = ""
-        }, [store.pricingData, store.date])
+      const options = getTransportOptions(store.pricingData || [], store.date);
+      const signature = JSON.stringify(options);
+      if (select.getAttribute("data-populated") !== signature) {
+        populateDropdown(select, options);
+        select.setAttribute("data-populated", signature);
+      }
+      if (!select.value) select.value = "";
+    }, [store.pricingData, store.date]);
 
-        return (
-            <div ref={wrapperRef} style={{ display: "contents" }}>
-                <Component
-                    {...props}
-                    style={{ ...(props.style || {}), display: "none", pointerEvents: "none" }}
-                />
-            </div>
-        )
-    }
+    return (
+      <div ref={wrapperRef} style={{ display: "contents" }}>
+        <Component
+          {...props}
+          style={{
+            ...(props.style || {}),
+            display: "none",
+            pointerEvents: "none",
+          }}
+        />
+      </div>
+    );
+  };
 }
 
 export function withTravellerList(Component): ComponentType {
-    return (props: any) => {
-        const [store] = useStore()
-        const travellers = normalizeTravellers(store.travellers || [])
-        const childrenArray = React.Children.toArray(props.children)
-        const template = childrenArray.find((child) => React.isValidElement(child)) as
-            | React.ReactElement
-            | undefined
+  return (props: any) => {
+    const [store] = useStore();
+    const travellers = normalizeTravellers(store.travellers || []);
+    const childrenArray = React.Children.toArray(props.children);
+    const template = childrenArray.find((child) =>
+      React.isValidElement(child)
+    ) as
+      | React.ReactElement
+      | undefined;
 
-        if (!template) {
-            return <Component {...props} />
-        }
-
-        return (
-            <Component
-                {...props}
-                style={{
-                    ...(props.style || {}),
-                    display: "flex",
-                    flexDirection: "column",
-                    gap: "16px",
-                }}
-            >
-                {travellers.map((traveller, index) => {
-                    const row = React.cloneElement(template, {
-                        key: `traveller-${traveller.id}`,
-                        style: {
-                            ...((template.props as any)?.style || {}),
-                            width: "100%",
-                            position: "relative",
-                        },
-                    })
-
-                    return (
-                        <TravellerContext.Provider
-                            key={`traveller-provider-${traveller.id}`}
-                            value={{ id: traveller.id, index }}
-                        >
-                            {row}
-                        </TravellerContext.Provider>
-                    )
-                })}
-            </Component>
-        )
+    if (!template) {
+      return <Component {...props} />;
     }
+
+    return (
+      <Component
+        {...props}
+        style={{
+          ...(props.style || {}),
+          display: "flex",
+          flexDirection: "column",
+          gap: "16px",
+        }}
+      >
+        {travellers.map((traveller, index) => {
+          const row = React.cloneElement(template, {
+            key: `traveller-${traveller.id}`,
+            style: {
+              ...((template.props as any)?.style || {}),
+              width: "100%",
+              position: "relative",
+            },
+          });
+
+          return (
+            <TravellerContext.Provider
+              key={`traveller-provider-${traveller.id}`}
+              value={{ id: traveller.id, index }}
+            >
+              {row}
+            </TravellerContext.Provider>
+          );
+        })}
+      </Component>
+    );
+  };
 }
 
 export function withTravellerLabel(Component): ComponentType {
-    return (props: any) => {
-        const ctx = useContext(TravellerContext)
-        if (!ctx) return <Component {...props} />
-        const text = `TRAVELLER ${ctx.index + 1}`
-        return <Component {...props} text={text} />
-    }
+  return (props: any) => {
+    const ctx = useContext(TravellerContext);
+    if (!ctx) return <Component {...props} />;
+    const text = `TRAVELLER ${ctx.index + 1}`;
+    return <Component {...props} text={text} />;
+  };
 }
 
 export function withTravellerName(Component): ComponentType {
-    return (props: any) => {
-        const [store, setStore] = useStore()
-        const ctx = useContext(TravellerContext)
-        if (!ctx) return <Component {...props} />
+  return (props: any) => {
+    const [store, setStore] = useStore();
+    const ctx = useContext(TravellerContext);
+    if (!ctx) return <Component {...props} />;
 
-        const traveller = getTravellerByContext(store, ctx)
-        const handleChange = (value: string) => {
-            const next = updateTravellerById(store, ctx.id, { name: value })
-            setStore({ travellers: next })
-        }
+    const traveller = getTravellerByContext(store, ctx);
+    const handleChange = (value: string) => {
+      const next = updateTravellerById(store, ctx.id, { name: value });
+      setStore({ travellers: next });
+    };
 
-        return (
-            <Component
-                {...props}
-                value={traveller?.name || ""}
-                onValueChange={handleChange}
-                onChange={(e: any) => handleChange(e.target.value)}
-                placeholder="Guest Name"
-            />
-        )
-    }
+    return (
+      <Component
+        {...props}
+        value={traveller?.name || ""}
+        onValueChange={handleChange}
+        onChange={(e: any) => handleChange(e.target.value)}
+        placeholder="Guest Name"
+      />
+    );
+  };
 }
 
 export function withTravellerSharing(Component): ComponentType {
-    return (props: any) => {
-        const [store, setStore] = useStore()
-        const ctx = useContext(TravellerContext)
-        const wrapperRef = useRef<HTMLDivElement>(null)
+  return (props: any) => {
+    const [store, setStore] = useStore();
+    const ctx = useContext(TravellerContext);
+    const wrapperRef = useRef<HTMLDivElement>(null);
 
-        if (!ctx) return <Component {...props} />
+    if (!ctx) return <Component {...props} />;
 
-        const traveller = getTravellerByContext(store, ctx)
-        const travellerTransport = traveller?.transport || store.transport || ""
-        const options = useMemo(
-            () => getSharingOptions(store.pricingData || [], store.date, travellerTransport),
-            [store.pricingData, store.date, travellerTransport]
-        )
+    const traveller = getTravellerByContext(store, ctx);
+    const travellerTransport = traveller?.transport || store.transport || "";
+    const options = useMemo(
+      () =>
+        getSharingOptions(
+          store.pricingData || [],
+          store.date,
+          travellerTransport,
+        ),
+      [store.pricingData, store.date, travellerTransport],
+    );
 
-        const handleChange = (value: string) => {
-            const normalized = normalizeSharing(value)
-            const next = updateTravellerById(store, ctx.id, { sharing: normalized })
-            setStore({ travellers: next })
-        }
+    const handleChange = (value: string) => {
+      const normalized = normalizeSharing(value);
+      const next = updateTravellerById(store, ctx.id, { sharing: normalized });
+      setStore({ travellers: next });
+    };
 
-        useEffect(() => {
-            if (!wrapperRef.current) return
-            const select = wrapperRef.current.querySelector("select") as HTMLSelectElement | null
-            if (!select) return
+    useEffect(() => {
+      if (!wrapperRef.current) return;
+      const select = wrapperRef.current.querySelector("select") as
+        | HTMLSelectElement
+        | null;
+      if (!select) return;
 
-            const signature = JSON.stringify(options)
-            if (select.getAttribute("data-populated") !== signature) {
-                populateDropdown(select, options)
-                select.setAttribute("data-populated", signature)
-            }
-        }, [options, ctx.id])
+      const signature = JSON.stringify(options);
+      if (select.getAttribute("data-populated") !== signature) {
+        populateDropdown(select, options);
+        select.setAttribute("data-populated", signature);
+      }
+    }, [options, ctx.id]);
 
-        useEffect(() => {
-            if (!traveller || traveller.sharing) return
-            const fallback = getDefaultSharingForDate(
-                store.pricingData || [],
-                store.date,
-                travellerTransport
-            )
-            if (!fallback) return
-            const next = updateTravellerById(store, ctx.id, { sharing: fallback })
-            setStore({ travellers: next })
-        }, [ctx.id, traveller?.sharing, travellerTransport, store.pricingData, store.date])
+    useEffect(() => {
+      if (!traveller || traveller.sharing) return;
+      const fallback = getDefaultSharingForDate(
+        store.pricingData || [],
+        store.date,
+        travellerTransport,
+      );
+      if (!fallback) return;
+      const next = updateTravellerById(store, ctx.id, { sharing: fallback });
+      setStore({ travellers: next });
+    }, [
+      ctx.id,
+      traveller?.sharing,
+      travellerTransport,
+      store.pricingData,
+      store.date,
+    ]);
 
-        return (
-            <div ref={wrapperRef} style={{ display: "contents" }}>
-                <Component
-                    {...props}
-                    value={traveller?.sharing || ""}
-                    onValueChange={handleChange}
-                    onChange={(e: any) => handleChange(e?.target?.value || "")}
-                />
-            </div>
-        )
-    }
+    return (
+      <div ref={wrapperRef} style={{ display: "contents" }}>
+        <Component
+          {...props}
+          value={traveller?.sharing || ""}
+          onValueChange={handleChange}
+          onChange={(e: any) => handleChange(e?.target?.value || "")}
+        />
+      </div>
+    );
+  };
 }
 
 export function withTravellerVehicleSelect(Component): ComponentType {
-    return (props: any) => {
-        const [store, setStore] = useStore()
-        const ctx = useContext(TravellerContext)
-        const wrapperRef = useRef<HTMLDivElement>(null)
+  return (props: any) => {
+    const [store, setStore] = useStore();
+    const ctx = useContext(TravellerContext);
+    const wrapperRef = useRef<HTMLDivElement>(null);
 
-        if (!ctx) return <Component {...props} />
+    if (!ctx) return <Component {...props} />;
 
-        const traveller = getTravellerByContext(store, ctx)
-        const options = useMemo(
-            () => getTransportOptions(store.pricingData || [], store.date),
-            [store.pricingData, store.date]
-        )
-        const hasMultipleVehicleOptions = options.length > 1
-        const selectedTransport = normalizeTravellerTransport(
+    const traveller = getTravellerByContext(store, ctx);
+    const options = useMemo(
+      () => getTransportOptions(store.pricingData || [], store.date),
+      [store.pricingData, store.date],
+    );
+    const hasMultipleVehicleOptions = options.length > 1;
+    const selectedTransport = normalizeTravellerTransport(
+      store.pricingData || [],
+      store.date,
+      traveller?.transport || "",
+      store.transport || "",
+    );
+
+    const handleChange = (value: string) => {
+      const normalized = normalizeTravellerTransport(
+        store.pricingData || [],
+        store.date,
+        value,
+        store.transport || "",
+      );
+      const sharingOptions = getSharingOptions(
+        store.pricingData || [],
+        store.date,
+        normalized,
+      );
+      const nextSharing =
+        traveller?.sharing && sharingOptions.includes(traveller.sharing)
+          ? traveller.sharing
+          : getDefaultSharingForDate(
             store.pricingData || [],
             store.date,
-            traveller?.transport || "",
-            store.transport || ""
-        )
+            normalized,
+          );
 
-        const handleChange = (value: string) => {
-            const normalized = normalizeTravellerTransport(
-                store.pricingData || [],
-                store.date,
-                value,
-                store.transport || ""
-            )
-            const sharingOptions = getSharingOptions(store.pricingData || [], store.date, normalized)
-            const nextSharing =
-                traveller?.sharing && sharingOptions.includes(traveller.sharing)
-                    ? traveller.sharing
-                    : getDefaultSharingForDate(store.pricingData || [], store.date, normalized)
+      const next = updateTravellerById(store, ctx.id, {
+        transport: normalized,
+        sharing: nextSharing,
+      });
+      setStore({ travellers: next });
+    };
 
-            const next = updateTravellerById(store, ctx.id, {
-                transport: normalized,
-                sharing: nextSharing,
-            })
-            setStore({ travellers: next })
-        }
+    useEffect(() => {
+      if (!wrapperRef.current) return;
+      const select = wrapperRef.current.querySelector("select") as
+        | HTMLSelectElement
+        | null;
+      if (!select) return;
 
-        useEffect(() => {
-            if (!wrapperRef.current) return
-            const select = wrapperRef.current.querySelector("select") as HTMLSelectElement | null
-            if (!select) return
+      const signature = JSON.stringify(options);
+      if (select.getAttribute("data-populated") !== signature) {
+        populateDropdown(select, options);
+        select.setAttribute("data-populated", signature);
+      }
+    }, [options, ctx.id]);
 
-            const signature = JSON.stringify(options)
-            if (select.getAttribute("data-populated") !== signature) {
-                populateDropdown(select, options)
-                select.setAttribute("data-populated", signature)
-            }
-        }, [options, ctx.id])
+    useEffect(() => {
+      if (
+        traveller &&
+        (!traveller.transport || traveller.transport !== selectedTransport)
+      ) {
+        const next = updateTravellerById(store, ctx.id, {
+          transport: selectedTransport,
+        });
+        setStore({ travellers: next });
+      }
+    }, [ctx.id, traveller?.transport, selectedTransport]);
 
-        useEffect(() => {
-            if (traveller && (!traveller.transport || traveller.transport !== selectedTransport)) {
-                const next = updateTravellerById(store, ctx.id, { transport: selectedTransport })
-                setStore({ travellers: next })
-            }
-        }, [ctx.id, traveller?.transport, selectedTransport])
-
-        return (
-            <div ref={wrapperRef} style={{ display: "contents" }}>
-                <Component
-                    {...props}
-                    value={selectedTransport || ""}
-                    onValueChange={handleChange}
-                    onChange={(e: any) => handleChange(e?.target?.value || "")}
-                    style={{
-                        ...(props.style || {}),
-                        ...(hasMultipleVehicleOptions
-                            ? {}
-                            : {
-                                display: "none",
-                                pointerEvents: "none",
-                            }),
-                    }}
-                />
-            </div>
-        )
-    }
+    return (
+      <div ref={wrapperRef} style={{ display: "contents" }}>
+        <Component
+          {...props}
+          value={selectedTransport || ""}
+          onValueChange={handleChange}
+          onChange={(e: any) => handleChange(e?.target?.value || "")}
+          style={{
+            ...(props.style || {}),
+            ...(hasMultipleVehicleOptions ? {} : {
+              display: "none",
+              pointerEvents: "none",
+            }),
+          }}
+        />
+      </div>
+    );
+  };
 }
 
 export function withRemoveTraveller(Component): ComponentType {
-    return (props: any) => {
-        const [store, setStore] = useStore()
-        const ctx = useContext(TravellerContext)
-        if (!ctx) return <Component {...props} />
+  return (props: any) => {
+    const [store, setStore] = useStore();
+    const ctx = useContext(TravellerContext);
+    if (!ctx) return <Component {...props} />;
 
-        if (ctx.index === 0) {
-            return <Component {...props} style={{ ...(props.style || {}), display: "none" }} />
-        }
-
-        return (
-            <Component
-                {...props}
-                onClick={(e: any) => {
-                    e?.preventDefault?.()
-                    e?.stopPropagation?.()
-                    const list = removeTravellerById(store, ctx.id)
-                    setStore({ travellers: list })
-                }}
-            />
-        )
+    if (ctx.index === 0) {
+      return (
+        <Component
+          {...props}
+          style={{ ...(props.style || {}), display: "none" }}
+        />
+      );
     }
+
+    return (
+      <Component
+        {...props}
+        onClick={(e: any) => {
+          e?.preventDefault?.();
+          e?.stopPropagation?.();
+          const list = removeTravellerById(store, ctx.id);
+          setStore({ travellers: list });
+        }}
+      />
+    );
+  };
 }
 
 export function withAddTraveller(Component): ComponentType {
-    return (props: any) => {
-        const [store, setStore] = useStore()
+  return (props: any) => {
+    const [store, setStore] = useStore();
 
-        return (
-            <Component
-                {...props}
-                onClick={(e: any) => {
-                    e?.preventDefault?.()
-                    e?.stopPropagation?.()
-                    const list = normalizeTravellers(store.travellers || [])
-                    const fallbackTransport = normalizeTravellerTransport(
-                        store.pricingData || [],
-                        store.date,
-                        store.transport || "",
-                        ""
-                    )
-                    const fallbackSharing = getDefaultSharingForDate(
-                        store.pricingData || [],
-                        store.date,
-                        fallbackTransport
-                    )
-                    list.push({
-                        id: nextTravellerId(store),
-                        name: "",
-                        transport: fallbackTransport,
-                        sharing: fallbackSharing,
-                    })
-                    setStore({ travellers: normalizeTravellers(list) })
-                }}
-            />
-        )
-    }
+    return (
+      <Component
+        {...props}
+        onClick={(e: any) => {
+          e?.preventDefault?.();
+          e?.stopPropagation?.();
+          const list = normalizeTravellers(store.travellers || []);
+          const fallbackTransport = normalizeTravellerTransport(
+            store.pricingData || [],
+            store.date,
+            store.transport || "",
+            "",
+          );
+          const fallbackSharing = getDefaultSharingForDate(
+            store.pricingData || [],
+            store.date,
+            fallbackTransport,
+          );
+          list.push({
+            id: nextTravellerId(store),
+            name: "",
+            transport: fallbackTransport,
+            sharing: fallbackSharing,
+          });
+          setStore({ travellers: normalizeTravellers(list) });
+        }}
+      />
+    );
+  };
 }
 
 export function withCheckoutContactName(Component): ComponentType {
-    return (props: any) => {
-        const [store, setStore] = useStore()
-        const handleChange = (value: string) => setStore({ contactName: value })
-        return (
-            <Component
-                {...props}
-                value={store.contactName || ""}
-                onValueChange={handleChange}
-                onChange={(e: any) => handleChange(e.target.value)}
-            />
-        )
-    }
+  return (props: any) => {
+    const [store, setStore] = useStore();
+    const handleChange = (value: string) => setStore({ contactName: value });
+    return (
+      <Component
+        {...props}
+        value={store.contactName || ""}
+        onValueChange={handleChange}
+        onChange={(e: any) => handleChange(e.target.value)}
+      />
+    );
+  };
 }
 
 export function withCheckoutContactPhone(Component): ComponentType {
-    return (props: any) => {
-        const [store, setStore] = useStore()
-        const handleChange = (value: string) =>
-            setStore({ contactPhone: String(value || "").replace(/[^\d\s\-+()]/g, "") })
+  return (props: any) => {
+    const [store, setStore] = useStore();
+    const handleChange = (value: string) =>
+      setStore({
+        contactPhone: String(value || "").replace(/[^\d\s\-+()]/g, ""),
+      });
 
-        return (
-            <Component
-                {...props}
-                value={store.contactPhone || ""}
-                onValueChange={handleChange}
-                onChange={(e: any) => handleChange(e.target.value)}
-            />
-        )
-    }
+    return (
+      <Component
+        {...props}
+        value={store.contactPhone || ""}
+        onValueChange={handleChange}
+        onChange={(e: any) => handleChange(e.target.value)}
+      />
+    );
+  };
 }
 
 export function withCheckoutContactEmail(Component): ComponentType {
-    return (props: any) => {
-        const [store, setStore] = useStore()
-        const handleChange = (value: string) => setStore({ contactEmail: value })
+  return (props: any) => {
+    const [store, setStore] = useStore();
+    const handleChange = (value: string) => setStore({ contactEmail: value });
 
-        return (
-            <Component
-                {...props}
-                value={store.contactEmail || ""}
-                onValueChange={handleChange}
-                onChange={(e: any) => handleChange(e.target.value)}
-            />
-        )
-    }
+    return (
+      <Component
+        {...props}
+        value={store.contactEmail || ""}
+        onValueChange={handleChange}
+        onChange={(e: any) => handleChange(e.target.value)}
+      />
+    );
+  };
 }
 
 export function withCouponCodeInput(Component): ComponentType {
-    return (props: any) => {
-        const [store, setStore] = useStore()
+  return (props: any) => {
+    const [store, setStore] = useStore();
 
-        const handleChange = (value: string) => {
-            setStore({ couponCode: String(value || "").toUpperCase().trimStart() })
-        }
+    const handleChange = (value: string) => {
+      setStore({ couponCode: String(value || "").toUpperCase().trimStart() });
+    };
 
-        return (
-            <Component
-                {...props}
-                value={store.couponCode || ""}
-                onValueChange={handleChange}
-                onChange={(e: any) => handleChange(e.target.value)}
-                placeholder="Enter coupon code"
-            />
-        )
-    }
+    return (
+      <Component
+        {...props}
+        value={store.couponCode || ""}
+        onValueChange={handleChange}
+        onChange={(e: any) => handleChange(e.target.value)}
+        placeholder="Enter coupon code"
+      />
+    );
+  };
 }
 
 export function withApplyCouponButton(Component): ComponentType {
-    return (props: any) => {
-        const [store, setStore] = useStore()
-        const [busy, setBusy] = useState(false)
-        const alreadyApplied = Boolean(store.appliedCoupon?.valid)
+  return (props: any) => {
+    const [store, setStore] = useStore();
+    const [busy, setBusy] = useState(false);
+    const alreadyApplied = Boolean(store.appliedCoupon?.valid);
 
-        if (alreadyApplied) {
-            return <Component {...props} style={{ ...(props.style || {}), display: "none" }} />
-        }
-
-        const applyCoupon = async () => {
-            if (store?.inviteOnly) {
-                setStore({
-                    couponMessageType: "error",
-                    couponMessage: "Coupon is not applicable for invite-only trips.",
-                    appliedCoupon: null,
-                })
-                return
-            }
-
-            const code = String(store.couponCode || "").trim().toUpperCase()
-            if (!code) {
-                setStore({
-                    couponMessageType: "error",
-                    couponMessage: "Enter a coupon code",
-                    appliedCoupon: null,
-                })
-                return
-            }
-
-            if (!store.tripId || !store.date) {
-                setStore({
-                    couponMessageType: "error",
-                    couponMessage: "Select trip date before applying coupon",
-                    appliedCoupon: null,
-                })
-                return
-            }
-
-            setBusy(true)
-            try {
-                const payload = {
-                    trip_id: store.tripId,
-                    departure_date: store.date,
-                    transport: store.transport || null,
-                    travellers: normalizeTravellers(store.travellers || []).map((t) => ({
-                        id: t.id,
-                        name: t.name,
-                        sharing: t.sharing,
-                        transport: t.transport || "",
-                    })),
-                    coupon_code: code,
-                    email: store.contactEmail || "",
-                }
-
-                const res = await fetch(`${SUPABASE_URL}/functions/v1/validate-coupon`, {
-                    method: "POST",
-                    headers: {
-                        "Content-Type": "application/json",
-                        apikey: SUPABASE_KEY,
-                        Authorization: `Bearer ${SUPABASE_KEY}`,
-                    },
-                    body: JSON.stringify(payload),
-                })
-
-                const data = await res.json().catch(() => ({}))
-
-                if (!res.ok || !data?.valid) {
-                    setStore({
-                        appliedCoupon: null,
-                        pricingBreakdown: buildLocalPricingBreakdown({
-                            ...store,
-                            appliedCoupon: null,
-                        }),
-                        couponMessageType: "error",
-                        couponMessage:
-                            data?.message || data?.error || `Coupon failed (HTTP ${res.status})`,
-                    })
-                    console.log("[Checkout] Coupon apply failed", data)
-                    return
-                }
-
-                const nextBreakdown = buildPricingBreakdownFromQuote(data, store)
-                const appliedCode = String(
-                    data.applied_discount_code || data.code || code || ""
-                )
-                    .trim()
-                    .toUpperCase()
-
-                setStore({
-                    appliedCoupon: {
-                        valid: true,
-                        code: data.code || code,
-                        discount_type: data.discount_type,
-                        discount_value: toNumber(data.discount_value),
-                        discount_amount: toNumber(data.discount_amount),
-                        min_subtotal: toNumber(data.min_subtotal),
-                        coupon_wins: Boolean(data.coupon_wins),
-                        final_applied_source:
-                            data.final_applied_source || data.applied_discount_source || "none",
-                        base_subtotal: nextBreakdown.base_subtotal,
-                        early_bird_discount_amount: nextBreakdown.early_bird_discount_amount,
-                        coupon_discount_amount: nextBreakdown.coupon_discount_amount,
-                        applied_discount_source: nextBreakdown.applied_discount_source,
-                        applied_discount_code: nextBreakdown.applied_discount_code,
-                        discount_amount_total: nextBreakdown.discount_amount_total,
-                        taxable_amount: nextBreakdown.taxable_amount,
-                        tax_amount: nextBreakdown.tax_amount,
-                        total_amount: nextBreakdown.total_amount,
-                        line_items: nextBreakdown.line_items,
-                        message: data.message,
-                    },
-                    couponCode: data.code || code,
-                    pricingBreakdown: nextBreakdown,
-                    couponMessageType: "success",
-                    couponMessage:
-                        data.message ||
-                        (nextBreakdown.early_bird_discount_amount > 0
-                            ? `Coupon ${appliedCode || data.code || code} applied with Early Bird`
-                            : `Coupon ${appliedCode || data.code || code} applied`),
-                })
-
-                console.log("[Checkout] Coupon apply success", data)
-            } catch (err: any) {
-                setStore({
-                    appliedCoupon: null,
-                    pricingBreakdown: buildLocalPricingBreakdown({
-                        ...store,
-                        appliedCoupon: null,
-                    }),
-                    couponMessageType: "error",
-                    couponMessage: "Could not validate coupon",
-                })
-                console.error("[Checkout] Coupon call error", err)
-            } finally {
-                setBusy(false)
-            }
-        }
-
-        return (
-            <Component
-                {...props}
-                text={busy ? "Applying..." : props.text || "Apply"}
-                onClick={(e: any) => {
-                    e?.preventDefault?.()
-                    e?.stopPropagation?.()
-                    if (!busy) applyCoupon()
-                }}
-                style={{
-                    ...(props.style || {}),
-                    opacity: busy ? 0.7 : 1,
-                    cursor: busy ? "wait" : "pointer",
-                }}
-            />
-        )
+    if (alreadyApplied) {
+      return (
+        <Component
+          {...props}
+          style={{ ...(props.style || {}), display: "none" }}
+        />
+      );
     }
+
+    const applyCoupon = () => {
+      if (store?.inviteOnly) {
+        setStore({
+          couponMessageType: "error",
+          couponMessage: "Coupon is not applicable for invite-only trips.",
+          appliedCoupon: null,
+        });
+        return;
+      }
+
+      const code = String(store.couponCode || "").trim().toUpperCase();
+      if (!code) {
+        setStore({
+          couponMessageType: "error",
+          couponMessage: "Enter a coupon code",
+          appliedCoupon: null,
+        });
+        return;
+      }
+
+      if (!store.tripId || !store.date) {
+        setStore({
+          couponMessageType: "error",
+          couponMessage: "Select trip date before applying coupon",
+          appliedCoupon: null,
+        });
+        return;
+      }
+
+      setBusy(true);
+      const payload = {
+        trip_id: store.tripId,
+        departure_date: store.date,
+        transport: store.transport || null,
+        travellers: normalizeTravellers(store.travellers || []).map((t) => ({
+          id: t.id,
+          name: t.name,
+          sharing: t.sharing,
+          transport: t.transport || "",
+        })),
+        coupon_code: code,
+        email: store.contactEmail || "",
+      };
+
+      fetchGateway("validate-coupon", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(payload),
+      })
+        .then((res) =>
+          res.json().catch(() => ({})).then((data) => ({ res, data }))
+        )
+        .then(({ res, data }) => {
+          if (!res.ok || !data?.valid) {
+            setStore({
+              appliedCoupon: null,
+              pricingBreakdown: buildLocalPricingBreakdown({
+                ...store,
+                appliedCoupon: null,
+              }),
+              couponMessageType: "error",
+              couponMessage: data?.message || data?.error ||
+                `Coupon failed (HTTP ${res.status})`,
+            });
+            console.log("[Checkout] Coupon apply failed", data);
+            return;
+          }
+
+          const nextBreakdown = buildPricingBreakdownFromQuote(data, store);
+          const appliedCode = String(
+            data.applied_discount_code || data.code || code || "",
+          )
+            .trim()
+            .toUpperCase();
+
+          setStore({
+            appliedCoupon: {
+              valid: true,
+              code: data.code || code,
+              discount_type: data.discount_type,
+              discount_value: toNumber(data.discount_value),
+              discount_amount: toNumber(data.discount_amount),
+              min_subtotal: toNumber(data.min_subtotal),
+              coupon_wins: Boolean(data.coupon_wins),
+              final_applied_source: data.final_applied_source ||
+                data.applied_discount_source || "none",
+              base_subtotal: nextBreakdown.base_subtotal,
+              early_bird_discount_amount:
+                nextBreakdown.early_bird_discount_amount,
+              coupon_discount_amount: nextBreakdown.coupon_discount_amount,
+              applied_discount_source: nextBreakdown.applied_discount_source,
+              applied_discount_code: nextBreakdown.applied_discount_code,
+              discount_amount_total: nextBreakdown.discount_amount_total,
+              taxable_amount: nextBreakdown.taxable_amount,
+              tax_amount: nextBreakdown.tax_amount,
+              total_amount: nextBreakdown.total_amount,
+              line_items: nextBreakdown.line_items,
+              message: data.message,
+            },
+            couponCode: data.code || code,
+            pricingBreakdown: nextBreakdown,
+            couponMessageType: "success",
+            couponMessage: data.message ||
+              (nextBreakdown.early_bird_discount_amount > 0
+                ? `Coupon ${
+                  appliedCode || data.code || code
+                } applied with Early Bird`
+                : `Coupon ${appliedCode || data.code || code} applied`),
+          });
+
+          console.log("[Checkout] Coupon apply success", data);
+        })
+        .catch((err: any) => {
+          setStore({
+            appliedCoupon: null,
+            pricingBreakdown: buildLocalPricingBreakdown({
+              ...store,
+              appliedCoupon: null,
+            }),
+            couponMessageType: "error",
+            couponMessage: "Could not validate coupon",
+          });
+          console.error("[Checkout] Coupon call error", err);
+        })
+        .finally(() => {
+          setBusy(false);
+        });
+    };
+
+    return (
+      <Component
+        {...props}
+        text={busy ? "Applying..." : props.text || "Apply"}
+        onClick={(e: any) => {
+          e?.preventDefault?.();
+          e?.stopPropagation?.();
+          if (!busy) applyCoupon();
+        }}
+        style={{
+          ...(props.style || {}),
+          opacity: busy ? 0.7 : 1,
+          cursor: busy ? "wait" : "pointer",
+        }}
+      />
+    );
+  };
 }
 
 export function withRemoveCouponButton(Component): ComponentType {
-    return (props: any) => {
-        const [store, setStore] = useStore()
-        const visible = Boolean(store.appliedCoupon?.valid)
+  return (props: any) => {
+    const [store, setStore] = useStore();
+    const visible = Boolean(store.appliedCoupon?.valid);
 
-        if (!visible) {
-            return <Component {...props} style={{ ...(props.style || {}), display: "none" }} />
-        }
-
-        return (
-            <Component
-                {...props}
-                onClick={(e: any) => {
-                    e?.preventDefault?.()
-                    e?.stopPropagation?.()
-                    setStore({
-                        appliedCoupon: null,
-                        pricingBreakdown: buildLocalPricingBreakdown({
-                            ...store,
-                            appliedCoupon: null,
-                        }),
-                        couponMessageType: "neutral",
-                        couponMessage: "Coupon removed",
-                    })
-                }}
-            />
-        )
+    if (!visible) {
+      return (
+        <Component
+          {...props}
+          style={{ ...(props.style || {}), display: "none" }}
+        />
+      );
     }
+
+    return (
+      <Component
+        {...props}
+        onClick={(e: any) => {
+          e?.preventDefault?.();
+          e?.stopPropagation?.();
+          setStore({
+            appliedCoupon: null,
+            pricingBreakdown: buildLocalPricingBreakdown({
+              ...store,
+              appliedCoupon: null,
+            }),
+            couponMessageType: "neutral",
+            couponMessage: "Coupon removed",
+          });
+        }}
+      />
+    );
+  };
 }
 
 export function withCouponMessage(Component): ComponentType {
-    return (props: any) => {
-        const [store] = useStore()
-        const totals = computeTotals(store)
-        let text = store.couponMessage || "Enter a coupon code and tap Apply."
-        if (store.appliedCoupon?.code) {
-            text =
-                totals.earlyBirdDiscount > 0
-                    ? `Coupon ${store.appliedCoupon.code} applied with Early Bird`
-                    : `Coupon ${store.appliedCoupon.code} applied`
-        }
-        return <Component {...props} text={text} />
+  return (props: any) => {
+    const [store] = useStore();
+    const totals = computeTotals(store);
+    let text = store.couponMessage || "Enter a coupon code and tap Apply.";
+    if (store.appliedCoupon?.code) {
+      text = totals.earlyBirdDiscount > 0
+        ? `Coupon ${store.appliedCoupon.code} applied with Early Bird`
+        : `Coupon ${store.appliedCoupon.code} applied`;
     }
+    return <Component {...props} text={text} />;
+  };
 }
 
 export function withCheckoutSummaryLineItems(Component): ComponentType {
-    return (props: any) => {
-        const [store] = useStore()
-        const rows = getSummaryLineRows(store)
-        const childrenArray = React.Children.toArray(props.children)
-        const template = childrenArray.find((child) => React.isValidElement(child)) as
-            | React.ReactElement
-            | undefined
+  return (props: any) => {
+    const [store] = useStore();
+    const rows = getSummaryLineRows(store);
+    const childrenArray = React.Children.toArray(props.children);
+    const template = childrenArray.find((child) =>
+      React.isValidElement(child)
+    ) as
+      | React.ReactElement
+      | undefined;
 
-        if (!template) return <Component {...props} />
-        if (rows.length === 0) {
-            return <Component {...props} style={{ ...(props.style || {}), display: "none" }} />
-        }
-
-        return (
-            <Component
-                {...props}
-                style={{ ...(props.style || {}), display: "flex", flexDirection: "column", gap: "8px" }}
-            >
-                {rows.map((row) => (
-                    <SummaryLineContext.Provider key={row.key} value={row}>
-                        {React.cloneElement(template, { key: row.key })}
-                    </SummaryLineContext.Provider>
-                ))}
-            </Component>
-        )
+    if (!template) return <Component {...props} />;
+    if (rows.length === 0) {
+      return (
+        <Component
+          {...props}
+          style={{ ...(props.style || {}), display: "none" }}
+        />
+      );
     }
+
+    return (
+      <Component
+        {...props}
+        style={{
+          ...(props.style || {}),
+          display: "flex",
+          flexDirection: "column",
+          gap: "8px",
+        }}
+      >
+        {rows.map((row) => (
+          <SummaryLineContext.Provider key={row.key} value={row}>
+            {React.cloneElement(template, { key: row.key })}
+          </SummaryLineContext.Provider>
+        ))}
+      </Component>
+    );
+  };
 }
 
 export function withCheckoutSummaryLineLabel(Component): ComponentType {
-    return (props: any) => {
-        const row = useContext(SummaryLineContext)
-        const text = row?.label || props.text || ""
-        return <Component {...props} text={text} />
-    }
+  return (props: any) => {
+    const row = useContext(SummaryLineContext);
+    const text = row?.label || props.text || "";
+    return <Component {...props} text={text} />;
+  };
 }
 
 export function withCheckoutSummaryLineAmount(Component): ComponentType {
-    return (props: any) => {
-        const row = useContext(SummaryLineContext)
-        const text = fmtINR(toNumber(row?.amount || 0))
-        return <Component {...props} text={text} />
-    }
+  return (props: any) => {
+    const row = useContext(SummaryLineContext);
+    const text = fmtINR(toNumber(row?.amount || 0));
+    return <Component {...props} text={text} />;
+  };
 }
 
 export function withCheckoutSubtotal(Component): ComponentType {
-    return withTextFromState((store) => fmtINR(computeTotals(store).subtotal))(Component)
+  return withTextFromState((store) => fmtINR(computeTotals(store).subtotal))(
+    Component,
+  );
 }
 
 export function withCheckoutSubtotalLabel(Component): ComponentType {
-    return withTextFromState((store) => subtotalLineItemsText(store), "Subtotal")(Component)
+  return withTextFromState((store) => subtotalLineItemsText(store), "Subtotal")(
+    Component,
+  );
 }
 
 export function withCheckoutDiscount(Component): ComponentType {
-    return withTextFromState((store) => {
-        const totals = computeTotals(store)
-        const primaryDiscount =
-            totals.earlyBirdDiscount > 0
-                ? totals.earlyBirdDiscount
-                : totals.couponDiscount > 0
-                    ? totals.couponDiscount
-                    : totals.discount
-        return `- ${fmtINR(primaryDiscount)}`
-    })(Component)
+  return withTextFromState((store) => {
+    const totals = computeTotals(store);
+    const primaryDiscount = totals.earlyBirdDiscount > 0
+      ? totals.earlyBirdDiscount
+      : totals.couponDiscount > 0
+      ? totals.couponDiscount
+      : totals.discount;
+    return `- ${fmtINR(primaryDiscount)}`;
+  })(Component);
 }
 
 export function withCheckoutDiscountLabel(Component): ComponentType {
-    return withTextFromState((store) => {
-        const totals = computeTotals(store)
-        if (totals.earlyBirdDiscount > 0) return "Early Bird"
-        if (totals.couponDiscount > 0 && totals.appliedDiscountCode) {
-            return `Coupon (${totals.appliedDiscountCode})`
-        }
-        return "Discount"
-    })(Component)
+  return withTextFromState((store) => {
+    const totals = computeTotals(store);
+    if (totals.earlyBirdDiscount > 0) return "Early Bird";
+    if (totals.couponDiscount > 0 && totals.appliedDiscountCode) {
+      return `Coupon (${totals.appliedDiscountCode})`;
+    }
+    return "Discount";
+  })(Component);
 }
 
 export function withCheckoutCouponCode(Component): ComponentType {
-    return (props: any) => {
-        const [store] = useStore()
-        const totals = computeTotals(store)
-        const hasCoupon = totals.couponDiscount > 0
-        if (!hasCoupon) {
-            return <Component {...props} text="" style={{ ...(props.style || {}), display: "none" }} />
-        }
-        return <Component {...props} text={`- ${fmtINR(totals.couponDiscount)}`} />
+  return (props: any) => {
+    const [store] = useStore();
+    const totals = computeTotals(store);
+    const hasCoupon = totals.couponDiscount > 0;
+    if (!hasCoupon) {
+      return (
+        <Component
+          {...props}
+          text=""
+          style={{ ...(props.style || {}), display: "none" }}
+        />
+      );
     }
+    return <Component {...props} text={`- ${fmtINR(totals.couponDiscount)}`} />;
+  };
+}
+
+export function withCouponCode(Component): ComponentType {
+  return withCheckoutCouponCode(Component);
+}
+
+export function withDiscountAmount(Component): ComponentType {
+  return withCheckoutDiscount(Component);
+}
+
+export function withTransportOption(Component): ComponentType {
+  return withTextFromState((store) => store.transport || "Seat in Coach")(
+    Component,
+  );
+}
+
+// Case-insensitive aliases for Framer compatibility
+export function withdiscountamount(Component): ComponentType {
+  return withDiscountAmount(Component);
+}
+export function withtransportoption(Component): ComponentType {
+  return withTransportOption(Component);
+}
+export function withcouponcode(Component): ComponentType {
+  return withCouponCode(Component);
 }
 
 export function withCheckoutTax(Component): ComponentType {
-    return withTextFromState((store) => fmtINR(computeTotals(store).tax))(Component)
+  return withTextFromState((store) => fmtINR(computeTotals(store).tax))(
+    Component,
+  );
 }
 
 export function withCheckoutTaxLabel(Component): ComponentType {
-    return withTextFromState(() => "Tax (5%)")(Component)
+  return withTextFromState(() => "Tax (5%)")(Component);
 }
 
 export function withCheckoutTaxValue(Component): ComponentType {
-    return withTextFromState((store) => fmtINR(computeTotals(store).tax))(Component)
+  return withTextFromState((store) => fmtINR(computeTotals(store).tax))(
+    Component,
+  );
 }
 
 export function withCheckoutTotal(Component): ComponentType {
-    // Checkout summary total should reflect amount payable now.
-    return withTextFromState((store) => fmtINR(computeTotals(store).payableNow))(Component)
+  return withTextFromState((store) => fmtINR(computeTotals(store).payableNow))(
+    Component,
+  );
 }
 
 export function withCheckoutValidationHint(Component): ComponentType {
-    return (props: any) => (
-        <Component {...props} text="" style={{ ...(props.style || {}), display: "none" }} />
-    )
+  return (props: any) => (
+    <Component
+      {...props}
+      text=""
+      style={{ ...(props.style || {}), display: "none" }}
+    />
+  );
 }
 
 function inferPaymentModeFromProps(props: any): PaymentMode {
-    const text = [
-        props?.text,
-        props?.label,
-        props?.title,
-        props?.name,
-        props?.id,
-        props?.pnMgUuoPi, // common TWN button label prop in Framer instances
-        props?.["aria-label"],
-        props?.ariaLabel,
-        props?.children,
-    ]
-        .map((entry) => readNodeText(entry))
-        .join(" ")
-        .toLowerCase()
+  const text = [
+    props?.text,
+    props?.label,
+    props?.title,
+    props?.name,
+    props?.id,
+    props?.pnMgUuoPi,
+    props?.["aria-label"],
+    props?.ariaLabel,
+    props?.children,
+  ]
+    .map((entry) => readNodeText(entry))
+    .join(" ")
+    .toLowerCase();
 
-    if (/25\s*%/.test(text) || /\bdeposit\b/.test(text) || /\bpartial\b/.test(text)) {
-        return "partial_25"
-    }
-    // Assume if we explicitly detect "full", it's full. Otherwise, assume full.
-    // Important: DO NOT rely on props.value or props.mode because Framer RadioGroup
-    // passes its CURRENT STATE value down to all children, which would override detection.
-    return "full"
-}
-
-function inferPaymentModeFromEvent(event: any): PaymentMode | null {
-    const target = event?.target as HTMLElement | null
-    if (!target) return null
-    const text = String(target.textContent || "").trim().toLowerCase()
-    if (!text) return null
-    if (/25\s*%/.test(text) || /\bdeposit\b/.test(text) || /\bpartial\b/.test(text)) {
-        return "partial_25"
-    }
-    if (/\bfull\b/.test(text)) return "full"
-    return null
-}
-
-function normalizePaymentModeValue(value: any, fallback: PaymentMode): PaymentMode {
-    const clean = String(value || "").trim().toLowerCase()
-    if (!clean) return fallback
-    if (clean === "partial_25" || clean === "partial") return "partial_25"
-    if (clean === "full") return "full"
-    if (/25\s*%/.test(clean) || /\bdeposit\b/.test(clean) || /\bpartial\b/.test(clean)) {
-        return "partial_25"
-    }
-    if (/\bfull\b/.test(clean)) return "full"
-    return fallback
+  if (
+    /25\s*%/.test(text) || /\bdeposit\b/.test(text) || /\bpartial\b/.test(text)
+  ) {
+    return "partial_25";
+  }
+  return "full";
 }
 
 export function withCheckoutPaymentMode(Component): ComponentType {
-    return (props: any) => {
-        const [store, setStore] = useStore()
-        const modeFromProps = inferPaymentModeFromProps(props)
-        // If the mode inferred from this element's text matches the store's mode, it's selected.
-        const isSelected = (store?.paymentMode || "full") === modeFromProps
+  return (props: any) => {
+    const [store, setStore] = useStore();
+    const isHydrated = useHydrated();
+    const modeFromProps = inferPaymentModeFromProps(props);
+    const isSelected = isHydrated
+      ? (store?.paymentMode || "full") === modeFromProps
+      : false;
 
-        const setModeToThis = () => setStore({ paymentMode: modeFromProps })
+    const setModeToThis = () => setStore({ paymentMode: modeFromProps });
 
-        return (
-            <Component
-                {...props}
-                // Do NOT override `value`; Framer relies on it internally for RadioGroups.
-                checked={isSelected}
-                onValueChange={setModeToThis}
-                onChange={(e: any) => {
-                    const checked = e?.target?.checked
-                    if (typeof checked === "boolean" && checked) {
-                        setModeToThis()
-                    } else if (e?.target?.value) {
-                        setModeToThis()
-                    }
-                }}
-                onClick={(e: any) => {
-                    props?.onClick?.(e)
-                    // Removed preventDefault/stopPropagation so Framer's natural animations/variants can play.
-                    setModeToThis()
-                }}
-                aria-pressed={isSelected}
-                role="radio"
-                aria-checked={isSelected}
-                data-active={isSelected ? "true" : "false"}
-                style={{
-                    ...(props.style || {}),
-                    cursor: "pointer",
-                    userSelect: "none",
-                    transition: "all 0.25s cubic-bezier(0.4, 0, 0.2, 1)",
-                    borderRadius: props.style?.borderRadius || "12px", // rounded corners to fit inside typical parent pill
-                    ...(isSelected
-                        ? {
-                              backgroundColor: "#1b91c9",
-                              borderColor: "#1b91c9",
-                              borderWidth: "1px",
-                              borderStyle: "solid",
-                              color: "#ffffff",
-                              WebkitTextFillColor: "white",
-                              boxShadow: "0 2px 8px rgba(27, 145, 201, 0.3)",
-                              fontWeight: "600",
-                          }
-                        : {
-                              backgroundColor: "transparent",
-                              borderColor: "transparent",
-                              borderWidth: "1px",
-                              borderStyle: "solid",
-                              color: "#494D4D",
-                              WebkitTextFillColor: "inherit",
-                              fontWeight: "500",
-                          }),
-                }}
-            />
-        )
-    }
+    return (
+      <Component
+        {...props}
+        checked={isSelected}
+        onValueChange={setModeToThis}
+        onChange={(e: any) => {
+          const checked = e?.target?.checked;
+          if (typeof checked === "boolean" && checked) {
+            setModeToThis();
+          } else if (e?.target?.value) {
+            setModeToThis();
+          }
+        }}
+        onClick={(e: any) => {
+          props?.onClick?.(e);
+          setModeToThis();
+        }}
+        aria-pressed={isSelected}
+        role="radio"
+        aria-checked={isSelected}
+        data-active={isSelected ? "true" : "false"}
+        style={{
+          ...(props.style || {}),
+          cursor: "pointer",
+          userSelect: "none",
+          transition: "all 0.25s cubic-bezier(0.4, 0, 0.2, 1)",
+          borderRadius: props.style?.borderRadius || "12px",
+          ...(isSelected
+            ? {
+              backgroundColor: "#1b91c9",
+              borderColor: "#1b91c9",
+              borderWidth: "1px",
+              borderStyle: "solid",
+              color: "#ffffff",
+              WebkitTextFillColor: "white",
+              boxShadow: "0 2px 8px rgba(27, 145, 201, 0.3)",
+              fontWeight: "600",
+            }
+            : {
+              backgroundColor: "transparent",
+              borderColor: "transparent",
+              borderWidth: "1px",
+              borderStyle: "solid",
+              color: "#494D4D",
+              WebkitTextFillColor: "inherit",
+              fontWeight: "500",
+            }),
+        }}
+      />
+    );
+  };
 }
 
 export function withCheckoutPayableNow(Component): ComponentType {
-    return withTextFromState((store) => fmtINR(computeTotals(store).payableNow))(Component)
+  return withTextFromState((store) => fmtINR(computeTotals(store).payableNow))(
+    Component,
+  );
 }
 
 export function withCheckoutDueAmount(Component): ComponentType {
-    return withTextFromState((store) => fmtINR(computeTotals(store).dueAmount))(Component)
+  return withTextFromState((store) => fmtINR(computeTotals(store).dueAmount))(
+    Component,
+  );
 }
 
 export function withCheckoutHideWhenNoDue(Component): ComponentType {
-    return (props: any) => {
-        const [store] = useStore()
-        const due = computeTotals(store).dueAmount
-        if (due <= 0) {
-            return <Component {...props} style={{ ...(props.style || {}), display: "none" }} />
-        }
-        return <Component {...props} />
+  return (props: any) => {
+    const [store] = useStore();
+    const isHydrated = useHydrated();
+    const due = isHydrated ? computeTotals(store).dueAmount : 0;
+    if (due <= 0) {
+      return (
+        <Component
+          {...props}
+          style={{ ...(props.style || {}), display: "none" }}
+        />
+      );
     }
+    return <Component {...props} />;
+  };
 }
 
 export function withCheckoutPaymentModeHint(Component): ComponentType {
-    return withTextFromState((store) => {
-        const totals = computeTotals(store)
-        if (totals.paymentMode === "partial_25") {
-            return "Pay a 25% deposit now. The remaining balance is collected on-site before departure."
-        }
-        return "Pay full amount now for instant paid-in-full confirmation."
-    })(Component)
+  return withTextFromState((store) => {
+    const totals = computeTotals(store);
+    if (totals.paymentMode === "partial_25") {
+      return "Pay a 25% deposit now. The remaining balance is collected on-site before departure.";
+    }
+    return "Pay full amount now for instant paid-in-full confirmation.";
+  })(Component);
 }
 
-// Hide coupon-specific rows/labels if no coupon is currently applied.
 export function withCheckoutHideWhenNoCoupon(Component): ComponentType {
-    return (props: any) => {
-        const [store] = useStore()
-        const totals = computeTotals(store)
-        const hasCoupon =
-            totals.couponDiscount > 0 &&
-            Boolean(String(totals.appliedDiscountCode || "").trim())
+  return (props: any) => {
+    const [store] = useStore();
+    const isHydrated = useHydrated();
+    const totals = computeTotals(store);
+    const hasCoupon = isHydrated &&
+      totals.couponDiscount > 0 &&
+      Boolean(String(totals.appliedDiscountCode || "").trim());
 
-        if (!hasCoupon) {
-            return <Component {...props} style={{ ...(props.style || {}), display: "none" }} />
-        }
-        return <Component {...props} />
+    if (!hasCoupon) {
+      return (
+        <Component
+          {...props}
+          style={{ ...(props.style || {}), display: "none" }}
+        />
+      );
     }
+    return <Component {...props} />;
+  };
 }
 
-// Hide discount rows when discount is zero (or no coupon effect).
 export function withCheckoutHideWhenNoDiscount(Component): ComponentType {
-    return (props: any) => {
-        const [store] = useStore()
-        const hasDiscount = computeTotals(store).discount > 0
+  return (props: any) => {
+    const [store] = useStore();
+    const isHydrated = useHydrated();
+    const hasDiscount = isHydrated ? computeTotals(store).discount > 0 : false;
 
-        if (!hasDiscount) {
-            return <Component {...props} style={{ ...(props.style || {}), display: "none" }} />
-        }
-        return <Component {...props} />
+    if (!hasDiscount) {
+      return (
+        <Component
+          {...props}
+          style={{ ...(props.style || {}), display: "none" }}
+        />
+      );
     }
+    return <Component {...props} />;
+  };
 }
 
 export function withCheckoutPayButton(Component): ComponentType {
-    return (props: any) => {
-        const [store, setStore] = useStore()
-        const totals = computeTotals(store)
-        const errors = getValidationErrors(store)
-        const isValid = errors.length === 0
+  return (props: any) => {
+    const [store, setStore] = useStore();
+    const totals = computeTotals(store);
+    const errors = getValidationErrors(store);
+    const isValid = errors.length === 0;
 
-        const submit = async () => {
-            if (!isValid || store.submitting) return
+    const submit = () => {
+      if (!isValid || store.submitting) return;
 
-            if (store?.inviteOnly) {
-                showInlineError("This trip is invite-only. Please contact support to book.")
-                return
+      if (store?.inviteOnly) {
+        showInlineError(
+          "This trip is invite-only. Please contact support to book.",
+        );
+        return;
+      }
+
+      setStore({ submitting: true });
+      console.log("[Checkout] Pay initiated", {
+        tripId: store.tripId,
+        date: store.date,
+        transport: store.transport,
+        coupon: store.appliedCoupon?.code || null,
+        total: totals.total,
+        paymentMode: totals.paymentMode,
+        payableNow: totals.payableNow,
+        dueAmount: totals.dueAmount,
+      });
+
+      const fallbackName = readInputValue([
+        'input[name="contact_name"]',
+        'input[name="name"]',
+        'input[placeholder*="name" i]',
+      ]);
+      const fallbackPhone = readInputValue([
+        'input[name="contact_phone"]',
+        'input[name="phone"]',
+        'input[type="tel"]',
+        'input[placeholder*="phone" i]',
+        'input[placeholder*="number" i]',
+      ]);
+      const fallbackEmail = readInputValue([
+        'input[name="contact_email"]',
+        'input[name="email"]',
+        'input[type="email"]',
+        'input[placeholder*="email" i]',
+      ]);
+
+      const contactName = firstNonEmpty(store.contactName, fallbackName);
+      const contactPhone = firstNonEmpty(store.contactPhone, fallbackPhone);
+      const contactEmail = firstNonEmpty(store.contactEmail, fallbackEmail);
+      const normalizedTravellers = normalizeTravellers(store.travellers || [])
+        .map((t) => ({
+          id: t.id,
+          name: String(t.name || "").trim(),
+          sharing: String(t.sharing || "").trim(),
+          transport: String(t.transport || "").trim(),
+        }));
+
+      const payload = {
+        trip_id: store.tripId,
+        date: store.date,
+        departure_date: store.date,
+        transport: store.transport || null,
+        travellers: normalizedTravellers,
+        traveller_details: normalizedTravellers,
+        travellers_count: normalizedTravellers.length,
+        name: contactName,
+        email: contactEmail,
+        phone: contactPhone,
+        amount: totals.payableNow,
+        total_amount: totals.total,
+        payable_now_amount: totals.payableNow,
+        due_amount: totals.dueAmount,
+        tax_amount: totals.tax,
+        payment_breakdown: totals.breakdown,
+        currency: "INR",
+        created_at: new Date().toISOString(),
+        payment_mode: totals.paymentMode,
+        coupon_code: store.appliedCoupon?.code || null,
+        pricing_snapshot: {
+          subtotal_amount: totals.subtotal,
+          discount_amount: totals.discount,
+          applied_discount_source: totals.appliedDiscountSource,
+          applied_discount_code: totals.appliedDiscountCode,
+          tax_amount: totals.tax,
+          total_amount: totals.total,
+          payable_now_amount: totals.payableNow,
+          due_amount: totals.dueAmount,
+          payment_mode: totals.paymentMode,
+        },
+      };
+
+      const headers = { "Content-Type": "application/json" };
+
+      const executeCreateBooking = (body: string, isJson: boolean = true) => {
+        const fetchCall = fetchGateway("create-booking", {
+          method: "POST",
+          headers: {
+            ...headers,
+            "Content-Type": isJson
+              ? "application/json"
+              : "application/x-www-form-urlencoded",
+          },
+          body,
+        });
+
+        return fetchCall
+          .then((res) => {
+            return res.json().then((data) => ({ res, data }));
+          })
+          .then(({ res, data }) => {
+            const legacyMissingFieldsError = typeof data?.error === "string" &&
+              (data.error.includes(
+                "Missing required fields (trip_id, date, travellers, amount, email, name)",
+              ) ||
+                data.error.includes(
+                  "Missing required fields (trip_id, departure_date, travellers, name, email)",
+                ));
+
+            if (!res.ok && legacyMissingFieldsError && isJson) {
+              const form = new URLSearchParams();
+              form.set("trip_id", String(payload.trip_id || ""));
+              form.set("date", String(payload.date || ""));
+              form.set("departure_date", String(payload.departure_date || ""));
+              form.set("amount", String(payload.amount || ""));
+              form.set("email", String(payload.email || ""));
+              form.set("name", String(payload.name || ""));
+              form.set("phone", String(payload.phone || ""));
+              form.set("transport", String(payload.transport || ""));
+              form.set("travellers", JSON.stringify(payload.travellers || []));
+              form.set("payment_mode", String(payload.payment_mode || "full"));
+              form.set("coupon_code", String(payload.coupon_code || ""));
+              form.set(
+                "pricing_snapshot",
+                JSON.stringify(payload.pricing_snapshot || {}),
+              );
+              return executeCreateBooking(form.toString(), false);
             }
 
-            setStore({ submitting: true })
-            console.log("[Checkout] Pay initiated", {
-                tripId: store.tripId,
-                date: store.date,
-                transport: store.transport,
-                coupon: store.appliedCoupon?.code || null,
-                total: totals.total,
-                paymentMode: totals.paymentMode,
-                payableNow: totals.payableNow,
-                dueAmount: totals.dueAmount,
-            })
-
-            const fallbackName = readInputValue([
-                'input[name="contact_name"]',
-                'input[name="name"]',
-                'input[placeholder*="name" i]',
-            ])
-            const fallbackPhone = readInputValue([
-                'input[name="contact_phone"]',
-                'input[name="phone"]',
-                'input[type="tel"]',
-                'input[placeholder*="phone" i]',
-                'input[placeholder*="number" i]',
-            ])
-            const fallbackEmail = readInputValue([
-                'input[name="contact_email"]',
-                'input[name="email"]',
-                'input[type="email"]',
-                'input[placeholder*="email" i]',
-            ])
-
-            const contactName = firstNonEmpty(store.contactName, fallbackName)
-            const contactPhone = firstNonEmpty(store.contactPhone, fallbackPhone)
-            const contactEmail = firstNonEmpty(store.contactEmail, fallbackEmail)
-            const normalizedTravellers = normalizeTravellers(store.travellers || []).map((t) => ({
-                id: t.id,
-                name: String(t.name || "").trim(),
-                sharing: String(t.sharing || "").trim(),
-                transport: String(t.transport || "").trim(),
-            }))
-
-            const payload = {
-                trip_id: store.tripId,
-                date: store.date,
-                departure_date: store.date,
-                transport: store.transport || null,
-                travellers: normalizedTravellers,
-                traveller_details: normalizedTravellers,
-                travellers_count: normalizedTravellers.length,
-                name: contactName,
-                email: contactEmail,
-                phone: contactPhone,
-                amount: totals.payableNow,
-                total_amount: totals.total,
-                payable_now_amount: totals.payableNow,
-                due_amount: totals.dueAmount,
-                tax_amount: totals.tax,
-                payment_breakdown: totals.breakdown,
-                currency: "INR",
-                created_at: new Date().toISOString(),
-                payment_mode: totals.paymentMode,
-                coupon_code: store.appliedCoupon?.code || null,
-                pricing_snapshot: {
-                    subtotal_amount: totals.subtotal,
-                    discount_amount: totals.discount,
-                    applied_discount_source: totals.appliedDiscountSource,
-                    applied_discount_code: totals.appliedDiscountCode,
-                    tax_amount: totals.tax,
-                    total_amount: totals.total,
-                    payable_now_amount: totals.payableNow,
-                    due_amount: totals.dueAmount,
-                    payment_mode: totals.paymentMode,
-                },
+            if (!res.ok) {
+              console.error("[Checkout] create-booking failed", {
+                status: res.status,
+                payload,
+                response: data,
+              });
+              showInlineError(
+                data?.error || `Payment setup failed (HTTP ${res.status})`,
+              );
+              setStore({ submitting: false });
+              return;
             }
 
-            try {
-                const headers = {
-                    "Content-Type": "application/json",
-                    apikey: SUPABASE_KEY,
-                    Authorization: `Bearer ${SUPABASE_KEY}`,
-                }
-
-                let res = await fetch(`${SUPABASE_URL}/functions/v1/create-booking`, {
-                    method: "POST",
-                    headers,
-                    body: JSON.stringify(payload),
-                })
-
-                let data = await res.json().catch(() => ({}))
-                const legacyMissingFieldsError =
-                    typeof data?.error === "string" &&
-                    (data.error.includes(
-                        "Missing required fields (trip_id, date, travellers, amount, email, name)"
-                    ) ||
-                        data.error.includes(
-                            "Missing required fields (trip_id, departure_date, travellers, name, email)"
-                        ))
-
-                if (!res.ok && legacyMissingFieldsError) {
-                    const form = new URLSearchParams()
-                    form.set("trip_id", String(payload.trip_id || ""))
-                    form.set("date", String(payload.date || ""))
-                    form.set("departure_date", String(payload.departure_date || ""))
-                    form.set("amount", String(payload.amount || ""))
-                    form.set("email", String(payload.email || ""))
-                    form.set("name", String(payload.name || ""))
-                    form.set("phone", String(payload.phone || ""))
-                    form.set("transport", String(payload.transport || ""))
-                    form.set("travellers", JSON.stringify(payload.travellers || []))
-                    form.set("payment_mode", String(payload.payment_mode || "full"))
-                    form.set("coupon_code", String(payload.coupon_code || ""))
-                    form.set("pricing_snapshot", JSON.stringify(payload.pricing_snapshot || {}))
-
-                    res = await fetch(`${SUPABASE_URL}/functions/v1/create-booking`, {
-                        method: "POST",
-                        headers: {
-                            apikey: SUPABASE_KEY,
-                            Authorization: `Bearer ${SUPABASE_KEY}`,
-                            "Content-Type": "application/x-www-form-urlencoded",
-                        },
-                        body: form.toString(),
-                    })
-                    data = await res.json().catch(() => ({}))
-                }
-
-                if (!res.ok) {
-                    console.error("[Checkout] create-booking failed", {
-                        status: res.status,
-                        payload,
-                        response: data,
-                    })
-                    showInlineError(data?.error || `Payment setup failed (HTTP ${res.status})`)
-                    setStore({ submitting: false })
-                    return
-                }
-
-                const payu = data?.payu
-                if (!payu?.action) {
-                    showInlineError("Payment gateway payload missing")
-                    setStore({ submitting: false })
-                    return
-                }
-
-                const form = document.createElement("form")
-                form.method = "POST"
-                form.action = payu.action
-
-                Object.entries(payu).forEach(([key, value]) => {
-                    if (key === "action") return
-                    const input = document.createElement("input")
-                    input.type = "hidden"
-                    input.name = key
-                    input.value = String(value)
-                    form.appendChild(input)
-                })
-
-                document.body.appendChild(form)
-                form.submit()
-            } catch (err) {
-                console.error("[Checkout] pay error", err)
-                showInlineError("Could not start payment")
-                setStore({ submitting: false })
+            const payu = data?.payu;
+            if (!payu?.action) {
+              showInlineError("Payment gateway payload missing");
+              setStore({ submitting: false });
+              return;
             }
-        }
 
-        return (
-            <div style={{ position: "relative", width: "100%" }}>
-                <Component
-                    {...props}
-                    text={
-                        store?.submitting
-                            ? "Processing..."
-                            : `Pay ${fmtINR(totals.payableNow)} now`
-                    }
-                    onClick={submit}
-                    style={{
-                        ...(props.style || {}),
-                        width: "100%",
-                        opacity: isValid ? 1 : 0.6,
-                        cursor: isValid ? "pointer" : "not-allowed",
-                    }}
-                />
-                {!isValid && (
-                    <div
-                        onClick={(e: any) => {
-                            e?.preventDefault?.()
-                            e?.stopPropagation?.()
-                            showInlineError(errors)
-                        }}
-                        style={{
-                            position: "absolute",
-                            inset: 0,
-                            zIndex: 10,
-                            cursor: "not-allowed",
-                        }}
-                    />
-                )}
-            </div>
-        )
-    }
+            const form = document.createElement("form");
+            form.method = "POST";
+            form.action = payu.action;
+
+            Object.entries(payu).forEach(([key, value]) => {
+              if (key === "action") return;
+              const input = document.createElement("input");
+              input.type = "hidden";
+              input.name = key;
+              input.value = String(value);
+              form.appendChild(input);
+            });
+
+            document.body.appendChild(form);
+            form.submit();
+          })
+          .catch((err) => {
+            console.error("[Checkout] pay error", err);
+            showInlineError("Could not start payment");
+            setStore({ submitting: false });
+          });
+      };
+
+      executeCreateBooking(JSON.stringify(payload));
+    };
+
+    return (
+      <div style={{ position: "relative", width: "100%" }}>
+        <Component
+          {...props}
+          text={store?.submitting
+            ? "Processing..."
+            : `Pay ${fmtINR(totals.payableNow)} now`}
+          onClick={submit}
+          style={{
+            ...(props.style || {}),
+            width: "100%",
+            opacity: isValid ? 1 : 0.6,
+            cursor: isValid ? "pointer" : "not-allowed",
+          }}
+        />
+        {!isValid && (
+          <div
+            onClick={(e: any) => {
+              e?.preventDefault?.();
+              e?.stopPropagation?.();
+              showInlineError(errors);
+            }}
+            style={{
+              position: "absolute",
+              inset: 0,
+              zIndex: 10,
+              cursor: "not-allowed",
+            }}
+          />
+        )}
+      </div>
+    );
+  };
 }
 
 function getTripSlugFromPathname(pathname: string): string {
-    const clean = String(pathname || "")
-    const match = clean.match(/\/upcoming-trips\/([^/?#]+)/i)
-    return match?.[1] ? decodeURIComponent(match[1]) : ""
+  const clean = String(pathname || "");
+  const match = clean.match(/\/upcoming-trips\/([^/?#]+)/i);
+  return match?.[1] ? decodeURIComponent(match[1]) : "";
 }
 
 function normalizeSlug(value: any): string {
-    const raw = String(value || "").trim().toLowerCase()
-    if (!raw) return ""
+  const raw = String(value || "").trim().toLowerCase();
+  if (!raw) return "";
 
-    const fromUrl = raw.match(/\/upcoming-trips\/([^/?#]+)/i)
-    const candidate = fromUrl?.[1] ? decodeURIComponent(fromUrl[1]) : raw
-    return /^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(candidate) ? candidate : ""
+  const fromUrl = raw.match(/\/upcoming-trips\/([^/?#]+)/i);
+  const candidate = fromUrl?.[1] ? decodeURIComponent(fromUrl[1]) : raw;
+  return /^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(candidate) ? candidate : "";
 }
 
 function normalizeTripId(value: any): string {
-    const clean = String(value || "").trim()
-    if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(clean)) {
-        return ""
-    }
-    return clean
+  const clean = String(value || "").trim();
+  if (
+    !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
+      .test(clean)
+  ) {
+    return "";
+  }
+  return clean;
 }
 
 function readTripIdCandidate(props: any): string {
-    return normalizeTripId(
-        props?.tripId ||
-        props?.["data-trip-id"] ||
-        props?.text ||
-        (typeof props?.children === "string" ? props.children : "")
-    )
+  return normalizeTripId(
+    props?.tripId ||
+      props?.["data-trip-id"] ||
+      props?.text ||
+      (typeof props?.children === "string" ? props.children : ""),
+  );
 }
 
 function readTripSlugCandidate(props: any): string {
-    return normalizeSlug(
-        props?.slug ||
-        props?.["data-trip-slug"] ||
-        props?.href ||
-        props?.link ||
-        props?.text ||
-        (typeof props?.children === "string" ? props.children : "")
-    )
+  return normalizeSlug(
+    props?.slug ||
+      props?.["data-trip-slug"] ||
+      props?.href ||
+      props?.link ||
+      props?.text ||
+      (typeof props?.children === "string" ? props.children : ""),
+  );
 }
 
 export function withTripIdSource(Component): ComponentType {
-    return (props: any) => {
-        const nextTripId = readTripIdCandidate(props)
+  return (props: any) => {
+    const nextTripId = readTripIdCandidate(props);
 
-        useEffect(() => {
-            if (nextTripId) {
-                forcedTripId = nextTripId
-            }
-        }, [nextTripId])
+    useEffect(() => {
+      if (nextTripId) {
+        forcedTripId = nextTripId;
+      }
+    }, [nextTripId]);
 
-        return <Component {...props} />
-    }
+    return <Component {...props} />;
+  };
 }
 
 function useTripDisplayData(props?: any) {
-    const [data, setData] = useState<any>(null)
-    const propTripId = readTripIdCandidate(props)
-    const propSlug = readTripSlugCandidate(props)
+  const [data, setData] = useState<any>(null);
+  const propTripId = readTripIdCandidate(props);
+  const propSlug = readTripSlugCandidate(props);
 
-    useEffect(() => {
-        let disposed = false
-        const query = new URLSearchParams(window.location.search)
-        const slugFromPath = getTripSlugFromPathname(window.location.pathname)
-        const tripId =
-            propTripId || query.get("tripId") || query.get("trip_id") || forcedTripId || ""
-        const slug = propSlug || slugFromPath || (tripId ? "" : query.get("slug") || "")
+  useEffect(() => {
+    let disposed = false;
+    const query = new URLSearchParams(window.location.search);
+    const slugFromPath = getTripSlugFromPathname(window.location.pathname);
+    const tripId = propTripId || query.get("tripId") || query.get("trip_id") ||
+      forcedTripId || "";
+    const slug = propSlug || slugFromPath ||
+      (tripId ? "" : query.get("slug") || "");
 
-        fetchTripDisplayPrice({ slug, tripId })
-            .then((payload) => {
-                if (disposed) return
-                setData(payload || null)
-            })
-            .catch(() => {
-                if (disposed) return
-                setData(null)
-            })
+    fetchTripDisplayPrice({ slug, tripId })
+      .then((payload) => {
+        if (disposed) return;
+        setData(payload || null);
+      })
+      .catch(() => {
+        if (disposed) return;
+        setData(null);
+      });
 
-        return () => {
-            disposed = true
-        }
-    }, [propTripId, propSlug])
+    return () => {
+      disposed = true;
+    };
+  }, [propTripId, propSlug]);
 
-    return data
+  return data;
 }
 
 export function withTripPrimaryPrice(Component): ComponentType {
-    return (props: any) => {
-        const tripData = useTripDisplayData(props)
-        const summary = tripData?.display_summary
-        const value = toNumber(summary?.payable_price)
-        const text = value > 0 ? fmtINR(value) : "₹0"
-        return <Component {...props} text={text} />
-    }
+  return (props: any) => {
+    const tripData = useTripDisplayData(props);
+    const summary = tripData?.display_summary;
+    const value = toNumber(summary?.payable_price);
+    const text = value > 0 ? fmtINR(value) : "\u20b90";
+    return <Component {...props} text={text} />;
+  };
 }
 
 export function withTripStrikePrice(Component): ComponentType {
-    return (props: any) => {
-        const tripData = useTripDisplayData(props)
-        const summary = tripData?.display_summary
-        const base = toNumber(summary?.base_price)
-        const payable = toNumber(summary?.payable_price)
-        const hasDiscount = Boolean(summary?.has_discount) && base > payable && payable > 0
-        if (!hasDiscount) {
-            return <Component {...props} text="" visible={false} />
-        }
-        const text = fmtINR(base)
-        return (
-            <Component
-                {...props}
-                text={text}
-                visible={true}
-                style={{
-                    ...(props.style || {}),
-                    textDecorationLine: "line-through",
-                    textDecoration: "line-through",
-                }}
-            />
-        )
+  return (props: any) => {
+    const tripData = useTripDisplayData(props);
+    const summary = tripData?.display_summary;
+    const base = toNumber(summary?.base_price);
+    const payable = toNumber(summary?.payable_price);
+    const hasDiscount = Boolean(summary?.has_discount) && base > payable &&
+      payable > 0;
+    if (!hasDiscount) {
+      return <Component {...props} text="" visible={false} />;
     }
+    const text = fmtINR(base);
+    return (
+      <Component
+        {...props}
+        text={text}
+        visible={true}
+        style={{
+          ...(props.style || {}),
+          textDecorationLine: "line-through",
+          textDecoration: "line-through",
+        }}
+      />
+    );
+  };
 }
 
 export function withTripSaveBadge(Component): ComponentType {
-    return (props: any) => {
-        const tripData = useTripDisplayData(props)
-        const summary = tripData?.display_summary
-        const save = toNumber(summary?.save_amount)
-        const hasDiscount = Boolean(summary?.has_discount) && save > 0
-        if (!hasDiscount) {
-            return (
-                <Component
-                    {...props}
-                    text=""
-                    style={{ ...(props.style || {}), display: "none", pointerEvents: "none" }}
-                />
-            )
-        }
-        const text = `Save ${fmtINR(save)}`
-        return <Component {...props} text={text} visible={true} />
+  return (props: any) => {
+    const tripData = useTripDisplayData(props);
+    const summary = tripData?.display_summary;
+    const save = toNumber(summary?.save_amount);
+    const hasDiscount = Boolean(summary?.has_discount) && save > 0;
+    if (!hasDiscount) {
+      return (
+        <Component
+          {...props}
+          text=""
+          style={{
+            ...(props.style || {}),
+            display: "none",
+            pointerEvents: "none",
+          }}
+        />
+      );
     }
+    const text = `Save ${fmtINR(save)}`;
+    return <Component {...props} text={text} visible={true} />;
+  };
 }
 
 export function withTripHideWhenNoDiscount(Component): ComponentType {
-    return (props: any) => {
-        const tripData = useTripDisplayData(props)
-        const summary = tripData?.display_summary
-        const hasDiscount = Boolean(summary?.has_discount) && toNumber(summary?.save_amount) > 0
-        if (!hasDiscount) {
-            return (
-                <Component
-                    {...props}
-                    style={{ ...(props.style || {}), display: "none", pointerEvents: "none" }}
-                />
-            )
-        }
-        return <Component {...props} />
+  return (props: any) => {
+    const tripData = useTripDisplayData(props);
+    const summary = tripData?.display_summary;
+    const hasDiscount = Boolean(summary?.has_discount) &&
+      toNumber(summary?.save_amount) > 0;
+    if (!hasDiscount) {
+      return (
+        <Component
+          {...props}
+          style={{
+            ...(props.style || {}),
+            display: "none",
+            pointerEvents: "none",
+          }}
+        />
+      );
     }
+    return <Component {...props} />;
+  };
 }
 
 export function withTripStartsFromText(Component): ComponentType {
-    return (props: any) => {
-        const text = "Starts from"
-        return <Component {...props} text={text} />
-    }
+  return (props: any) => {
+    const text = "Starts from";
+    return <Component {...props} text={text} />;
+  };
 }
 
 export function withTripNextBatchText(Component): ComponentType {
-    return (props: any) => {
-        const tripData = useTripDisplayData(props)
-        const nextBatchLabel = formatNextBatchDate(tripData?.next_batch_date)
-        if (!nextBatchLabel) {
-            return <Component {...props} text="" visible={false} />
-        }
-
-        const text = `Next batch - ${nextBatchLabel}`
-        return <Component {...props} text={text} visible={true} />
+  return (props: any) => {
+    const tripData = useTripDisplayData(props);
+    const nextBatchLabel = formatNextBatchDate(tripData?.next_batch_date);
+    if (!nextBatchLabel) {
+      return <Component {...props} text="" visible={false} />;
     }
+
+    const text = `Next batch - ${nextBatchLabel}`;
+    return <Component {...props} text={text} visible={true} />;
+  };
 }

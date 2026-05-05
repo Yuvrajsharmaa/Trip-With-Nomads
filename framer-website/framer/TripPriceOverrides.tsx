@@ -1,363 +1,327 @@
-import React from "react"
-import type { ComponentType } from "react"
+import React from "react";
+import type { ComponentType } from "react";
 
-const { useEffect, useState } = React
+const { useEffect, useState, useMemo } = React;
 
-type RuntimeEnv = "production" | "development"
-type RuntimeConfig = {
-    siteBaseUrl: string
-    supabaseUrl: string
-    supabaseAnonKey: string
+/**
+ * useHydrated: A helper hook to prevent React hydration mismatches (#418).
+ * Ensures that components render the same content on server and first client pass.
+ */
+function useHydrated() {
+  const [hydrated, setHydrated] = useState(false);
+  useEffect(() => setHydrated(true), []);
+  return hydrated;
 }
 
-const RUNTIME_CONFIG: Record<RuntimeEnv, RuntimeConfig> = {
-    production: {
-        siteBaseUrl: "https://tripwithnomads.com",
-        supabaseUrl: "https://jxozzvwvprmnhvafmpsa.supabase.co",
-        supabaseAnonKey:
-            "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imp4b3p6dnd2cHJtbmh2YWZtcHNhIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjgwNTg2NjIsImV4cCI6MjA4MzYzNDY2Mn0.KpVa9dWlJEguL1TA00Tf4QDpziJ1mgA2I0f4_l-vlOk",
+const CURRENT_RUNTIME =
+  (typeof window !== "undefined"
+    ? (window as any).__TWN_RUNTIME_CONFIG__
+    : null) || {
+    siteBaseUrl: (typeof window !== "undefined" &&
+        (window.location.hostname.includes("framer.app") ||
+          window.location.hostname.includes("framer.website")))
+      ? "https://maroon-aside-814100.framer.app"
+      : "https://tripwithnomads.com",
+    gatewayUrl: (typeof window !== "undefined" &&
+        (window.location.hostname.includes("framer.app") ||
+          window.location.hostname.includes("framer.website")))
+      ? "https://twn-checkout-gateway-staging.tripwithnomads-crm.workers.dev"
+      : "https://twn-checkout-gateway.tripwithnomads-crm.workers.dev",
+  };
+
+/**
+ * fetchGateway: Secure proxy wrapper for API calls.
+ * Mandates the use of the Cloudflare gateway to avoid direct Supabase exposure.
+ */
+function buildGatewayUrl(path: string, params?: URLSearchParams): string {
+  const base = String(CURRENT_RUNTIME.gatewayUrl || "").trim().replace(
+    /\/+$/,
+    "",
+  );
+  const endpoint = String(path || "").trim().replace(/^\/+/, "");
+  const query = params?.toString() || "";
+  return `${base}/${endpoint}${query ? `?${query}` : ""}`;
+}
+
+function fetchGateway(
+  path: string,
+  init: RequestInit = {},
+  params?: URLSearchParams,
+): Promise<Response> {
+  const url = buildGatewayUrl(path, params);
+  return fetch(url, {
+    ...init,
+    headers: {
+      "Content-Type": "application/json",
+      ...(init.headers || {}),
     },
-    development: {
-        siteBaseUrl: "https://maroon-aside-814100.framer.app",
-        supabaseUrl: "https://ieuwiinbvbdvjrdqqzlb.supabase.co",
-        supabaseAnonKey:
-            "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImlldXdpaW5idmJkdmpyZHFxemxiIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzIwNDYwMTksImV4cCI6MjA4NzYyMjAxOX0.UlTMeyvArixD7byDCrGwEDXsbc4LQfx6QXDL6Je3blE",
-    },
+  });
 }
 
-function resolveRuntimeEnv(): RuntimeEnv {
-    if (typeof window === "undefined") return "production"
-    const host = String(window.location.hostname || "").trim().toLowerCase()
-    if (host === "tripwithnomads.com" || host === "www.tripwithnomads.com") return "production"
-    if (
-        host === "maroon-aside-814100.framer.app" ||
-        host === "localhost" ||
-        host === "127.0.0.1"
-    ) {
-        return "development"
-    }
-    return "production"
-}
-
-function extractProjectRefFromSupabaseUrl(url: string): string {
-    const match = String(url || "")
-        .trim()
-        .match(/^https:\/\/([a-z0-9-]+)\.supabase\.co(?:\/|$)/i)
-    return String(match?.[1] || "").trim().toLowerCase()
-}
-
-function decodeBase64Url(value: string): string {
-    const normalized = String(value || "")
-        .trim()
-        .replace(/-/g, "+")
-        .replace(/_/g, "/")
-    if (!normalized) return ""
-    const padded = normalized + "=".repeat((4 - (normalized.length % 4 || 4)) % 4)
-    try {
-        if (typeof atob === "function") return atob(padded)
-    } catch (_) { }
-    try {
-        // @ts-ignore Framer runtime may expose Buffer in some contexts.
-        if (typeof Buffer !== "undefined") return Buffer.from(padded, "base64").toString("utf8")
-    } catch (_) { }
-    return ""
-}
-
-function extractProjectRefFromAnonKey(key: string): string {
-    const parts = String(key || "").trim().split(".")
-    if (parts.length < 2) return ""
-    const payloadRaw = decodeBase64Url(parts[1])
-    if (!payloadRaw) return ""
-    try {
-        const payload = JSON.parse(payloadRaw)
-        return String(payload?.ref || "").trim().toLowerCase()
-    } catch (_) {
-        return ""
-    }
-}
-
-function pickSupabaseAnonKey(url: string, overrideKey: string, selectedKey: string): string {
-    const targetRef = extractProjectRefFromSupabaseUrl(url)
-    const cleanOverride = String(overrideKey || "").trim()
-    const cleanSelected = String(selectedKey || "").trim()
-    if (!targetRef) return cleanOverride || cleanSelected
-
-    const overrideRef = extractProjectRefFromAnonKey(cleanOverride)
-    if (cleanOverride && overrideRef === targetRef) return cleanOverride
-
-    const selectedRef = extractProjectRefFromAnonKey(cleanSelected)
-    if (cleanSelected && selectedRef === targetRef) return cleanSelected
-
-    return cleanOverride || cleanSelected
-}
-
-function resolveRuntimeConfig(): RuntimeConfig {
-    const env = resolveRuntimeEnv()
-    const selected = RUNTIME_CONFIG[env]
-    const runtimeOverride =
-        typeof window !== "undefined" ? (window as any).__TWN_RUNTIME_CONFIG__ || {} : {}
-    const resolvedSupabaseUrl = String(runtimeOverride.supabaseUrl || selected.supabaseUrl || "").trim()
-    const resolvedSupabaseAnonKey = pickSupabaseAnonKey(
-        resolvedSupabaseUrl,
-        String(runtimeOverride.supabaseAnonKey || ""),
-        String(selected.supabaseAnonKey || "")
-    )
-    return {
-        siteBaseUrl: String(runtimeOverride.siteBaseUrl || selected.siteBaseUrl || "")
-            .trim()
-            .replace(/\/+$/, ""),
-        supabaseUrl: resolvedSupabaseUrl,
-        supabaseAnonKey: resolvedSupabaseAnonKey,
-    }
-}
-
-const CURRENT_RUNTIME = resolveRuntimeConfig()
-const SUPABASE_URL = CURRENT_RUNTIME.supabaseUrl
-const SUPABASE_KEY = CURRENT_RUNTIME.supabaseAnonKey
-
-const cache = new Map<string, { ts: number; data: any }>()
-const inFlight = new Map<string, Promise<any | null>>()
-let forcedTripId = ""
+const cache = new Map<string, { ts: number; data: any }>();
+const inFlight = new Map<string, Promise<any | null>>();
+let forcedTripId = "";
 
 function toNumber(value: any): number {
-    const parsed = Number(value)
-    return Number.isFinite(parsed) ? parsed : 0
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : 0;
 }
 
 function fmtINR(value: number): string {
-    return "₹" + toNumber(value).toLocaleString("en-IN")
+  return "₹" + Math.round(toNumber(value)).toLocaleString("en-IN");
 }
 
 function formatNextBatchDate(value: any): string {
-    const raw = String(value || "").trim()
-    if (!raw) return ""
-    const parsed = Date.parse(raw)
-    if (!Number.isFinite(parsed)) return ""
+  const raw = String(value || "").trim();
+  if (!raw) return "";
+  const parsed = Date.parse(raw);
+  if (!Number.isFinite(parsed)) return "";
 
-    return new Intl.DateTimeFormat("en-GB", {
-        day: "numeric",
-        month: "short",
-    }).format(new Date(parsed))
+  return new Intl.DateTimeFormat("en-GB", {
+    day: "numeric",
+    month: "short",
+  }).format(new Date(parsed));
 }
 
 function getTripSlugFromPathname(pathname: string): string {
-    const clean = String(pathname || "")
-    const match = clean.match(/\/upcoming-trips\/([^/?#]+)/i)
-    return match?.[1] ? decodeURIComponent(match[1]) : ""
+  const clean = String(pathname || "");
+  const match = clean.match(/\/upcoming-trips\/([^/?#]+)/i);
+  return match?.[1] ? decodeURIComponent(match[1]) : "";
 }
 
 function normalizeSlug(value: any): string {
-    const raw = String(value || "").trim().toLowerCase()
-    if (!raw) return ""
+  const raw = String(value || "").trim().toLowerCase();
+  if (!raw) return "";
 
-    const fromUrl = raw.match(/\/upcoming-trips\/([^/?#]+)/i)
-    const candidate = fromUrl?.[1] ? decodeURIComponent(fromUrl[1]) : raw
-    return /^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(candidate) ? candidate : ""
+  const fromUrl = raw.match(/\/upcoming-trips\/([^/?#]+)/i);
+  const candidate = fromUrl?.[1] ? decodeURIComponent(fromUrl[1]) : raw;
+  return /^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(candidate) ? candidate : "";
 }
 
 function normalizeTripId(value: any): string {
-    const clean = String(value || "").trim()
-    if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(clean)) {
-        return ""
-    }
-    return clean
+  const clean = String(value || "").trim();
+  if (
+    !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
+      .test(clean)
+  ) {
+    return "";
+  }
+  return clean;
 }
 
 function readTripIdCandidate(props: any): string {
-    return normalizeTripId(
-        props?.tripId ||
-        props?.["data-trip-id"] ||
-        props?.text ||
-        (typeof props?.children === "string" ? props.children : "")
-    )
+  return normalizeTripId(
+    props?.tripId ||
+      props?.["data-trip-id"] ||
+      props?.text ||
+      (typeof props?.children === "string" ? props.children : ""),
+  );
 }
 
 function readTripSlugCandidate(props: any): string {
-    return normalizeSlug(
-        props?.slug ||
-        props?.["data-trip-slug"] ||
-        props?.href ||
-        props?.link ||
-        props?.text ||
-        (typeof props?.children === "string" ? props.children : "")
-    )
+  return normalizeSlug(
+    props?.slug ||
+      props?.["data-trip-slug"] ||
+      props?.href ||
+      props?.link ||
+      props?.text ||
+      (typeof props?.children === "string" ? props.children : ""),
+  );
 }
 
 export function withTripIdSource(Component): ComponentType {
-    return (props: any) => {
-        const nextTripId = readTripIdCandidate(props)
-
-        useEffect(() => {
-            if (nextTripId) {
-                forcedTripId = nextTripId
-            }
-        }, [nextTripId])
-
-        return <Component {...props} />
-    }
-}
-
-async function fetchTripDisplayPrice(params: { slug?: string; tripId?: string }): Promise<any | null> {
-    const slug = String(params.slug || "").trim()
-    const tripId = String(params.tripId || "").trim()
-    if (!slug && !tripId) return null
-
-    const cacheKey = `${slug}::${tripId}`
-    const now = Date.now()
-    const cached = cache.get(cacheKey)
-    if (cached && now - cached.ts < 120000) return cached.data
-    const pending = inFlight.get(cacheKey)
-    if (pending) return pending
-
-    const query = new URLSearchParams()
-    if (slug) query.set("slug", slug)
-    if (tripId) query.set("trip_id", tripId)
-    query.set("v", "3")
-
-    const request = fetch(`${SUPABASE_URL}/functions/v1/get-trip-display-price?${query.toString()}`, {
-        method: "GET",
-        priority: "high",
-        headers: {
-            apikey: SUPABASE_KEY,
-            Authorization: `Bearer ${SUPABASE_KEY}`,
-        },
-    } as any)
-        .then(async (res) => {
-            if (!res.ok) return null
-            const data = await res.json().catch(() => null)
-            if (data) cache.set(cacheKey, { ts: Date.now(), data })
-            return data
-        })
-        .catch(() => null)
-        .finally(() => {
-            inFlight.delete(cacheKey)
-        })
-
-    inFlight.set(cacheKey, request)
-    return request
-}
-
-function useTripDisplayData(props?: any) {
-    const [data, setData] = useState<any>(null)
-    const propTripId = readTripIdCandidate(props)
-    const propSlug = readTripSlugCandidate(props)
+  return (props: any) => {
+    const nextTripId = readTripIdCandidate(props);
 
     useEffect(() => {
-        let disposed = false
-        const query = new URLSearchParams(window.location.search)
-        const slugFromPath = getTripSlugFromPathname(window.location.pathname)
-        const tripId =
-            propTripId || query.get("tripId") || query.get("trip_id") || forcedTripId || ""
-        const slug =
-            propSlug || slugFromPath || (tripId ? "" : query.get("slug") || "")
+      if (nextTripId) {
+        forcedTripId = nextTripId;
+      }
+    }, [nextTripId]);
 
-        fetchTripDisplayPrice({ slug, tripId })
-            .then((payload) => {
-                if (disposed) return
-                setData(payload || null)
-            })
-            .catch(() => {
-                if (disposed) return
-                setData(null)
-            })
+    return <Component {...props} />;
+  };
+}
 
-        return () => {
-            disposed = true
-        }
-    }, [propTripId, propSlug])
+function fetchTripDisplayPrice(
+  params: { slug?: string; tripId?: string },
+): Promise<any | null> {
+  const slug = String(params.slug || "").trim();
+  const tripId = String(params.tripId || "").trim();
+  if (!slug && !tripId) return Promise.resolve(null);
 
-    return data
+  const cacheKey = `${slug}::${tripId}`;
+  const now = Date.now();
+  const cached = cache.get(cacheKey);
+  if (cached && now - cached.ts < 120000) return Promise.resolve(cached.data);
+  const pending = inFlight.get(cacheKey);
+  if (pending) return pending;
+
+  const query = new URLSearchParams();
+  if (slug) query.set("slug", slug);
+  if (tripId) query.set("trip_id", tripId);
+  query.set("v", "3");
+
+  const request = fetchGateway(
+    "get-trip-display-price",
+    { method: "GET" },
+    query,
+  )
+    .then((res) => {
+      if (!res.ok) return null;
+      return res.json().then((data) => {
+        if (data) cache.set(cacheKey, { ts: Date.now(), data });
+        return data;
+      }).catch(() => null);
+    })
+    .catch(() => null)
+    .finally(() => {
+      inFlight.delete(cacheKey);
+    });
+
+  inFlight.set(cacheKey, request);
+  return request;
+}
+
+function useTripDisplayData(props: any): any | null {
+  const [data, setData] = useState<any | null>(null);
+  const slug = useMemo(() => readTripSlugCandidate(props), [props]);
+  const tripId = useMemo(() => readTripIdCandidate(props), [props]);
+  const activeTripId = tripId || forcedTripId;
+
+  useEffect(() => {
+    if (!slug && !activeTripId) return;
+    fetchTripDisplayPrice({ slug, tripId: activeTripId }).then((res) => {
+      if (res) setData(res);
+    });
+  }, [slug, activeTripId]);
+
+  return data;
+}
+
+/**
+ * withTripPriceText: Base override for price-related text.
+ */
+function withTripPriceText(
+  getValue: (data: any) => string,
+  fallback = "\u2014",
+) {
+  return function (Component: ComponentType): ComponentType {
+    return (props: any) => {
+      const data = useTripDisplayData(props);
+      const isHydrated = useHydrated();
+      const text = isHydrated ? (getValue(data) || fallback) : fallback;
+      return <Component {...props} text={text} />;
+    };
+  };
 }
 
 export function withTripPrimaryPrice(Component): ComponentType {
-    return (props: any) => {
-        const tripData = useTripDisplayData(props)
-        const summary = tripData?.display_summary
-        const value = toNumber(summary?.payable_price)
-        const text = value > 0 ? fmtINR(value) : "₹0"
-        return <Component {...props} text={text} />
-    }
+  return withTripPriceText((data) => {
+    const value = toNumber(data?.display_summary?.payable_price);
+    return value > 0 ? fmtINR(value) : "₹0";
+  }, "₹0")(Component);
 }
 
 export function withTripStrikePrice(Component): ComponentType {
-    return (props: any) => {
-        const tripData = useTripDisplayData(props)
-        const summary = tripData?.display_summary
-        const base = toNumber(summary?.base_price)
-        const payable = toNumber(summary?.payable_price)
-        const hasDiscount = Boolean(summary?.has_discount) && base > payable && payable > 0
-        if (!hasDiscount) {
-            return <Component {...props} text="" visible={false} />
-        }
-        const text = fmtINR(base)
-        return (
-            <Component
-                {...props}
-                text={text}
-                visible={true}
-                style={{
-                    ...(props.style || {}),
-                    textDecorationLine: "line-through",
-                    textDecoration: "line-through",
-                }}
-            />
-        )
+  return (props: any) => {
+    const tripData = useTripDisplayData(props);
+    const isHydrated = useHydrated();
+    const summary = tripData?.display_summary;
+    const base = toNumber(summary?.base_price);
+    const payable = toNumber(summary?.payable_price);
+    const hasDiscount = isHydrated && Boolean(summary?.has_discount) &&
+      base > payable && payable > 0;
+
+    if (!hasDiscount) {
+      return <Component {...props} text="" visible={false} />;
     }
+    const text = fmtINR(base);
+    return (
+      <Component
+        {...props}
+        text={text}
+        visible={true}
+        style={{
+          ...(props.style || {}),
+          textDecorationLine: "line-through",
+          textDecoration: "line-through",
+        }}
+      />
+    );
+  };
 }
 
 export function withTripSaveBadge(Component): ComponentType {
-    return (props: any) => {
-        const tripData = useTripDisplayData(props)
-        const summary = tripData?.display_summary
-        const save = toNumber(summary?.save_amount)
-        const hasDiscount = Boolean(summary?.has_discount) && save > 0
-        if (!hasDiscount) {
-            return (
-                <Component
-                    {...props}
-                    text=""
-                    style={{ ...(props.style || {}), display: "none", pointerEvents: "none" }}
-                />
-            )
-        }
-        const text = `Save ${fmtINR(save)}`
-        return <Component {...props} text={text} visible={true} />
+  return (props: any) => {
+    const tripData = useTripDisplayData(props);
+    const isHydrated = useHydrated();
+    const summary = tripData?.display_summary;
+    const save = toNumber(summary?.save_amount);
+    const hasDiscount = isHydrated && Boolean(summary?.has_discount) &&
+      save > 0;
+
+    if (!hasDiscount) {
+      return (
+        <Component
+          {...props}
+          text=""
+          style={{
+            ...(props.style || {}),
+            display: "none",
+            pointerEvents: "none",
+          }}
+        />
+      );
     }
+    const text = `Save ${fmtINR(save)}`;
+    return <Component {...props} text={text} visible={true} />;
+  };
 }
 
 export function withTripHideWhenNoDiscount(Component): ComponentType {
-    return (props: any) => {
-        const tripData = useTripDisplayData(props)
-        const summary = tripData?.display_summary
-        const hasDiscount = Boolean(summary?.has_discount) && toNumber(summary?.save_amount) > 0
-        if (!hasDiscount) {
-            return (
-                <Component
-                    {...props}
-                    style={{ ...(props.style || {}), display: "none", pointerEvents: "none" }}
-                />
-            )
-        }
-        return <Component {...props} />
+  return (props: any) => {
+    const tripData = useTripDisplayData(props);
+    const isHydrated = useHydrated();
+    const summary = tripData?.display_summary;
+    const hasDiscount = isHydrated && Boolean(summary?.has_discount) &&
+      toNumber(summary?.save_amount) > 0;
+
+    if (!hasDiscount) {
+      return (
+        <Component
+          {...props}
+          style={{
+            ...(props.style || {}),
+            display: "none",
+            pointerEvents: "none",
+          }}
+        />
+      );
     }
+    return <Component {...props} />;
+  };
 }
 
 export function withTripStartsFromText(Component): ComponentType {
-    return (props: any) => {
-        const text = "Starts from"
-        return <Component {...props} text={text} />
-    }
+  return (props: any) => {
+    return <Component {...props} text="Starts from" />;
+  };
 }
 
 export function withTripNextBatchText(Component): ComponentType {
-    return (props: any) => {
-        const tripData = useTripDisplayData(props)
-        const nextBatchLabel = formatNextBatchDate(tripData?.next_batch_date)
-        if (!nextBatchLabel) {
-            return <Component {...props} text="" visible={false} />
-        }
+  return (props: any) => {
+    const tripData = useTripDisplayData(props);
+    const isHydrated = useHydrated();
+    const nextBatchLabel = isHydrated
+      ? formatNextBatchDate(tripData?.next_batch_date)
+      : "";
 
-        const text = `Next batch - ${nextBatchLabel}`
-        return <Component {...props} text={text} visible={true} />
+    if (!nextBatchLabel) {
+      return <Component {...props} text="" visible={false} />;
     }
+
+    const text = `Next batch - ${nextBatchLabel}`;
+    return <Component {...props} text={text} visible={true} />;
+  };
 }
