@@ -155,8 +155,16 @@ function buildDisplayDataFromCheckoutContext(payload: any): any | null {
     .map((row) => String(row?.start_date || row?.departure_date || "").trim())
     .filter(Boolean)
     .sort();
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const todayTs = today.getTime();
+  const hasFuturePricing = rows.some((row) => {
+    const parsed = Date.parse(String(row?.start_date || row?.departure_date || ""));
+    return Number.isFinite(parsed) && parsed >= todayTs;
+  });
 
   return {
+    __hasFuturePricing: hasFuturePricing,
     display_summary: {
       base_price: lowest,
       payable_price: lowest,
@@ -242,31 +250,40 @@ function fetchTripDisplayPrice(
   if (tripId) query.set("trip_id", tripId);
   query.set("v", "3");
 
-  const resolveFromContext = () => {
-    return fetchDisplayFallbackFromContext({ slug, tripId }).then(
-      (fallbackData) => {
-        const resolved = fallbackData || createSoldOutData();
-        cache.set(cacheKey, { ts: Date.now(), data: resolved });
-        return resolved;
-      },
-    );
+  const resolveFromContext = (preloaded?: any | null) => {
+    const pendingContext = preloaded !== undefined
+      ? Promise.resolve(preloaded)
+      : fetchDisplayFallbackFromContext({ slug, tripId });
+    return pendingContext.then((fallbackData) => {
+      const resolved = fallbackData || createSoldOutData();
+      cache.set(cacheKey, { ts: Date.now(), data: resolved });
+      return resolved;
+    });
   };
 
-  const request = fetchGateway(
-    "get-trip-display-price",
-    { method: "GET" },
-    query,
-  )
-    .then((res) => {
-      if (!res.ok) return resolveFromContext();
-      return res.json().then((data) => {
-        const payable = toNumber(data?.display_summary?.payable_price);
-        if (data && payable > 0) {
-          cache.set(cacheKey, { ts: Date.now(), data });
-          return data;
-        }
-        return resolveFromContext();
-      }).catch(() => resolveFromContext());
+  const request = fetchDisplayFallbackFromContext({ slug, tripId }).then(
+    (contextData) => {
+      const hasFuturePricing = Boolean(contextData?.__hasFuturePricing);
+      if (contextData && !hasFuturePricing) {
+        cache.set(cacheKey, { ts: Date.now(), data: contextData });
+        return contextData;
+      }
+
+      return fetchGateway(
+        "get-trip-display-price",
+        { method: "GET" },
+        query,
+      ).then((res) => {
+        if (!res.ok) return resolveFromContext(contextData);
+        return res.json().then((data) => {
+          const payable = toNumber(data?.display_summary?.payable_price);
+          if (data && payable > 0) {
+            cache.set(cacheKey, { ts: Date.now(), data });
+            return data;
+          }
+          return resolveFromContext(contextData);
+        }).catch(() => resolveFromContext(contextData));
+      });
     })
     .catch(() => resolveFromContext())
     .finally(() => {
