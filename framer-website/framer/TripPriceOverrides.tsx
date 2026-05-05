@@ -78,7 +78,29 @@ function fetchGateway(
 
 const cache = new Map<string, { ts: number; data: any }>();
 const inFlight = new Map<string, Promise<any | null>>();
+const actionableFailureLogged = new Set<string>();
 let forcedTripId = "";
+
+type TripCardStatus = "priced" | "sold_out" | "unavailable";
+type TripCardFailureReason =
+  | "none"
+  | "no_future_pricing"
+  | "trip_not_found"
+  | "invalid_identifier"
+  | "network";
+
+type TripCardDisplayState = {
+  status: TripCardStatus;
+  failureReason: TripCardFailureReason;
+  display_summary: {
+    base_price: number;
+    payable_price: number;
+    save_amount: number;
+    has_discount: boolean;
+  };
+  next_batch_date: string;
+  __hasFuturePricing: boolean;
+};
 
 function toNumber(value: any): number {
   const parsed = Number(value);
@@ -99,12 +121,6 @@ function formatNextBatchDate(value: any): string {
     day: "numeric",
     month: "short",
   }).format(new Date(parsed));
-}
-
-function getTripSlugFromPathname(pathname: string): string {
-  const clean = String(pathname || "");
-  const match = clean.match(/\/upcoming-trips\/([^/?#]+)/i);
-  return match?.[1] ? decodeURIComponent(match[1]) : "";
 }
 
 function normalizeSlug(value: any): string {
@@ -155,21 +171,94 @@ function findTripIdInValue(value: any, depth = 0): string {
   return "";
 }
 
-function createSoldOutData() {
+function createEmptySummary() {
   return {
-    __soldOut: true,
-    display_summary: {
-      base_price: 0,
-      payable_price: 0,
-      save_amount: 0,
-      has_discount: false,
-    },
-    next_batch_date: "",
+    base_price: 0,
+    payable_price: 0,
+    save_amount: 0,
+    has_discount: false,
   };
 }
 
-function isSoldOutData(data: any): boolean {
-  return Boolean(data?.__soldOut);
+function createTripCardState(
+  status: TripCardStatus,
+  failureReason: TripCardFailureReason,
+  summary?: Partial<TripCardDisplayState["display_summary"]> | null,
+  nextBatchDate?: string,
+): TripCardDisplayState {
+  return {
+    status,
+    failureReason,
+    display_summary: {
+      ...createEmptySummary(),
+      ...(summary || {}),
+    },
+    next_batch_date: String(nextBatchDate || "").trim(),
+    __hasFuturePricing: status === "priced",
+  };
+}
+
+function createSoldOutData(reason: TripCardFailureReason = "no_future_pricing") {
+  return createTripCardState("sold_out", reason);
+}
+
+function createUnavailableData(
+  reason: TripCardFailureReason = "network",
+): TripCardDisplayState {
+  return createTripCardState("unavailable", reason);
+}
+
+function isPricedData(data: any): boolean {
+  return data?.status === "priced";
+}
+
+function normalizeFailureReasonFromResponse(
+  status: number,
+  rawMessage: string,
+): TripCardFailureReason {
+  const message = String(rawMessage || "").toLowerCase();
+  if (message.includes("no future pricing found")) return "no_future_pricing";
+  if (message.includes("trip not found")) return "trip_not_found";
+  if (
+    message.includes("invalid") ||
+    message.includes("required") ||
+    message.includes("missing")
+  ) {
+    return "invalid_identifier";
+  }
+  if (status === 404) return "trip_not_found";
+  if (status === 400 || status === 422) return "invalid_identifier";
+  return "network";
+}
+
+async function readFailureReasonFromResponse(
+  response: Response,
+): Promise<TripCardFailureReason> {
+  const payload = await response.json().catch(() => ({}));
+  return normalizeFailureReasonFromResponse(
+    response.status,
+    String(payload?.error || payload?.message || ""),
+  );
+}
+
+function logActionableFailureOnce(
+  cacheKey: string,
+  reason: TripCardFailureReason,
+): void {
+  if (
+    reason !== "trip_not_found" &&
+    reason !== "invalid_identifier" &&
+    reason !== "network"
+  ) {
+    return;
+  }
+  const logKey = `${cacheKey}:${reason}`;
+  if (actionableFailureLogged.has(logKey)) return;
+  actionableFailureLogged.add(logKey);
+  console.info("[TripPriceOverrides] Unavailable trip pricing", {
+    key: cacheKey,
+    reason,
+  });
 }
 
 function buildDisplayDataFromCheckoutContext(payload: any): any | null {
@@ -178,7 +267,7 @@ function buildDisplayDataFromCheckoutContext(payload: any): any | null {
     : Array.isArray(payload?.pricing)
     ? payload.pricing
     : [];
-  if (rows.length === 0) return null;
+  if (rows.length === 0) return createSoldOutData("no_future_pricing");
 
   const prices = rows
     .map((row) =>
@@ -186,51 +275,75 @@ function buildDisplayDataFromCheckoutContext(payload: any): any | null {
     )
     .filter((value) => value > 0);
 
-  if (prices.length === 0) return null;
+  if (prices.length === 0) return createSoldOutData("no_future_pricing");
   const lowest = Math.min(...prices);
 
   const startDates = rows
     .map((row) => String(row?.start_date || row?.departure_date || "").trim())
-    .filter(Boolean)
-    .sort();
+    .filter(Boolean);
   const today = new Date();
   today.setHours(0, 0, 0, 0);
   const todayTs = today.getTime();
-  const hasFuturePricing = rows.some((row) => {
-    const parsed = Date.parse(String(row?.start_date || row?.departure_date || ""));
-    return Number.isFinite(parsed) && parsed >= todayTs;
-  });
+  const upcomingDates = startDates
+    .filter((value) => {
+      const parsed = Date.parse(value);
+      return Number.isFinite(parsed) && parsed >= todayTs;
+    })
+    .sort();
 
-  return {
-    __hasFuturePricing: hasFuturePricing,
-    display_summary: {
+  if (upcomingDates.length === 0) {
+    return createSoldOutData("no_future_pricing");
+  }
+
+  return createTripCardState(
+    "priced",
+    "none",
+    {
       base_price: lowest,
       payable_price: lowest,
       save_amount: 0,
       has_discount: false,
     },
-    next_batch_date: startDates[0] || "",
-  };
+    upcomingDates[0],
+  );
 }
 
-function fetchDisplayFallbackFromContext(
+async function fetchDisplayFallbackFromContext(
   params: { slug?: string; tripId?: string },
-): Promise<any | null> {
+): Promise<{
+  data: TripCardDisplayState | null;
+  failureReason: TripCardFailureReason;
+}> {
   const query = new URLSearchParams();
   const slug = normalizeSlug(params.slug);
   const tripId = normalizeTripId(params.tripId);
   if (slug) query.set("slug", slug);
   if (tripId) query.set("trip_id", tripId);
-  if (!slug && !tripId) return Promise.resolve(null);
+  if (!slug && !tripId) {
+    return { data: null, failureReason: "invalid_identifier" };
+  }
 
-  return fetchGateway("get-trip-checkout-context", { method: "GET" }, query)
-    .then((res) => {
-      if (!res.ok) return null;
-      return res.json().catch(() => null).then((payload) => {
-        return buildDisplayDataFromCheckoutContext(payload);
-      });
-    })
-    .catch(() => null);
+  try {
+    const response = await fetchGateway(
+      "get-trip-checkout-context",
+      { method: "GET" },
+      query,
+    );
+    if (!response.ok) {
+      return {
+        data: null,
+        failureReason: await readFailureReasonFromResponse(response),
+      };
+    }
+    const payload = await response.json().catch(() => null);
+    const data = buildDisplayDataFromCheckoutContext(payload);
+    if (!data) {
+      return { data: createSoldOutData("no_future_pricing"), failureReason: "none" };
+    }
+    return { data, failureReason: "none" };
+  } catch (_error) {
+    return { data: null, failureReason: "network" };
+  }
 }
 
 function readTripIdCandidate(props: any): string {
@@ -292,7 +405,9 @@ function fetchTripDisplayPrice(
   const tripId = normalizeTripId(rawTripId) || normalizeTripId(rawSlug);
   const activeTripId = tripId;
   const activeSlug = activeTripId ? "" : slug;
-  if (!activeSlug && !activeTripId) return Promise.resolve(null);
+  if (!activeSlug && !activeTripId) {
+    return Promise.resolve(createUnavailableData("invalid_identifier"));
+  }
 
   const cacheKey = `${activeSlug}::${activeTripId}`;
   const now = Date.now();
@@ -306,48 +421,90 @@ function fetchTripDisplayPrice(
   if (activeTripId) query.set("trip_id", activeTripId);
   query.set("v", "3");
 
-  const resolveFromContext = (preloaded?: any | null) => {
-    const pendingContext = preloaded !== undefined
-      ? Promise.resolve(preloaded)
-      : fetchDisplayFallbackFromContext({ slug: activeSlug, tripId: activeTripId });
-    return pendingContext.then((fallbackData) => {
-      const resolved = fallbackData || createSoldOutData();
-      cache.set(cacheKey, { ts: Date.now(), data: resolved });
-      return resolved;
+  const request = (async (): Promise<TripCardDisplayState> => {
+    const contextResult = await fetchDisplayFallbackFromContext({
+      slug: activeSlug,
+      tripId: activeTripId,
     });
-  };
+    const contextData = contextResult.data;
 
-  const request = fetchDisplayFallbackFromContext({
-    slug: activeSlug,
-    tripId: activeTripId,
-  }).then(
-    (contextData) => {
-      const hasFuturePricing = Boolean(contextData?.__hasFuturePricing);
-      if (contextData && !hasFuturePricing) {
+    if (contextData?.status === "sold_out") {
+      cache.set(cacheKey, { ts: Date.now(), data: contextData });
+      return contextData;
+    }
+
+    if (
+      contextResult.failureReason === "trip_not_found" ||
+      contextResult.failureReason === "invalid_identifier"
+    ) {
+      const unavailable = createUnavailableData(contextResult.failureReason);
+      logActionableFailureOnce(cacheKey, contextResult.failureReason);
+      cache.set(cacheKey, { ts: Date.now(), data: unavailable });
+      return unavailable;
+    }
+
+    try {
+      const response = await fetchGateway(
+        "get-trip-display-price",
+        { method: "GET" },
+        query,
+      );
+      if (!response.ok) {
+        const reason = await readFailureReasonFromResponse(response);
+        if (reason === "no_future_pricing") {
+          const soldOut = createSoldOutData("no_future_pricing");
+          cache.set(cacheKey, { ts: Date.now(), data: soldOut });
+          return soldOut;
+        }
+        if (contextData?.status === "priced") {
+          cache.set(cacheKey, { ts: Date.now(), data: contextData });
+          return contextData;
+        }
+        const unavailable = createUnavailableData(reason);
+        logActionableFailureOnce(cacheKey, reason);
+        cache.set(cacheKey, { ts: Date.now(), data: unavailable });
+        return unavailable;
+      }
+
+      const payload = await response.json().catch(() => null);
+      const payable = toNumber(payload?.display_summary?.payable_price);
+      if (payable > 0) {
+        const pricedData = createTripCardState(
+          "priced",
+          "none",
+          {
+            base_price: toNumber(payload?.display_summary?.base_price),
+            payable_price: payable,
+            save_amount: toNumber(payload?.display_summary?.save_amount),
+            has_discount: Boolean(payload?.display_summary?.has_discount),
+          },
+          String(payload?.next_batch_date || contextData?.next_batch_date || ""),
+        );
+        cache.set(cacheKey, { ts: Date.now(), data: pricedData });
+        return pricedData;
+      }
+
+      if (contextData?.status === "priced") {
         cache.set(cacheKey, { ts: Date.now(), data: contextData });
         return contextData;
       }
 
-      return fetchGateway(
-        "get-trip-display-price",
-        { method: "GET" },
-        query,
-      ).then((res) => {
-        if (!res.ok) return resolveFromContext(contextData);
-        return res.json().then((data) => {
-          const payable = toNumber(data?.display_summary?.payable_price);
-          if (data && payable > 0) {
-            cache.set(cacheKey, { ts: Date.now(), data });
-            return data;
-          }
-          return resolveFromContext(contextData);
-        }).catch(() => resolveFromContext(contextData));
-      });
-    })
-    .catch(() => resolveFromContext())
-    .finally(() => {
-      inFlight.delete(cacheKey);
-    });
+      const soldOut = createSoldOutData("no_future_pricing");
+      cache.set(cacheKey, { ts: Date.now(), data: soldOut });
+      return soldOut;
+    } catch (_error) {
+      if (contextData?.status === "priced") {
+        cache.set(cacheKey, { ts: Date.now(), data: contextData });
+        return contextData;
+      }
+      const unavailable = createUnavailableData("network");
+      logActionableFailureOnce(cacheKey, "network");
+      cache.set(cacheKey, { ts: Date.now(), data: unavailable });
+      return unavailable;
+    }
+  })().finally(() => {
+    inFlight.delete(cacheKey);
+  });
 
   inFlight.set(cacheKey, request);
   return request;
@@ -360,9 +517,12 @@ function useTripDisplayData(props: any): any | null {
   const activeTripId = tripId || forcedTripId;
 
   useEffect(() => {
-    if (!slug && !activeTripId) return;
+    if (!slug && !activeTripId) {
+      setData(createUnavailableData("invalid_identifier"));
+      return;
+    }
     fetchTripDisplayPrice({ slug, tripId: activeTripId }).then((res) => {
-      if (res) setData(res);
+      setData(res || createUnavailableData("network"));
     });
   }, [slug, activeTripId]);
 
@@ -388,10 +548,10 @@ function withTripPriceText(
 
 export function withTripPrimaryPrice(Component): ComponentType {
   return withTripPriceText((data) => {
-    if (isSoldOutData(data)) return "No upcoming batches";
+    if (!isPricedData(data)) return "Price on demand";
     const value = toNumber(data?.display_summary?.payable_price);
-    return value > 0 ? fmtINR(value) : "₹0";
-  }, "₹0")(Component);
+    return value > 0 ? fmtINR(value) : "Price on demand";
+  }, "Price on demand")(Component);
 }
 
 export function withTripStrikePrice(Component): ComponentType {
@@ -477,7 +637,7 @@ export function withTripHideWhenNoDiscount(Component): ComponentType {
 export function withTripStartsFromText(Component): ComponentType {
   return (props: any) => {
     const tripData = useTripDisplayData(props);
-    if (isSoldOutData(tripData)) {
+    if (!isPricedData(tripData)) {
       return (
         <Component
           {...props}
@@ -497,6 +657,12 @@ export function withTripStartsFromText(Component): ComponentType {
 export function withTripNextBatchText(Component): ComponentType {
   return (props: any) => {
     const tripData = useTripDisplayData(props);
+    if (tripData?.status === "sold_out") {
+      return <Component {...props} text="No upcoming batches" visible={true} />;
+    }
+    if (tripData?.status === "unavailable") {
+      return <Component {...props} text="" visible={false} />;
+    }
     const isHydrated = useHydrated();
     const nextBatchLabel = isHydrated
       ? formatNextBatchDate(tripData?.next_batch_date)
