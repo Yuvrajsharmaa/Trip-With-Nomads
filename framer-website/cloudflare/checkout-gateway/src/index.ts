@@ -30,15 +30,22 @@ function toUpstreamFunctionUrl(baseUrl: string, path: string, requestUrl: string
 app.use('*', cors({
   origin: (origin) => {
     if (!origin) return null
-    const url = new URL(origin)
-    if (
-      url.hostname === 'tripwithnomads.com' ||
-      url.hostname.endsWith('.tripwithnomads.com') ||
-      url.hostname.endsWith('.framer.app') ||
-      url.hostname.includes('framer.com') ||
-      url.hostname === 'localhost'
-    ) {
-      return origin
+    try {
+      const url = new URL(origin)
+      if (
+        url.hostname === 'tripwithnomads.com' ||
+        url.hostname.endsWith('.tripwithnomads.com') ||
+        url.hostname.endsWith('.framer.app') ||
+        url.hostname.endsWith('.framer.website') ||
+        url.hostname === 'framercanvas.com' ||
+        url.hostname.endsWith('.framercanvas.com') ||
+        url.hostname.includes('framer.com') ||
+        url.hostname === 'localhost'
+      ) {
+        return origin
+      }
+    } catch {
+      return null
     }
     return null
   },

@@ -3,6 +3,18 @@ import React from "react";
 
 const { useEffect, useRef, useState, useMemo } = React;
 
+function isFramerRuntimeHost(): boolean {
+  if (typeof window === "undefined") return false;
+  const hostname = String(window.location.hostname || "").toLowerCase();
+  return (
+    hostname.includes("framer.app") ||
+    hostname.includes("framer.website") ||
+    hostname === "framercanvas.com" ||
+    hostname.endsWith(".framercanvas.com") ||
+    hostname.includes("framer.com")
+  );
+}
+
 /**
  * useHydrated: A helper hook to prevent React hydration mismatches (#418).
  * Ensures that components render the same content on server and first client pass.
@@ -35,14 +47,10 @@ const CURRENT_RUNTIME =
   (typeof window !== "undefined"
     ? (window as any).__TWN_RUNTIME_CONFIG__
     : null) || {
-    siteBaseUrl: (typeof window !== "undefined" &&
-        (window.location.hostname.includes("framer.app") ||
-          window.location.hostname.includes("framer.website")))
+    siteBaseUrl: isFramerRuntimeHost()
       ? "https://maroon-aside-814100.framer.app"
       : "https://tripwithnomads.com",
-    gatewayUrl: (typeof window !== "undefined" &&
-        (window.location.hostname.includes("framer.app") ||
-          window.location.hostname.includes("framer.website")))
+    gatewayUrl: isFramerRuntimeHost()
       ? "https://twn-checkout-gateway-staging.tripwithnomads-crm.workers.dev"
       : "https://twn-checkout-gateway.tripwithnomads-crm.workers.dev",
   };

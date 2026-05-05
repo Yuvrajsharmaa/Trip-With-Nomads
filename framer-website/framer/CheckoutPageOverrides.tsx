@@ -11,6 +11,18 @@ const {
   useState,
 } = React;
 
+function isFramerRuntimeHost(): boolean {
+  if (typeof window === "undefined") return false;
+  const hostname = String(window.location.hostname || "").toLowerCase();
+  return (
+    hostname.includes("framer.app") ||
+    hostname.includes("framer.website") ||
+    hostname === "framercanvas.com" ||
+    hostname.endsWith(".framercanvas.com") ||
+    hostname.includes("framer.com")
+  );
+}
+
 /**
  * useHydrated: A helper hook to prevent React hydration mismatches (#418).
  * Ensures that components render the same content on server and first client pass.
@@ -29,14 +41,10 @@ const CURRENT_RUNTIME =
   (typeof window !== "undefined"
     ? (window as any).__TWN_RUNTIME_CONFIG__
     : null) || {
-    siteBaseUrl: (typeof window !== "undefined" &&
-        (window.location.hostname.includes("framer.app") ||
-          window.location.hostname.includes("framer.website")))
+    siteBaseUrl: isFramerRuntimeHost()
       ? "https://maroon-aside-814100.framer.app"
       : "https://tripwithnomads.com",
-    apiBaseUrl: (typeof window !== "undefined" &&
-        (window.location.hostname.includes("framer.app") ||
-          window.location.hostname.includes("framer.website")))
+    apiBaseUrl: isFramerRuntimeHost()
       ? "https://twn-checkout-gateway-staging.tripwithnomads-crm.workers.dev"
       : "https://twn-checkout-gateway.tripwithnomads-crm.workers.dev",
     supabaseUrl: "https://ieuwiinbvbdvjrdqqzlb.supabase.co",
@@ -157,6 +165,25 @@ function getVariantValue(row: any): string {
 function getTransportValue(row: any): string {
   if (!row) return "";
   return String(row.transport || row.vehicle || "").trim();
+}
+
+function normalizePricingRows(rows: any[]): any[] {
+  const list = Array.isArray(rows) ? rows : [];
+  return list.map((row) => {
+    const departureDate = String(
+      row?.departure_date || row?.start_date || "",
+    ).trim();
+    const transport = String(row?.transport || row?.vehicle || "").trim();
+    const sharing = String(
+      row?.sharing || row?.variant_name || row?.variant || "",
+    ).trim();
+    return {
+      ...row,
+      departure_date: departureDate,
+      transport,
+      sharing,
+    };
+  });
 }
 
 function getDateOptions(pricing: any[]): string[] {
@@ -494,49 +521,13 @@ function getValidationErrors(store: CheckoutStore): string[] {
   return errors;
 }
 
-function showInlineError(errors: string | string[]) {
-  if (typeof document === "undefined") return;
-  const existing = document.getElementById("__checkout_error_toast");
-  if (existing) existing.remove();
-
-  const messages = Array.isArray(errors) ? errors : [errors];
-  const toast = document.createElement("div");
-  toast.id = "__checkout_error_toast";
-
-  toast.innerHTML = `
-        <div style="font-weight:700; margin-bottom:${
-    messages.length > 1 ? "8px" : "0"
-  };">⚠️ ${messages.length === 1 ? messages[0] : "Please complete:"}</div>
-        ${
-    messages.length > 1
-      ? '<div style="opacity:.9;font-size:13px;line-height:1.5;">' +
-        messages.map((m) => `• ${m}`).join("<br>") +
-        "</div>"
-      : ""
-  }
-    `;
-
-  Object.assign(toast.style, {
-    position: "fixed",
-    top: "20px",
-    left: "50%",
-    transform: "translateX(-50%)",
-    background: "rgba(30,30,50,.95)",
-    color: "#fff",
-    padding: "14px 20px",
-    borderRadius: "12px",
-    fontSize: "14px",
-    zIndex: "99999",
-    boxShadow: "0 10px 28px rgba(0,0,0,.28)",
-    maxWidth: "92vw",
-  });
-
-  document.body.appendChild(toast);
-  setTimeout(() => {
-    toast.style.opacity = "0";
-    toast.style.transition = "opacity .25s ease";
-    setTimeout(() => toast.remove(), 250);
-  }, 3200);
+function formatInlineError(errors: string | string[]): string {
+  const messages = (Array.isArray(errors) ? errors : [errors]).map((message) =>
+    String(message || "").trim()
+  ).filter(Boolean);
+  if (messages.length === 0) return "Please check your inputs and try again.";
+  if (messages.length === 1) return messages[0];
+  return `Please complete: ${messages.join(" • ")}`;
 }
 
 function firstNonEmpty(...values: any[]): string {
@@ -659,7 +650,12 @@ function fetchTripPricing(tripId: string): Promise<any[]> {
     .then((res) => {
       if (!res.ok) return [];
       return res.json().catch(() => null).then((payload) => {
-        return Array.isArray(payload?.pricing) ? payload.pricing : [];
+        const rows = Array.isArray(payload?.pricing_rows)
+          ? payload.pricing_rows
+          : Array.isArray(payload?.pricing)
+          ? payload.pricing
+          : [];
+        return normalizePricingRows(rows);
       });
     })
     .catch(() => []);
@@ -2115,9 +2111,12 @@ export function withCheckoutPayButton(Component): ComponentType {
       if (!isValid || store.submitting) return;
 
       if (store?.inviteOnly) {
-        showInlineError(
-          "This trip is invite-only. Please contact support to book.",
-        );
+        setStore({
+          couponMessageType: "error",
+          couponMessage: formatInlineError(
+            "This trip is invite-only. Please contact support to book.",
+          ),
+        });
         return;
       }
 
@@ -2250,17 +2249,25 @@ export function withCheckoutPayButton(Component): ComponentType {
                 payload,
                 response: data,
               });
-              showInlineError(
-                data?.error || `Payment setup failed (HTTP ${res.status})`,
-              );
-              setStore({ submitting: false });
+              setStore({
+                submitting: false,
+                couponMessageType: "error",
+                couponMessage: formatInlineError(
+                  data?.error || `Payment setup failed (HTTP ${res.status})`,
+                ),
+              });
               return;
             }
 
             const payu = data?.payu;
             if (!payu?.action) {
-              showInlineError("Payment gateway payload missing");
-              setStore({ submitting: false });
+              setStore({
+                submitting: false,
+                couponMessageType: "error",
+                couponMessage: formatInlineError(
+                  "Payment gateway payload missing",
+                ),
+              });
               return;
             }
 
@@ -2282,8 +2289,11 @@ export function withCheckoutPayButton(Component): ComponentType {
           })
           .catch((err) => {
             console.error("[Checkout] pay error", err);
-            showInlineError("Could not start payment");
-            setStore({ submitting: false });
+            setStore({
+              submitting: false,
+              couponMessageType: "error",
+              couponMessage: formatInlineError("Could not start payment"),
+            });
           });
       };
 
@@ -2310,7 +2320,10 @@ export function withCheckoutPayButton(Component): ComponentType {
             onClick={(e: any) => {
               e?.preventDefault?.();
               e?.stopPropagation?.();
-              showInlineError(errors);
+              setStore({
+                couponMessageType: "error",
+                couponMessage: formatInlineError(errors),
+              });
             }}
             style={{
               position: "absolute",

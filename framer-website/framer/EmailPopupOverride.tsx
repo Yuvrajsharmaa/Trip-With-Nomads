@@ -20,13 +20,23 @@ const LEAD_ID_PREFIX = "twn_lead_id_v1";
 const LEAD_IN_FLIGHT_KEY = "__twn_lead_in_flight_v1";
 const LEAD_IN_FLIGHT_TTL_MS = 10_000;
 
+function isFramerRuntimeHost(): boolean {
+  if (typeof window === "undefined") return false;
+  const hostname = String(window.location.hostname || "").toLowerCase();
+  return (
+    hostname.includes("framer.app") ||
+    hostname.includes("framer.website") ||
+    hostname === "framercanvas.com" ||
+    hostname.endsWith(".framercanvas.com") ||
+    hostname.includes("framer.com")
+  );
+}
+
 const CURRENT_RUNTIME =
   (typeof window !== "undefined"
     ? (window as any).__TWN_RUNTIME_CONFIG__
     : null) || {
-    gatewayUrl: (typeof window !== "undefined" &&
-        (window.location.hostname.includes("framer.app") ||
-          window.location.hostname.includes("framer.website")))
+    gatewayUrl: isFramerRuntimeHost()
       ? "https://twn-checkout-gateway-staging.tripwithnomads-crm.workers.dev"
       : "https://twn-checkout-gateway.tripwithnomads-crm.workers.dev",
   };
