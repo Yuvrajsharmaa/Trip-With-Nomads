@@ -134,6 +134,59 @@ function isSoldOutData(data: any): boolean {
   return Boolean(data?.__soldOut);
 }
 
+function buildDisplayDataFromCheckoutContext(payload: any): any | null {
+  const rows = Array.isArray(payload?.pricing_rows)
+    ? payload.pricing_rows
+    : Array.isArray(payload?.pricing)
+    ? payload.pricing
+    : [];
+  if (rows.length === 0) return null;
+
+  const prices = rows
+    .map((row) =>
+      toNumber(row?.price || row?.payable_price || row?.base_price || row?.amount)
+    )
+    .filter((value) => value > 0);
+
+  if (prices.length === 0) return null;
+  const lowest = Math.min(...prices);
+
+  const startDates = rows
+    .map((row) => String(row?.start_date || row?.departure_date || "").trim())
+    .filter(Boolean)
+    .sort();
+
+  return {
+    display_summary: {
+      base_price: lowest,
+      payable_price: lowest,
+      save_amount: 0,
+      has_discount: false,
+    },
+    next_batch_date: startDates[0] || "",
+  };
+}
+
+function fetchDisplayFallbackFromContext(
+  params: { slug?: string; tripId?: string },
+): Promise<any | null> {
+  const query = new URLSearchParams();
+  const slug = normalizeSlug(params.slug);
+  const tripId = normalizeTripId(params.tripId);
+  if (slug) query.set("slug", slug);
+  if (tripId) query.set("trip_id", tripId);
+  if (!slug && !tripId) return Promise.resolve(null);
+
+  return fetchGateway("get-trip-checkout-context", { method: "GET" }, query)
+    .then((res) => {
+      if (!res.ok) return null;
+      return res.json().catch(() => null).then((payload) => {
+        return buildDisplayDataFromCheckoutContext(payload);
+      });
+    })
+    .catch(() => null);
+}
+
 function readTripIdCandidate(props: any): string {
   return normalizeTripId(
     props?.tripId ||
@@ -189,30 +242,33 @@ function fetchTripDisplayPrice(
   if (tripId) query.set("trip_id", tripId);
   query.set("v", "3");
 
+  const resolveFromContext = () => {
+    return fetchDisplayFallbackFromContext({ slug, tripId }).then(
+      (fallbackData) => {
+        const resolved = fallbackData || createSoldOutData();
+        cache.set(cacheKey, { ts: Date.now(), data: resolved });
+        return resolved;
+      },
+    );
+  };
+
   const request = fetchGateway(
     "get-trip-display-price",
     { method: "GET" },
     query,
   )
     .then((res) => {
-      if (res.status === 404) {
-        return res.json().catch(() => ({})).then((data) => {
-          const message = String(data?.error || "").toLowerCase();
-          if (message.includes("no future pricing found")) {
-            const soldOut = createSoldOutData();
-            cache.set(cacheKey, { ts: Date.now(), data: soldOut });
-            return soldOut;
-          }
-          return null;
-        });
-      }
-      if (!res.ok) return null;
+      if (!res.ok) return resolveFromContext();
       return res.json().then((data) => {
-        if (data) cache.set(cacheKey, { ts: Date.now(), data });
-        return data;
-      }).catch(() => null);
+        const payable = toNumber(data?.display_summary?.payable_price);
+        if (data && payable > 0) {
+          cache.set(cacheKey, { ts: Date.now(), data });
+          return data;
+        }
+        return resolveFromContext();
+      }).catch(() => resolveFromContext());
     })
-    .catch(() => null)
+    .catch(() => resolveFromContext())
     .finally(() => {
       inFlight.delete(cacheKey);
     });
