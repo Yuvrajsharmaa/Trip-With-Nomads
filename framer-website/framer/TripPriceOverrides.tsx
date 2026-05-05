@@ -6,6 +6,8 @@ const UUID_REGEX =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const UUID_GLOBAL_REGEX =
   /[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}/ig;
+const UPCOMING_TRIP_SLUG_REGEX = /\/upcoming-trips\/([a-z0-9-]+)/i;
+const SLUG_QUERY_REGEX = /(?:\?|&)slug=([a-z0-9-]+)/i;
 const TRIP_ID_PROP_KEYS = [
   "tripId",
   "trip_id",
@@ -154,6 +156,33 @@ function findTripIdInValue(value: any, depth = 0): string {
   return "";
 }
 
+function findSlugInValue(value: any, depth = 0): string {
+  if (depth > 3 || value == null) return "";
+  if (typeof value === "string" || typeof value === "number") {
+    const raw = String(value || "");
+    const direct = normalizeSlug(raw);
+    if (direct) return direct;
+    const fromPath = raw.match(UPCOMING_TRIP_SLUG_REGEX);
+    const fromQuery = raw.match(SLUG_QUERY_REGEX);
+    const candidate = fromPath?.[1] || fromQuery?.[1] || "";
+    return normalizeSlug(candidate);
+  }
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      const found = findSlugInValue(item, depth + 1);
+      if (found) return found;
+    }
+    return "";
+  }
+  if (typeof value === "object") {
+    for (const key of Object.keys(value as any)) {
+      const found = findSlugInValue((value as any)[key], depth + 1);
+      if (found) return found;
+    }
+  }
+  return "";
+}
+
 function createSoldOutData() {
   return {
     __soldOut: true,
@@ -246,7 +275,7 @@ function readTripIdCandidate(props: any): string {
 }
 
 function readTripSlugCandidate(props: any): string {
-  return normalizeSlug(
+  const direct = normalizeSlug(
     props?.slug ||
       props?.["data-trip-slug"] ||
       props?.href ||
@@ -254,6 +283,7 @@ function readTripSlugCandidate(props: any): string {
       props?.text ||
       (typeof props?.children === "string" ? props.children : ""),
   );
+  return direct || findSlugInValue(props);
 }
 
 export function withTripIdSource(Component): ComponentType {
@@ -286,15 +316,20 @@ function fetchTripDisplayPrice(
   const pending = inFlight.get(cacheKey);
   if (pending) return pending;
 
+  const activeSlug = slug;
+  const activeTripId = activeSlug ? "" : tripId;
   const query = new URLSearchParams();
-  if (slug) query.set("slug", slug);
-  if (tripId) query.set("trip_id", tripId);
+  if (activeSlug) query.set("slug", activeSlug);
+  if (activeTripId) query.set("trip_id", activeTripId);
   query.set("v", "3");
 
   const resolveFromContext = (preloaded?: any | null) => {
     const pendingContext = preloaded !== undefined
       ? Promise.resolve(preloaded)
-      : fetchDisplayFallbackFromContext({ slug, tripId });
+      : fetchDisplayFallbackFromContext({
+        slug: activeSlug,
+        tripId: activeTripId,
+      });
     return pendingContext.then((fallbackData) => {
       const resolved = fallbackData || createSoldOutData();
       cache.set(cacheKey, { ts: Date.now(), data: resolved });
@@ -302,7 +337,10 @@ function fetchTripDisplayPrice(
     });
   };
 
-  const request = fetchDisplayFallbackFromContext({ slug, tripId }).then(
+  const request = fetchDisplayFallbackFromContext({
+    slug: activeSlug,
+    tripId: activeTripId,
+  }).then(
     (contextData) => {
       const hasFuturePricing = Boolean(contextData?.__hasFuturePricing);
       if (contextData && !hasFuturePricing) {
