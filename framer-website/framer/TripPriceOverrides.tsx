@@ -513,7 +513,7 @@ function fetchTripDisplayPrice(
   const rawSlug = String(params.slug || "").trim();
   const rawTripId = String(params.tripId || "").trim();
   const fallbackSlug = normalizeSlug(rawSlug);
-  const tripId = normalizeTripId(rawTripId) || normalizeTripId(rawSlug);
+  const tripId = normalizeTripId(rawTripId);
   const activeTripId = tripId;
   const activeSlug = activeTripId ? "" : fallbackSlug;
   if (!activeSlug && !activeTripId) {
@@ -575,12 +575,9 @@ function fetchTripDisplayPrice(
   return request;
 }
 
-const DETAIL_PAGE_REGEX = /\/upcoming-trips\/([^/?#]+)/i;
-
 function useTripDisplayData(props: any): any | null {
   const [data, setData] = useState<any | null>(null);
   const isHydrated = useHydrated();
-  const currentPathname = useCurrentPathname();
   const [forcedTripId, setForcedTripId] = useState<string>(() =>
     normalizeTripId(_forcedTripId),
   );
@@ -602,23 +599,18 @@ function useTripDisplayData(props: any): any | null {
   const slug = useMemo(() => {
     if (!isHydrated) return "";
 
-    // First: check if this component instance has a trip identifier in its own props.
-    // This handles recommended cards nested inside a detail page — each card has
-    // its own props (e.g. href="/upcoming-trips/kedarnath-yatra") that should be
-    // authoritative for that card.
+    // Recommended cards nested inside a detail page have their own slug in props
+    // (e.g. href="/upcoming-trips/kedarnath-yatra") — use that.
     const propsSlug = readTripSlugCandidate(props);
     if (propsSlug) return propsSlug;
 
-    // No props-based identifier found — this is main pricing on a detail page.
-    // Use the forced trip ID from the hidden source element if available.
+    // Main pricing on detail page — ONLY use forcedTripId from hidden source.
+    // No pathname fallback: if the hidden source hasn't broadcast yet, return
+    // empty and let the tripId-driven fetch take over when forcedTripId arrives.
     if (forcedTripId) return "";
 
-    // Fall back to pathname slug (legacy behavior).
-    const pathMatch = currentPathname.match(DETAIL_PAGE_REGEX);
-    if (pathMatch?.[1]) return normalizeSlug(decodeURIComponent(pathMatch[1]));
-
     return "";
-  }, [props, isHydrated, currentPathname, forcedTripId]);
+  }, [props, isHydrated, forcedTripId]);
 
   const tripId = useMemo(() => {
     if (!isHydrated) return "";
@@ -635,7 +627,7 @@ function useTripDisplayData(props: any): any | null {
     if (forcedTripId) return forcedTripId;
 
     return "";
-  }, [props, isHydrated, currentPathname, forcedTripId]);
+  }, [props, isHydrated, forcedTripId]);
 
   useEffect(() => {
     if (!slug && !tripId) {
