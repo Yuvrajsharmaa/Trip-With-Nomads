@@ -79,7 +79,6 @@ function fetchGateway(
 const cache = new Map<string, { ts: number; data: any }>();
 const inFlight = new Map<string, Promise<any | null>>();
 const actionableFailureLogged = new Set<string>();
-let forcedTripId = "";
 
 type TripCardStatus = "priced" | "sold_out" | "unavailable";
 type TripCardFailureReason =
@@ -384,14 +383,8 @@ function readTripSlugCandidate(props: any): string {
 
 export function withTripIdSource(Component): ComponentType {
   return (props: any) => {
-    const nextTripId = readTripIdCandidate(props);
-
-    useEffect(() => {
-      if (nextTripId) {
-        forcedTripId = nextTripId;
-      }
-    }, [nextTripId]);
-
+    // Trip cards must resolve from their own slug/link props. This override is
+    // kept as a no-op for old Framer layer compatibility only.
     return <Component {...props} />;
   };
 }
@@ -403,8 +396,8 @@ function fetchTripDisplayPrice(
   const rawTripId = String(params.tripId || "").trim();
   const slug = normalizeSlug(rawSlug);
   const tripId = normalizeTripId(rawTripId) || normalizeTripId(rawSlug);
-  const activeTripId = tripId;
-  const activeSlug = activeTripId ? "" : slug;
+  const activeSlug = slug;
+  const activeTripId = activeSlug ? "" : tripId;
   if (!activeSlug && !activeTripId) {
     return Promise.resolve(createUnavailableData("invalid_identifier"));
   }
@@ -514,7 +507,7 @@ function useTripDisplayData(props: any): any | null {
   const [data, setData] = useState<any | null>(null);
   const slug = useMemo(() => readTripSlugCandidate(props), [props]);
   const tripId = useMemo(() => readTripIdCandidate(props), [props]);
-  const activeTripId = tripId || forcedTripId;
+  const activeTripId = slug ? "" : tripId;
 
   useEffect(() => {
     if (!slug && !activeTripId) {
@@ -548,10 +541,10 @@ function withTripPriceText(
 
 export function withTripPrimaryPrice(Component): ComponentType {
   return withTripPriceText((data) => {
-    if (!isPricedData(data)) return "Price on demand";
+    if (!isPricedData(data)) return "";
     const value = toNumber(data?.display_summary?.payable_price);
-    return value > 0 ? fmtINR(value) : "Price on demand";
-  }, "Price on demand")(Component);
+    return value > 0 ? fmtINR(value) : "";
+  }, "")(Component);
 }
 
 export function withTripStrikePrice(Component): ComponentType {

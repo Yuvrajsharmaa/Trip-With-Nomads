@@ -51,7 +51,11 @@ const CURRENT_RUNTIME =
     supabaseAnonKey: "", // Not used when gateway is active
   };
 
-const GATEWAY_BASE = CURRENT_RUNTIME.apiBaseUrl;
+const GATEWAY_BASE = String(
+  CURRENT_RUNTIME.apiBaseUrl || CURRENT_RUNTIME.gatewayUrl || "",
+);
+const PRODUCTION_GATEWAY_BASE =
+  "https://twn-checkout-gateway.tripwithnomads-crm.workers.dev";
 
 const TAX_RATE = 0.05;
 const CHECKOUT_PAGE_URL = `${CURRENT_RUNTIME.siteBaseUrl}/checkout`;
@@ -67,9 +71,22 @@ const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const PHONE_REGEX = /^\+?[\d\s\-()]{10,15}$/;
 const UUID_REGEX =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const UUID_GLOBAL_REGEX =
+  /[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}/ig;
+const TRIP_ID_SOURCE_EVENT = "twn:trip-id-source";
 const tripDisplayCache = new Map<string, { ts: number; data: any }>();
 const tripDisplayInFlight = new Map<string, Promise<any | null>>();
 let forcedTripId = "";
+
+type CheckoutContextDisplayData = {
+  display_summary: {
+    base_price: number;
+    payable_price: number;
+    save_amount: number;
+    has_discount: boolean;
+  };
+  next_batch_date: string;
+};
 
 type PaymentMode = "full" | "partial_25";
 type Traveller = {
@@ -442,25 +459,73 @@ function buildPricingBreakdownFromQuote(
   data: any,
   store: CheckoutStore,
 ): PricingBreakdown {
+  const baseSubtotal = toNumber(
+    data.base_subtotal ?? data.subtotal_amount ?? data.subtotal,
+  );
+  const earlyBirdDiscount = toNumber(data.early_bird_discount_amount);
+  const source = String(
+    data.applied_discount_source || data.final_applied_source || "",
+  )
+    .trim()
+    .toLowerCase();
+  const rawDiscountTotal = toNumber(
+    data.discount_amount_total ?? data.discount_amount,
+  );
+  const explicitCouponDiscount = toNumber(data.coupon_discount_amount);
+  const couponDiscount = explicitCouponDiscount > 0
+    ? explicitCouponDiscount
+    : (source === "coupon" || source === "both")
+    ? rawDiscountTotal
+    : 0;
+  const discountTotal = rawDiscountTotal > 0
+    ? rawDiscountTotal
+    : Math.max(earlyBirdDiscount, couponDiscount);
+  const taxableAmount = toNumber(
+    data.taxable_amount ?? Math.max(0, baseSubtotal - discountTotal),
+  );
+  const taxAmount = toNumber(data.tax_amount ?? taxableAmount * TAX_RATE);
   const paymentMode = store.paymentMode || "full";
-  const total = toNumber(data.total_amount);
+  const total = toNumber(data.total_amount ?? taxableAmount + taxAmount);
   const payableNow = paymentMode === "partial_25" ? total * 0.25 : total;
   const dueAmount = total - payableNow;
+  const appliedSource = source === "coupon" || source === "both"
+    ? "coupon"
+    : source === "early_bird"
+    ? "early_bird"
+    : discountTotal > 0 && couponDiscount > 0
+    ? "coupon"
+    : "none";
+
+  const lineItems: PricingBreakdown["line_items"] =
+    Array.isArray(data.line_items) && data.line_items.length > 0
+    ? data.line_items
+    : [
+      { label: "Trip Subtotal", amount: baseSubtotal, type: "base" as const },
+      ...(discountTotal > 0
+        ? [{
+          label: "Discount",
+          amount: -discountTotal,
+          type: "discount" as const,
+        }]
+        : []),
+      { label: "Tax (5%)", amount: taxAmount, type: "tax" as const },
+      { label: "Total Amount", amount: total, type: "total" as const },
+    ];
 
   return {
-    base_subtotal: toNumber(data.base_subtotal),
-    early_bird_discount_amount: toNumber(data.early_bird_discount_amount),
-    coupon_discount_amount: toNumber(data.coupon_discount_amount),
-    applied_discount_source: data.applied_discount_source || "coupon",
+    base_subtotal: baseSubtotal,
+    early_bird_discount_amount: earlyBirdDiscount,
+    coupon_discount_amount: couponDiscount,
+    applied_discount_source: appliedSource,
     applied_discount_code: data.applied_discount_code || data.code || null,
-    discount_amount_total: toNumber(data.discount_amount_total),
-    taxable_amount: toNumber(data.taxable_amount),
-    tax_amount: toNumber(data.tax_amount),
+    discount_amount_total: discountTotal,
+    taxable_amount: taxableAmount,
+    tax_amount: taxAmount,
     total_amount: total,
     payable_now_amount: payableNow,
     due_amount: dueAmount,
     payment_mode: paymentMode,
-    line_items: Array.isArray(data.line_items) ? data.line_items : [],
+    line_items: lineItems,
   };
 }
 
@@ -482,6 +547,21 @@ function computeTotals(store: CheckoutStore) {
   };
 }
 
+function getAppliedCouponCode(store: CheckoutStore): string {
+  const totals = computeTotals(store);
+  const fromApplied = String(store.appliedCoupon?.code || "").trim();
+  if (fromApplied) return fromApplied.toUpperCase();
+  const fromTotals = String(totals.appliedDiscountCode || "").trim();
+  return fromTotals.toUpperCase();
+}
+
+function hasAppliedCoupon(store: CheckoutStore): boolean {
+  const totals = computeTotals(store);
+  if (toNumber(totals.couponDiscount) > 0) return true;
+  if (String(totals.appliedDiscountCode || "").trim()) return true;
+  return Boolean(store.appliedCoupon?.valid);
+}
+
 function getSummaryLineRows(store: CheckoutStore): SummaryLineContextValue[] {
   const breakdown = store.pricingBreakdown || buildLocalPricingBreakdown(store);
   return (breakdown.line_items || []).map((item, i) => ({
@@ -500,11 +580,12 @@ function formatNextBatchDate(dateStr: string): string {
   if (!dateStr) return "";
   const date = new Date(dateStr);
   if (isNaN(date.getTime())) return "";
-  return date.toLocaleDateString("en-US", {
+  return new Intl.DateTimeFormat("en-US", {
     day: "numeric",
     month: "short",
     year: "numeric",
-  });
+    timeZone: "UTC",
+  }).format(date);
 }
 
 function getValidationState(store: CheckoutStore): {
@@ -645,12 +726,36 @@ function buildGatewayUrl(path: string, params?: URLSearchParams): string {
   return `${base}/${endpoint}${query ? `?${query}` : ""}`;
 }
 
+function buildGatewayUrlFromBase(
+  baseUrl: string,
+  path: string,
+  params?: URLSearchParams,
+): string {
+  const base = String(baseUrl || "").trim().replace(/\/+$/, "");
+  const endpoint = String(path || "").trim().replace(/^\/+/, "");
+  const query = params?.toString() || "";
+  return `${base}/${endpoint}${query ? `?${query}` : ""}`;
+}
+
+function resolveGatewayBases(): string[] {
+  const normalizedPrimary = String(GATEWAY_BASE || "").trim().replace(/\/+$/, "");
+  const normalizedProd = String(PRODUCTION_GATEWAY_BASE).trim().replace(/\/+$/, "");
+  const bases: string[] = [];
+  if (normalizedPrimary) bases.push(normalizedPrimary);
+  // In Framer preview/canvas, allow automatic failover to prod for missing trips.
+  if (isFramerRuntimeHost() && normalizedProd) bases.push(normalizedProd);
+  return Array.from(new Set(bases));
+}
+
 function fetchGateway(
   path: string,
   init: RequestInit = {},
   params?: URLSearchParams,
+  baseOverride?: string,
 ): Promise<Response> {
-  const url = buildGatewayUrl(path, params);
+  const url = baseOverride
+    ? buildGatewayUrlFromBase(baseOverride, path, params)
+    : buildGatewayUrl(path, params);
   return fetch(url, {
     ...init,
     headers: {
@@ -748,124 +853,154 @@ function fetchTripPricing(tripId: string): Promise<any[]> {
     .catch(() => []);
 }
 
-function createSoldOutTripData() {
+function createEmptySummary() {
   return {
-    __soldOut: true,
-    display_summary: {
-      base_price: 0,
-      payable_price: 0,
-      save_amount: 0,
-      has_discount: false,
-    },
-    next_batch_date: "",
+    base_price: 0,
+    payable_price: 0,
+    save_amount: 0,
+    has_discount: false,
   };
 }
 
-function isSoldOutTripData(value: any): boolean {
-  return Boolean(value?.__soldOut);
+function createCheckoutDisplayData(
+  summary?: Partial<CheckoutContextDisplayData["display_summary"]> | null,
+  nextBatchDate?: string,
+): CheckoutContextDisplayData {
+  return {
+    display_summary: {
+      ...createEmptySummary(),
+      ...(summary || {}),
+    },
+    next_batch_date: String(nextBatchDate || "").trim(),
+  };
 }
 
-function buildDisplayDataFromCheckoutContext(payload: any): any | null {
-  const rows = Array.isArray(payload?.pricing_rows)
-    ? payload.pricing_rows
-    : Array.isArray(payload?.pricing)
-    ? payload.pricing
-    : [];
-  if (rows.length === 0) return null;
+function extractSummaryFromRow(row: any) {
+  const payable = toNumber(row?.payable_price || row?.price || row?.amount);
+  const base = toNumber(row?.base_price || row?.original_price || payable);
+  const save = toNumber(
+    row?.save_amount || row?.discount_amount || Math.max(base - payable, 0),
+  );
+  const hasDiscount = Boolean(row?.has_discount) || save > 0 || base > payable;
+  return {
+    base_price: base > 0 ? base : payable,
+    payable_price: payable,
+    save_amount: save,
+    has_discount: hasDiscount && payable > 0,
+  };
+}
 
-  const prices = rows
+function buildDisplayDataFromCheckoutRows(
+  rows: any[],
+  preferredDate?: string,
+): CheckoutContextDisplayData | null {
+  const normalizedRows = normalizePricingRows(rows || []);
+  if (!normalizedRows.length) return null;
+
+  const validRows = normalizedRows.filter((row) => {
+    const payable = toNumber(row?.payable_price || row?.price || row?.amount);
+    return payable > 0;
+  });
+  if (!validRows.length) return null;
+
+  const date = String(preferredDate || "").trim();
+  const matchedRows = date
+    ? validRows.filter((row) => String(row?.departure_date || "").trim() === date)
+    : [];
+  const workingRows = matchedRows.length > 0 ? matchedRows : validRows;
+
+  const payableValues = workingRows
     .map((row) =>
       toNumber(row?.price || row?.payable_price || row?.base_price || row?.amount)
     )
     .filter((value) => value > 0);
-  if (prices.length === 0) return null;
+  if (!payableValues.length) return null;
+  const lowest = Math.min(...payableValues);
+  const selectedRow =
+    workingRows.find((row) =>
+      toNumber(row?.payable_price || row?.price || row?.amount) === lowest
+    ) || workingRows[0];
 
-  const lowest = Math.min(...prices);
-  const startDates = rows
-    .map((row) => String(row?.start_date || row?.departure_date || "").trim())
+  const dateCandidates = normalizedRows
+    .map((row) => String(row?.departure_date || row?.start_date || "").trim())
     .filter(Boolean)
     .sort();
+  const nextBatchDate =
+    String(selectedRow?.departure_date || "").trim() || dateCandidates[0] || "";
 
-  return {
-    display_summary: {
-      base_price: lowest,
-      payable_price: lowest,
-      save_amount: 0,
-      has_discount: false,
-    },
-    next_batch_date: startDates[0] || "",
-  };
+  return createCheckoutDisplayData(extractSummaryFromRow(selectedRow), nextBatchDate);
 }
 
-function fetchDisplayFallbackFromContext(
-  params: { slug?: string; tripId?: string },
-): Promise<any | null> {
+function fetchCheckoutDisplayData(
+  params: { slug?: string; tripId?: string; date?: string },
+): Promise<CheckoutContextDisplayData | null> {
   const query = new URLSearchParams();
   const slug = normalizeSlug(params.slug);
   const tripId = normalizeTripId(params.tripId);
   if (slug) query.set("slug", slug);
   if (tripId) query.set("trip_id", tripId);
-  if (!slug && !tripId) return Promise.resolve(null);
+  if (!slug && !tripId) {
+    return Promise.resolve(null);
+  }
 
-  return fetchGateway("get-trip-checkout-context", { method: "GET" }, query)
-    .then((res) => {
-      if (!res.ok) return null;
-      return res.json().catch(() => null).then((payload) =>
-        buildDisplayDataFromCheckoutContext(payload)
-      );
-    })
-    .catch(() => null);
+  const gatewayBases = resolveGatewayBases();
+  const request = async (): Promise<CheckoutContextDisplayData | null> => {
+    for (const gatewayBase of gatewayBases) {
+      try {
+        const res = await fetchGateway(
+          "get-trip-checkout-context",
+          { method: "GET" },
+          query,
+          gatewayBase,
+        );
+        if (!res.ok) continue;
+        const payload = await res.json().catch(() => null);
+        const rows = Array.isArray(payload?.pricing_rows)
+          ? payload.pricing_rows
+          : Array.isArray(payload?.pricing)
+          ? payload.pricing
+          : [];
+        const data = buildDisplayDataFromCheckoutRows(rows, params.date);
+        if (data) return data;
+      } catch (_error) {
+        continue;
+      }
+    }
+    return null;
+  };
+  return request();
 }
 
 function fetchTripDisplayPrice(
-  params: { slug?: string; tripId?: string },
+  params: { slug?: string; tripId?: string; date?: string },
 ): Promise<any | null> {
   const rawSlug = String(params.slug || "").trim();
   const rawTripId = String(params.tripId || "").trim();
   const slug = normalizeSlug(rawSlug);
-  const tripId = normalizeTripId(rawTripId) || normalizeTripId(rawSlug);
-  if (!slug && !tripId) return Promise.resolve(null);
+  const tripId = normalizeTripId(rawTripId);
+  const activeSlug = slug;
+  const activeTripId = activeSlug ? "" : tripId;
+  const activeDate = String(params.date || "").trim();
+  if (!activeSlug && !activeTripId) return Promise.resolve(null);
 
-  const cacheKey = `${slug}::${tripId}`;
+  const cacheKey = `${activeSlug}::${activeTripId}::${activeDate}`;
   const now = Date.now();
   const cached = tripDisplayCache.get(cacheKey);
   if (cached && now - cached.ts < 120000) {
-    return cached.data;
+    return Promise.resolve(cached.data);
   }
   const inFlight = tripDisplayInFlight.get(cacheKey);
   if (inFlight) return inFlight;
 
-  const query = new URLSearchParams();
-  if (slug) query.set("slug", slug);
-  if (tripId) query.set("trip_id", tripId);
-  query.set("v", "3");
-
-  const resolveFromContext = () => {
-    return fetchDisplayFallbackFromContext({ slug, tripId }).then(
-      (fallbackData) => {
-        const resolved = fallbackData || createSoldOutTripData();
-        tripDisplayCache.set(cacheKey, { ts: Date.now(), data: resolved });
-        return resolved;
-      },
-    );
-  };
-
-  const request = fetchGateway("get-trip-display-price", {
-    method: "GET",
-    priority: "high" as any,
-  }, query)
-    .then((res) => {
-      if (!res.ok) return resolveFromContext();
-      return res.json().catch(() => null).then((data) => {
-        const payable = toNumber(data?.display_summary?.payable_price);
-        if (data && payable > 0) {
-          tripDisplayCache.set(cacheKey, { ts: Date.now(), data });
-          return data;
-        }
-        return resolveFromContext();
-      });
+  const request = fetchCheckoutDisplayData({
+    slug: activeSlug,
+    tripId: activeTripId,
+    date: activeDate,
+  })
+    .then((data) => {
+      tripDisplayCache.set(cacheKey, { ts: Date.now(), data });
+      return data;
     })
-    .catch(() => resolveFromContext())
     .finally(() => {
       tripDisplayInFlight.delete(cacheKey);
     });
@@ -1847,6 +1982,7 @@ export function withCheckoutContactEmail(Component): ComponentType {
 export function withCouponCodeInput(Component): ComponentType {
   return (props: any) => {
     const [store, setStore] = useStore();
+    const appliedCode = getAppliedCouponCode(store);
 
     const handleChange = (value: string) => {
       setStore({ couponCode: String(value || "").toUpperCase().trimStart() });
@@ -1855,7 +1991,7 @@ export function withCouponCodeInput(Component): ComponentType {
     return (
       <Component
         {...props}
-        value={store.couponCode || ""}
+        value={store.couponCode || appliedCode || ""}
         onValueChange={handleChange}
         onChange={(e: any) => handleChange(e.target.value)}
         placeholder="Enter coupon code"
@@ -1868,7 +2004,7 @@ export function withApplyCouponButton(Component): ComponentType {
   return (props: any) => {
     const [store, setStore] = useStore();
     const [busy, setBusy] = useState(false);
-    const alreadyApplied = Boolean(store.appliedCoupon?.valid);
+    const alreadyApplied = hasAppliedCoupon(store);
 
     if (alreadyApplied) {
       return (
@@ -2032,7 +2168,7 @@ export function withApplyCouponButton(Component): ComponentType {
 export function withRemoveCouponButton(Component): ComponentType {
   return (props: any) => {
     const [store, setStore] = useStore();
-    const visible = Boolean(store.appliedCoupon?.valid);
+    const visible = hasAppliedCoupon(store);
 
     if (!visible) {
       return (
@@ -2069,10 +2205,11 @@ export function withCouponMessage(Component): ComponentType {
     const [store] = useStore();
     const totals = computeTotals(store);
     let text = store.couponMessage || "Enter a coupon code and tap Apply.";
-    if (store.appliedCoupon?.code) {
+    const appliedCode = getAppliedCouponCode(store);
+    if (appliedCode) {
       text = totals.earlyBirdDiscount > 0
-        ? `Coupon ${store.appliedCoupon.code} applied with Early Bird`
-        : `Coupon ${store.appliedCoupon.code} applied`;
+        ? `Coupon ${appliedCode} applied with Early Bird`
+        : `Coupon ${appliedCode} applied`;
     }
     return <Component {...props} text={text} />;
   };
@@ -2150,22 +2287,21 @@ export function withCheckoutSubtotalLabel(Component): ComponentType {
 export function withCheckoutDiscount(Component): ComponentType {
   return withTextFromState((store) => {
     const totals = computeTotals(store);
-    const primaryDiscount = totals.earlyBirdDiscount > 0
-      ? totals.earlyBirdDiscount
-      : totals.couponDiscount > 0
-      ? totals.couponDiscount
-      : totals.discount;
-    return `- ${fmtINR(primaryDiscount)}`;
+    return `- ${fmtINR(totals.discount)}`;
   })(Component);
 }
 
 export function withCheckoutDiscountLabel(Component): ComponentType {
   return withTextFromState((store) => {
     const totals = computeTotals(store);
-    if (totals.earlyBirdDiscount > 0) return "Early Bird";
-    if (totals.couponDiscount > 0 && totals.appliedDiscountCode) {
+    const source = String(totals.appliedDiscountSource || "").toLowerCase();
+    if (
+      (source === "coupon" || source === "both" || totals.couponDiscount > 0) &&
+      totals.appliedDiscountCode
+    ) {
       return `Coupon (${totals.appliedDiscountCode})`;
     }
+    if (totals.earlyBirdDiscount > 0) return "Early Bird";
     return "Discount";
   })(Component);
 }
@@ -2174,7 +2310,13 @@ export function withCheckoutCouponCode(Component): ComponentType {
   return (props: any) => {
     const [store] = useStore();
     const totals = computeTotals(store);
-    const hasCoupon = totals.couponDiscount > 0;
+    const source = String(totals.appliedDiscountSource || "").toLowerCase();
+    const couponAmount = totals.couponDiscount > 0
+      ? totals.couponDiscount
+      : (source === "coupon" || source === "both")
+      ? totals.discount
+      : 0;
+    const hasCoupon = couponAmount > 0;
     if (!hasCoupon) {
       return (
         <Component
@@ -2184,7 +2326,7 @@ export function withCheckoutCouponCode(Component): ComponentType {
         />
       );
     }
-    return <Component {...props} text={`- ${fmtINR(totals.couponDiscount)}`} />;
+    return <Component {...props} text={`- ${fmtINR(couponAmount)}`} />;
   };
 }
 
@@ -2508,9 +2650,10 @@ export function withCheckoutHideWhenNoCoupon(Component): ComponentType {
     const [store] = useStore();
     const isHydrated = useHydrated();
     const totals = computeTotals(store);
-    const hasCoupon = isHydrated &&
-      totals.couponDiscount > 0 &&
-      Boolean(String(totals.appliedDiscountCode || "").trim());
+    const source = String(totals.appliedDiscountSource || "").toLowerCase();
+    const hasCouponAmount = totals.couponDiscount > 0 ||
+      ((source === "coupon" || source === "both") && totals.discount > 0);
+    const hasCoupon = isHydrated && hasCouponAmount;
 
     if (!hasCoupon) {
       return (
@@ -2825,6 +2968,7 @@ function normalizeSlug(value: any): string {
 
   const fromUrl = raw.match(/\/upcoming-trips\/([^/?#]+)/i);
   const candidate = fromUrl?.[1] ? decodeURIComponent(fromUrl[1]) : raw;
+  if (candidate.startsWith("framer-")) return "";
   if (UUID_REGEX.test(candidate)) return "";
   return /^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(candidate) ? candidate : "";
 }
@@ -2837,24 +2981,69 @@ function normalizeTripId(value: any): string {
   return clean;
 }
 
+function findTripIdInValue(value: any, depth = 0): string {
+  if (depth > 3 || value == null) return "";
+  if (typeof value === "string" || typeof value === "number") {
+    const raw = String(value);
+    const direct = normalizeTripId(raw);
+    if (direct) return direct;
+    const matches = raw.match(UUID_GLOBAL_REGEX);
+    return normalizeTripId(matches?.[0] || "");
+  }
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      const found = findTripIdInValue(item, depth + 1);
+      if (found) return found;
+    }
+    return "";
+  }
+  if (typeof value === "object") {
+    for (const key of ["tripId", "trip_id", "tripid", "awOOt0Clm"]) {
+      const found = findTripIdInValue((value as any)?.[key], depth + 1);
+      if (found) return found;
+    }
+    for (const key of Object.keys(value as any)) {
+      const found = findTripIdInValue((value as any)[key], depth + 1);
+      if (found) return found;
+    }
+  }
+  return "";
+}
+
 function readTripIdCandidate(props: any): string {
-  return normalizeTripId(
+  const direct = normalizeTripId(
     props?.tripId ||
+      props?.trip_id ||
+      props?.tripid ||
+      props?.awOOt0Clm ||
       props?.["data-trip-id"] ||
       props?.text ||
       (typeof props?.children === "string" ? props.children : ""),
   );
+  return direct || findTripIdInValue(props);
 }
 
 function readTripSlugCandidate(props: any): string {
-  return normalizeSlug(
-    props?.slug ||
-      props?.["data-trip-slug"] ||
-      props?.href ||
-      props?.link ||
-      props?.text ||
-      (typeof props?.children === "string" ? props.children : ""),
-  );
+  const direct = normalizeSlug(props?.slug || props?.["data-trip-slug"]);
+  if (direct) return direct;
+
+  const href = String(props?.href || "").trim();
+  const hrefMatch = href.match(/\/upcoming-trips\/([^/?#]+)/i);
+  if (hrefMatch?.[1]) return normalizeSlug(hrefMatch[1]);
+
+  const linkCandidates = [
+    props?.link,
+    props?.link?.href,
+    props?.link?.url,
+    props?.link?.path,
+  ];
+  for (const candidate of linkCandidates) {
+    const link = String(candidate || "").trim();
+    const linkMatch = link.match(/\/upcoming-trips\/([^/?#]+)/i);
+    if (linkMatch?.[1]) return normalizeSlug(linkMatch[1]);
+  }
+
+  return "";
 }
 
 export function withTripIdSource(Component): ComponentType {
@@ -2862,8 +3051,14 @@ export function withTripIdSource(Component): ComponentType {
     const nextTripId = readTripIdCandidate(props);
 
     useEffect(() => {
-      if (nextTripId) {
+      if (nextTripId && typeof window !== "undefined") {
+        const path = String(window.location.pathname || "").toLowerCase();
+        const onCheckoutPage = path.startsWith("/checkout");
+        if (onCheckoutPage) return;
         forcedTripId = nextTripId;
+        window.dispatchEvent(
+          new CustomEvent(TRIP_ID_SOURCE_EVENT, { detail: nextTripId }),
+        );
       }
     }, [nextTripId]);
 
@@ -2873,22 +3068,45 @@ export function withTripIdSource(Component): ComponentType {
 
 function useTripDisplayData(props?: any) {
   const [data, setData] = useState<any>(null);
+  const [forcedFromSource, setForcedFromSource] = useState<string>(() =>
+    normalizeTripId(forcedTripId)
+  );
   const propTripId = readTripIdCandidate(props);
   const propSlug = readTripSlugCandidate(props);
 
   useEffect(() => {
+    if (typeof window === "undefined") return;
+    const sync = (event?: Event) => {
+      const fromEvent = normalizeTripId((event as CustomEvent)?.detail);
+      const next = fromEvent || normalizeTripId(forcedTripId);
+      setForcedFromSource((prev) => (prev === next ? prev : next));
+    };
+    window.addEventListener(TRIP_ID_SOURCE_EVENT, sync as EventListener);
+    sync();
+    return () => {
+      window.removeEventListener(TRIP_ID_SOURCE_EVENT, sync as EventListener);
+    };
+  }, []);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
     let disposed = false;
     const query = new URLSearchParams(window.location.search);
-    const slugFromPath = getTripSlugFromPathname(window.location.pathname);
-    const tripId = propTripId || query.get("tripId") || query.get("trip_id") ||
-      forcedTripId || "";
-    const slug = propSlug || slugFromPath ||
-      (tripId ? "" : query.get("slug") || "");
+    const path = String(window.location.pathname || "");
+    const onCheckoutPage = path.toLowerCase().startsWith("/checkout");
+    const slugFromPath = getTripSlugFromPathname(path);
+    const slug = onCheckoutPage
+      ? normalizeSlug(query.get("slug") || propSlug || slugFromPath || "")
+      : "";
+    const tripId = onCheckoutPage
+      ? normalizeTripId(propTripId || query.get("tripId") || query.get("trip_id") || "")
+      : normalizeTripId(forcedFromSource || forcedTripId || propTripId || "");
+    const selectedDate = String(query.get("date") || "").trim();
 
-    fetchTripDisplayPrice({ slug, tripId })
+    fetchTripDisplayPrice({ slug, tripId, date: selectedDate })
       .then((payload) => {
         if (disposed) return;
-        setData(payload || null);
+        setData(payload);
       })
       .catch(() => {
         if (disposed) return;
@@ -2898,31 +3116,38 @@ function useTripDisplayData(props?: any) {
     return () => {
       disposed = true;
     };
-  }, [propTripId, propSlug]);
+  }, [propTripId, propSlug, forcedFromSource]);
 
   return data;
 }
 
 export function withTripPrimaryPrice(Component): ComponentType {
   return (props: any) => {
+    const isHydrated = useHydrated();
     const tripData = useTripDisplayData(props);
-    if (isSoldOutTripData(tripData)) {
-      return <Component {...props} text="No upcoming batches" />;
+    if (!isHydrated) {
+      return <Component {...props} text="" visible={false} />;
     }
+    const payable = toNumber(tripData?.display_summary?.payable_price);
+    if (payable <= 0) return <Component {...props} text="" visible={false} />;
     const summary = tripData?.display_summary;
     const value = toNumber(summary?.payable_price);
-    const text = value > 0 ? fmtINR(value) : "\u20b90";
-    return <Component {...props} text={text} />;
+    const text = value > 0 ? fmtINR(value) : "";
+    return <Component {...props} text={text} visible={value > 0} />;
   };
 }
 
 export function withTripStrikePrice(Component): ComponentType {
   return (props: any) => {
+    const isHydrated = useHydrated();
     const tripData = useTripDisplayData(props);
     const summary = tripData?.display_summary;
     const base = toNumber(summary?.base_price);
     const payable = toNumber(summary?.payable_price);
-    const hasDiscount = Boolean(summary?.has_discount) && base > payable &&
+    const hasDiscount =
+      isHydrated &&
+      Boolean(summary?.has_discount) &&
+      base > payable &&
       payable > 0;
     if (!hasDiscount) {
       return <Component {...props} text="" visible={false} />;
@@ -2945,10 +3170,11 @@ export function withTripStrikePrice(Component): ComponentType {
 
 export function withTripSaveBadge(Component): ComponentType {
   return (props: any) => {
+    const isHydrated = useHydrated();
     const tripData = useTripDisplayData(props);
     const summary = tripData?.display_summary;
     const save = toNumber(summary?.save_amount);
-    const hasDiscount = Boolean(summary?.has_discount) && save > 0;
+    const hasDiscount = isHydrated && Boolean(summary?.has_discount) && save > 0;
     if (!hasDiscount) {
       return (
         <Component
@@ -2969,9 +3195,12 @@ export function withTripSaveBadge(Component): ComponentType {
 
 export function withTripHideWhenNoDiscount(Component): ComponentType {
   return (props: any) => {
+    const isHydrated = useHydrated();
     const tripData = useTripDisplayData(props);
     const summary = tripData?.display_summary;
-    const hasDiscount = Boolean(summary?.has_discount) &&
+    const hasDiscount =
+      isHydrated &&
+      Boolean(summary?.has_discount) &&
       toNumber(summary?.save_amount) > 0;
     if (!hasDiscount) {
       return (
@@ -2991,19 +3220,11 @@ export function withTripHideWhenNoDiscount(Component): ComponentType {
 
 export function withTripStartsFromText(Component): ComponentType {
   return (props: any) => {
+    const isHydrated = useHydrated();
     const tripData = useTripDisplayData(props);
-    if (isSoldOutTripData(tripData)) {
-      return (
-        <Component
-          {...props}
-          text=""
-          style={{
-            ...(props.style || {}),
-            display: "none",
-            pointerEvents: "none",
-          }}
-        />
-      );
+    const payable = toNumber(tripData?.display_summary?.payable_price);
+    if (!isHydrated || payable <= 0) {
+      return <Component {...props} text="" />;
     }
     const text = "Starts from";
     return <Component {...props} text={text} />;
@@ -3012,8 +3233,11 @@ export function withTripStartsFromText(Component): ComponentType {
 
 export function withTripNextBatchText(Component): ComponentType {
   return (props: any) => {
+    const isHydrated = useHydrated();
     const tripData = useTripDisplayData(props);
-    const nextBatchLabel = formatNextBatchDate(tripData?.next_batch_date);
+    const nextBatchLabel = isHydrated
+      ? formatNextBatchDate(tripData?.next_batch_date)
+      : "";
     if (!nextBatchLabel) {
       return <Component {...props} text="" visible={false} />;
     }
