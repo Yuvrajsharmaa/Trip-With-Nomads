@@ -5,13 +5,15 @@ const { useEffect, useState, useMemo } = React;
 const UUID_REGEX =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const UUID_GLOBAL_REGEX =
-  /[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}/ig;
+  /[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}/gi;
 const TRIP_ID_PROP_KEYS = [
   "tripId",
   "trip_id",
   "tripid",
   "awOOt0Clm",
 ];
+let _forcedTripId = "";
+const TRIP_ID_SOURCE_EVENT = "twn:trip-id-source";
 
 function isFramerRuntimeHost(): boolean {
   if (typeof window === "undefined") return false;
@@ -33,6 +35,36 @@ function useHydrated() {
   const [hydrated, setHydrated] = useState(false);
   useEffect(() => setHydrated(true), []);
   return hydrated;
+}
+
+/**
+ * useCurrentPathname: Tracks the current URL pathname reactively.
+ * Handles both popstate (back/forward) and SPA navigation (pushState/replaceState).
+ */
+function useCurrentPathname(): string {
+  const [pathname, setPathname] = useState(
+    typeof window !== "undefined" ? window.location.pathname : "",
+  );
+  useEffect(() => {
+    const update = () => setPathname(window.location.pathname);
+    window.addEventListener("popstate", update);
+    const origPushState = window.history.pushState.bind(window.history);
+    window.history.pushState = function (...args: any[]) {
+      origPushState(...args);
+      update();
+    };
+    const origReplaceState = window.history.replaceState.bind(window.history);
+    window.history.replaceState = function (...args: any[]) {
+      origReplaceState(...args);
+      update();
+    };
+    return () => {
+      window.removeEventListener("popstate", update);
+      window.history.pushState = origPushState;
+      window.history.replaceState = origReplaceState;
+    };
+  }, []);
+  return pathname;
 }
 
 const CURRENT_RUNTIME =
@@ -141,6 +173,58 @@ function normalizeTripId(value: any): string {
   return clean;
 }
 
+function readTripIdFromHrefLike(value: any): string {
+  const raw = String(value || "").trim();
+  if (!raw) return "";
+
+  try {
+    const url = new URL(raw, "https://tripwithnomads.com");
+    return normalizeTripId(url.searchParams.get("tripId") || url.searchParams.get("trip_id") || "");
+  } catch {
+    const match = raw.match(/[?&](?:tripId|trip_id)=([0-9a-f-]{36})/i);
+    return normalizeTripId(match?.[1] || "");
+  }
+}
+
+/**
+ * findSlugInCmsProps: Deeply scans the entire props object for CMS prop keys
+ * (like awOOt0Clm) and returns the first value that looks like a valid trip slug.
+ * This handles the case where Framer passes the trip SLUG (not UUID) as a CMS prop
+ * to child text layers inside a card.
+ */
+function findSlugInCmsProps(value: any, depth = 0): string {
+  if (depth > 3 || value == null) return "";
+  if (typeof value === "string" || typeof value === "number") {
+    const raw = String(value).trim().toLowerCase();
+    const slug = normalizeSlug(raw);
+    if (slug && !UUID_REGEX.test(raw)) return slug;
+    return "";
+  }
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      const found = findSlugInCmsProps(item, depth + 1);
+      if (found) return found;
+    }
+    return "";
+  }
+  if (typeof value === "object") {
+    for (const key of TRIP_ID_PROP_KEYS) {
+      const found = findSlugInCmsProps((value as any)?.[key], depth + 1);
+      if (found) return found;
+    }
+    for (const key of Object.keys(value as any)) {
+      const found = findSlugInCmsProps((value as any)[key], depth + 1);
+      if (found) return found;
+    }
+  }
+  return "";
+}
+
+/**
+ * findTripIdInValue: Deeply scans the entire props object for UUID v4 strings.
+ * Framer's internal component system may pass CMS item IDs (trip_uuid) deeply
+ * nested in a child component's props without exposing them via href or direct keys.
+ */
 function findTripIdInValue(value: any, depth = 0): string {
   if (depth > 3 || value == null) return "";
   if (typeof value === "string" || typeof value === "number") {
@@ -355,11 +439,36 @@ function readTripIdCandidate(props: any): string {
       props?.text ||
       (typeof props?.children === "string" ? props.children : ""),
   );
-  return direct || findTripIdInValue(props);
+  if (direct) return direct;
+
+  const hrefCandidates = [
+    props?.href,
+    props?.link,
+    props?.link?.href,
+    props?.link?.url,
+    props?.link?.path,
+  ];
+  for (const candidate of hrefCandidates) {
+    const fromHref = readTripIdFromHrefLike(candidate);
+    if (fromHref) return fromHref;
+  }
+
+  return findTripIdInValue(props);
+}
+
+function readSlugFromUrl(): string {
+  if (typeof window === "undefined") return "";
+  const match = window.location.pathname.match(/\/upcoming-trips\/([^/?#]+)/i);
+  if (!match?.[1]) return "";
+  return normalizeSlug(decodeURIComponent(match[1]));
 }
 
 function readTripSlugCandidate(props: any): string {
-  const direct = normalizeSlug(props?.slug || props?.["data-trip-slug"]);
+  const direct = normalizeSlug(
+    props?.slug ||
+      props?.["data-trip-slug"] ||
+      normalizeSlug(props?.text),
+  );
   if (direct) return direct;
 
   const href = String(props?.href || "").trim();
@@ -378,13 +487,22 @@ function readTripSlugCandidate(props: any): string {
     if (linkMatch?.[1]) return normalizeSlug(linkMatch[1]);
   }
 
-  return "";
+  return findSlugInCmsProps(props);
 }
 
 export function withTripIdSource(Component): ComponentType {
   return (props: any) => {
-    // Trip cards must resolve from their own slug/link props. This override is
-    // kept as a no-op for old Framer layer compatibility only.
+    const nextTripId = readTripIdCandidate(props);
+
+    useEffect(() => {
+      if (nextTripId && typeof window !== "undefined") {
+        _forcedTripId = nextTripId;
+        window.dispatchEvent(
+          new CustomEvent(TRIP_ID_SOURCE_EVENT, { detail: nextTripId }),
+        );
+      }
+    }, [nextTripId]);
+
     return <Component {...props} />;
   };
 }
@@ -394,107 +512,61 @@ function fetchTripDisplayPrice(
 ): Promise<any | null> {
   const rawSlug = String(params.slug || "").trim();
   const rawTripId = String(params.tripId || "").trim();
-  const slug = normalizeSlug(rawSlug);
+  const fallbackSlug = normalizeSlug(rawSlug);
   const tripId = normalizeTripId(rawTripId) || normalizeTripId(rawSlug);
-  const activeSlug = slug;
-  const activeTripId = activeSlug ? "" : tripId;
+  const activeTripId = tripId;
+  const activeSlug = activeTripId ? "" : fallbackSlug;
   if (!activeSlug && !activeTripId) {
     return Promise.resolve(createUnavailableData("invalid_identifier"));
   }
 
-  const cacheKey = `${activeSlug}::${activeTripId}`;
+  const cacheKey = `${activeSlug}::${activeTripId}::${fallbackSlug}`;
   const now = Date.now();
   const cached = cache.get(cacheKey);
   if (cached && now - cached.ts < 120000) return Promise.resolve(cached.data);
   const pending = inFlight.get(cacheKey);
   if (pending) return pending;
 
-  const query = new URLSearchParams();
-  if (activeSlug) query.set("slug", activeSlug);
-  if (activeTripId) query.set("trip_id", activeTripId);
-  query.set("v", "3");
-
   const request = (async (): Promise<TripCardDisplayState> => {
-    const contextResult = await fetchDisplayFallbackFromContext({
+    const primaryResult = await fetchDisplayFallbackFromContext({
       slug: activeSlug,
       tripId: activeTripId,
     });
-    const contextData = contextResult.data;
+    const primaryData = primaryResult.data;
 
-    if (contextData?.status === "sold_out") {
-      cache.set(cacheKey, { ts: Date.now(), data: contextData });
-      return contextData;
+    if (primaryData) {
+      cache.set(cacheKey, { ts: Date.now(), data: primaryData });
+      return primaryData;
     }
 
     if (
-      contextResult.failureReason === "trip_not_found" ||
-      contextResult.failureReason === "invalid_identifier"
+      activeTripId &&
+      fallbackSlug &&
+      primaryResult.failureReason === "trip_not_found"
     ) {
-      const unavailable = createUnavailableData(contextResult.failureReason);
-      logActionableFailureOnce(cacheKey, contextResult.failureReason);
+      const fallbackResult = await fetchDisplayFallbackFromContext({
+        slug: fallbackSlug,
+      });
+      if (fallbackResult.data) {
+        cache.set(cacheKey, { ts: Date.now(), data: fallbackResult.data });
+        return fallbackResult.data;
+      }
+    }
+
+    if (
+      primaryResult.failureReason === "trip_not_found" ||
+      primaryResult.failureReason === "invalid_identifier"
+    ) {
+      const unavailable = createUnavailableData(primaryResult.failureReason);
+      logActionableFailureOnce(cacheKey, primaryResult.failureReason);
       cache.set(cacheKey, { ts: Date.now(), data: unavailable });
       return unavailable;
     }
 
-    try {
-      const response = await fetchGateway(
-        "get-trip-display-price",
-        { method: "GET" },
-        query,
-      );
-      if (!response.ok) {
-        const reason = await readFailureReasonFromResponse(response);
-        if (reason === "no_future_pricing") {
-          const soldOut = createSoldOutData("no_future_pricing");
-          cache.set(cacheKey, { ts: Date.now(), data: soldOut });
-          return soldOut;
-        }
-        if (contextData?.status === "priced") {
-          cache.set(cacheKey, { ts: Date.now(), data: contextData });
-          return contextData;
-        }
-        const unavailable = createUnavailableData(reason);
-        logActionableFailureOnce(cacheKey, reason);
-        cache.set(cacheKey, { ts: Date.now(), data: unavailable });
-        return unavailable;
-      }
-
-      const payload = await response.json().catch(() => null);
-      const payable = toNumber(payload?.display_summary?.payable_price);
-      if (payable > 0) {
-        const pricedData = createTripCardState(
-          "priced",
-          "none",
-          {
-            base_price: toNumber(payload?.display_summary?.base_price),
-            payable_price: payable,
-            save_amount: toNumber(payload?.display_summary?.save_amount),
-            has_discount: Boolean(payload?.display_summary?.has_discount),
-          },
-          String(payload?.next_batch_date || contextData?.next_batch_date || ""),
-        );
-        cache.set(cacheKey, { ts: Date.now(), data: pricedData });
-        return pricedData;
-      }
-
-      if (contextData?.status === "priced") {
-        cache.set(cacheKey, { ts: Date.now(), data: contextData });
-        return contextData;
-      }
-
-      const soldOut = createSoldOutData("no_future_pricing");
-      cache.set(cacheKey, { ts: Date.now(), data: soldOut });
-      return soldOut;
-    } catch (_error) {
-      if (contextData?.status === "priced") {
-        cache.set(cacheKey, { ts: Date.now(), data: contextData });
-        return contextData;
-      }
-      const unavailable = createUnavailableData("network");
-      logActionableFailureOnce(cacheKey, "network");
-      cache.set(cacheKey, { ts: Date.now(), data: unavailable });
-      return unavailable;
-    }
+    const unavailable = createUnavailableData("network");
+    logActionableFailureOnce(cacheKey, "network");
+    cache.set(cacheKey, { ts: Date.now(), data: unavailable });
+    return unavailable;
   })().finally(() => {
     inFlight.delete(cacheKey);
   });
@@ -503,21 +575,77 @@ function fetchTripDisplayPrice(
   return request;
 }
 
+const DETAIL_PAGE_REGEX = /\/upcoming-trips\/([^/?#]+)/i;
+
 function useTripDisplayData(props: any): any | null {
   const [data, setData] = useState<any | null>(null);
-  const slug = useMemo(() => readTripSlugCandidate(props), [props]);
-  const tripId = useMemo(() => readTripIdCandidate(props), [props]);
-  const activeTripId = slug ? "" : tripId;
+  const isHydrated = useHydrated();
+  const currentPathname = useCurrentPathname();
+  const [forcedTripId, setForcedTripId] = useState<string>(() =>
+    normalizeTripId(_forcedTripId),
+  );
 
   useEffect(() => {
-    if (!slug && !activeTripId) {
+    if (typeof window === "undefined") return;
+    const sync = (event?: Event) => {
+      const fromEvent = normalizeTripId((event as CustomEvent)?.detail);
+      const next = fromEvent || normalizeTripId(_forcedTripId);
+      setForcedTripId((prev) => (prev === next ? prev : next));
+    };
+    window.addEventListener(TRIP_ID_SOURCE_EVENT, sync as EventListener);
+    sync();
+    return () => {
+      window.removeEventListener(TRIP_ID_SOURCE_EVENT, sync as EventListener);
+    };
+  }, []);
+
+  const slug = useMemo(() => {
+    if (!isHydrated) return "";
+
+    // First: check if this component instance has a trip identifier in its own props.
+    // This handles recommended cards nested inside a detail page — each card has
+    // its own props (e.g. href="/upcoming-trips/kedarnath-yatra") that should be
+    // authoritative for that card.
+    const propsSlug = readTripSlugCandidate(props);
+    if (propsSlug) return propsSlug;
+
+    // No props-based identifier found — this is main pricing on a detail page.
+    // Use the forced trip ID from the hidden source element if available.
+    if (forcedTripId) return "";
+
+    // Fall back to pathname slug (legacy behavior).
+    const pathMatch = currentPathname.match(DETAIL_PAGE_REGEX);
+    if (pathMatch?.[1]) return normalizeSlug(decodeURIComponent(pathMatch[1]));
+
+    return "";
+  }, [props, isHydrated, currentPathname, forcedTripId]);
+
+  const tripId = useMemo(() => {
+    if (!isHydrated) return "";
+
+    // Check if this component has its own trip identifier in props (recommended card).
+    const propsSlug = readTripSlugCandidate(props);
+    const propsTripId = readTripIdCandidate(props);
+    if (propsSlug || propsTripId) {
+      // Recommended card — allow tripId resolution from props.
+      return propsTripId;
+    }
+
+    // Main pricing on detail page — use forced trip ID from hidden source if available.
+    if (forcedTripId) return forcedTripId;
+
+    return "";
+  }, [props, isHydrated, currentPathname, forcedTripId]);
+
+  useEffect(() => {
+    if (!slug && !tripId) {
       setData(createUnavailableData("invalid_identifier"));
       return;
     }
-    fetchTripDisplayPrice({ slug, tripId: activeTripId }).then((res) => {
+    fetchTripDisplayPrice({ slug, tripId }).then((res) => {
       setData(res || createUnavailableData("network"));
     });
-  }, [slug, activeTripId]);
+  }, [slug, tripId]);
 
   return data;
 }
@@ -649,14 +777,14 @@ export function withTripStartsFromText(Component): ComponentType {
 
 export function withTripNextBatchText(Component): ComponentType {
   return (props: any) => {
+    const isHydrated = useHydrated();
     const tripData = useTripDisplayData(props);
     if (tripData?.status === "sold_out") {
-      return <Component {...props} text="No upcoming batches" visible={true} />;
+      return <Component {...props} text="" visible={false} />;
     }
     if (tripData?.status === "unavailable") {
       return <Component {...props} text="" visible={false} />;
     }
-    const isHydrated = useHydrated();
     const nextBatchLabel = isHydrated
       ? formatNextBatchDate(tripData?.next_batch_date)
       : "";
