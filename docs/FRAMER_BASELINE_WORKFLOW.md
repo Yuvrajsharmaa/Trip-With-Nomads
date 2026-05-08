@@ -41,3 +41,23 @@ If production breaks in Framer:
 ## Part-payment status
 - Part-payment is planned but not active in backend yet.
 - Status override supports future fields (`payment_mode`, `payable_now_amount`, `due_amount`, `settlement_status`) but backend functions do not currently execute partial-payment logic.
+
+## Architecture guardrails (established May 2026)
+
+These patterns are the **production baseline** and must not be relaxed:
+
+### `normalizeSlug()` — hyphen requirement
+- Trip slugs must contain at least one hyphen (`winter-spiti-expedition`).
+- Single-word candidates (`inter`, `top`, `flex`, `normal`) are rejected.
+- Exception: single-word values from a `/upcoming-trips/<slug>` URL path match are accepted.
+- This prevents the deep prop scanner from treating CSS values and font names as trip slugs.
+
+### `DEEP_SCAN_SKIP_KEYS` — prop scanning blocklist
+- A `Set` of ~40 CSS, layout, React, and Framer internal prop keys.
+- The deep scanners (`findSlugInCmsProps`, `findTripIdInValue`) skip these keys entirely.
+- Adding keys to the set is safe. **Removing keys risks false-positive slug matches** that cause all trip cards to show the same price.
+
+### Key identifiers
+- CMS internal prop key for trip ID: `awOOt0Clm`
+- Known prop key list: `tripId`, `trip_id`, `tripid`, `awOOt0Clm`
+

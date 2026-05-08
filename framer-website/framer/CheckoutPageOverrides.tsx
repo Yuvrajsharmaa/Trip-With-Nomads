@@ -2,6 +2,23 @@ import React from "react";
 import type { ComponentType } from "react";
 import { createStore } from "https://framer.com/m/framer/store.js@^1.0.0";
 
+// Suppress ALL console output on production — only allow on staging/Framer hosts
+if (typeof window !== "undefined") {
+  const h = String(window.location.hostname || "").toLowerCase();
+  const isStaging =
+    h.includes("framer.app") || h.includes("framer.website") ||
+    h === "framercanvas.com" || h.endsWith(".framercanvas.com") ||
+    h.includes("framer.com") || h === "localhost";
+  if (!isStaging) {
+    const noop = () => {};
+    console.log = noop;
+    console.info = noop;
+    console.warn = noop;
+    console.error = noop;
+    console.debug = noop;
+  }
+}
+
 const {
   createContext,
   useContext,
@@ -72,7 +89,13 @@ const PHONE_REGEX = /^\+?[\d\s\-()]{10,15}$/;
 const UUID_REGEX =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const UUID_GLOBAL_REGEX =
-  /[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}/ig;
+  /[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}/gi;
+const TRIP_ID_PROP_KEYS = [
+  "tripId",
+  "trip_id",
+  "tripid",
+  "awOOt0Clm",
+];
 const TRIP_ID_SOURCE_EVENT = "twn:trip-id-source";
 const tripDisplayCache = new Map<string, { ts: number; data: any }>();
 const tripDisplayInFlight = new Map<string, Promise<any | null>>();
@@ -419,9 +442,44 @@ function buildLocalPricingBreakdown(store: CheckoutStore): PricingBreakdown {
     }
   });
 
-  const taxableBeforeCoupon = subtotal - earlyBirdDiscount;
-  const tax = taxableBeforeCoupon * TAX_RATE;
-  const total = taxableBeforeCoupon + tax;
+  const taxableBeforeCoupon = Math.max(0, subtotal - earlyBirdDiscount);
+  const appliedCoupon = store?.appliedCoupon?.valid ? store.appliedCoupon : null;
+  const couponSource = String(
+    appliedCoupon?.final_applied_source ||
+    appliedCoupon?.applied_discount_source ||
+    "",
+  )
+    .trim()
+    .toLowerCase();
+  const explicitCouponDiscount = toNumber(
+    appliedCoupon?.coupon_discount_amount || appliedCoupon?.discount_amount,
+  );
+  const minSubtotal = toNumber(appliedCoupon?.min_subtotal);
+  const couponEligible = !appliedCoupon || minSubtotal <= 0 ||
+    taxableBeforeCoupon >= minSubtotal;
+
+  let couponDiscount = 0;
+  if (appliedCoupon && couponEligible) {
+    if (explicitCouponDiscount > 0) {
+      couponDiscount = explicitCouponDiscount;
+    } else {
+      const discountType = String(appliedCoupon?.discount_type || "")
+        .trim()
+        .toLowerCase();
+      const discountValue = toNumber(appliedCoupon?.discount_value);
+      if (discountType === "fixed") {
+        couponDiscount = discountValue;
+      } else if (discountType === "percentage" || discountType === "percent") {
+        couponDiscount = (taxableBeforeCoupon * discountValue) / 100;
+      }
+    }
+  }
+
+  couponDiscount = Math.max(0, Math.min(couponDiscount, taxableBeforeCoupon));
+  const discountTotal = earlyBirdDiscount + couponDiscount;
+  const taxableAmount = Math.max(0, subtotal - discountTotal);
+  const tax = taxableAmount * TAX_RATE;
+  const total = taxableAmount + tax;
 
   const paymentMode = store.paymentMode || "full";
   const payableNow = paymentMode === "partial_25" ? total * 0.25 : total;
@@ -430,27 +488,47 @@ function buildLocalPricingBreakdown(store: CheckoutStore): PricingBreakdown {
   return {
     base_subtotal: subtotal,
     early_bird_discount_amount: earlyBirdDiscount,
-    coupon_discount_amount: 0,
-    applied_discount_source: earlyBirdDiscount > 0 ? "early_bird" : "none",
-    applied_discount_code: null,
-    discount_amount_total: earlyBirdDiscount,
-    taxable_amount: taxableBeforeCoupon,
+    coupon_discount_amount: couponDiscount,
+    applied_discount_source:
+      couponDiscount > 0 && earlyBirdDiscount > 0
+        ? "both"
+        : couponDiscount > 0
+          ? "coupon"
+          : earlyBirdDiscount > 0
+            ? "early_bird"
+            : couponSource === "coupon" || couponSource === "both"
+              ? "coupon"
+              : "none",
+    applied_discount_code:
+      couponDiscount > 0
+        ? String(appliedCoupon?.code || "").trim().toUpperCase() || null
+        : null,
+    discount_amount_total: discountTotal,
+    taxable_amount: taxableAmount,
     tax_amount: tax,
     total_amount: total,
     payable_now_amount: payableNow,
     due_amount: dueAmount,
     payment_mode: paymentMode,
     line_items: [
-      { label: "Trip Subtotal", amount: subtotal, type: "base" },
+      { label: "Trip Subtotal", amount: subtotal, type: "base" as const },
       ...(earlyBirdDiscount > 0
         ? [{
           label: "Early Bird Discount",
           amount: -earlyBirdDiscount,
-          type: "discount",
+          type: "discount" as const,
         }]
         : []),
-      { label: "Tax (5%)", amount: tax, type: "tax" },
-      { label: "Total Amount", amount: total, type: "total" },
+      ...(couponDiscount > 0
+        ? [{
+          label: `Coupon ${String(appliedCoupon?.code || "").trim().toUpperCase() || "Discount"
+            }`,
+          amount: -couponDiscount,
+          type: "discount" as const,
+        }]
+        : []),
+      { label: "Tax (5%)", amount: tax, type: "tax" as const },
+      { label: "Total Amount", amount: total, type: "total" as const },
     ],
   };
 }
@@ -475,8 +553,8 @@ function buildPricingBreakdownFromQuote(
   const couponDiscount = explicitCouponDiscount > 0
     ? explicitCouponDiscount
     : (source === "coupon" || source === "both")
-    ? rawDiscountTotal
-    : 0;
+      ? rawDiscountTotal
+      : 0;
   const discountTotal = rawDiscountTotal > 0
     ? rawDiscountTotal
     : Math.max(earlyBirdDiscount, couponDiscount);
@@ -491,26 +569,26 @@ function buildPricingBreakdownFromQuote(
   const appliedSource = source === "coupon" || source === "both"
     ? "coupon"
     : source === "early_bird"
-    ? "early_bird"
-    : discountTotal > 0 && couponDiscount > 0
-    ? "coupon"
-    : "none";
+      ? "early_bird"
+      : discountTotal > 0 && couponDiscount > 0
+        ? "coupon"
+        : "none";
 
   const lineItems: PricingBreakdown["line_items"] =
     Array.isArray(data.line_items) && data.line_items.length > 0
-    ? data.line_items
-    : [
-      { label: "Trip Subtotal", amount: baseSubtotal, type: "base" as const },
-      ...(discountTotal > 0
-        ? [{
-          label: "Discount",
-          amount: -discountTotal,
-          type: "discount" as const,
-        }]
-        : []),
-      { label: "Tax (5%)", amount: taxAmount, type: "tax" as const },
-      { label: "Total Amount", amount: total, type: "total" as const },
-    ];
+      ? data.line_items
+      : [
+        { label: "Trip Subtotal", amount: baseSubtotal, type: "base" as const },
+        ...(discountTotal > 0
+          ? [{
+            label: "Discount",
+            amount: -discountTotal,
+            type: "discount" as const,
+          }]
+          : []),
+        { label: "Tax (5%)", amount: taxAmount, type: "tax" as const },
+        { label: "Total Amount", amount: total, type: "total" as const },
+      ];
 
   return {
     base_subtotal: baseSubtotal,
@@ -742,7 +820,6 @@ function resolveGatewayBases(): string[] {
   const normalizedProd = String(PRODUCTION_GATEWAY_BASE).trim().replace(/\/+$/, "");
   const bases: string[] = [];
   if (normalizedPrimary) bases.push(normalizedPrimary);
-  // In Framer preview/canvas, allow automatic failover to prod for missing trips.
   if (isFramerRuntimeHost() && normalizedProd) bases.push(normalizedProd);
   return Array.from(new Set(bases));
 }
@@ -770,7 +847,7 @@ function populateDropdown(select: HTMLSelectElement, options: string[]) {
 
   const firstOption = select.options[0];
   const placeholderText = firstOption &&
-      (firstOption.value === "" || /select/i.test(firstOption.text))
+    (firstOption.value === "" || /select/i.test(firstOption.text))
     ? firstOption.text
     : "Select option";
 
@@ -789,7 +866,7 @@ function populateDropdown(select: HTMLSelectElement, options: string[]) {
 }
 
 function fetchTripIdBySlug(slug: string): Promise<string> {
-  const cleanSlug = (slug || "").trim();
+  const cleanSlug = (slug || "").trim().toLowerCase();
   if (!cleanSlug) return Promise.resolve("");
   const query = new URLSearchParams();
   query.set("slug", cleanSlug);
@@ -845,8 +922,8 @@ function fetchTripPricing(tripId: string): Promise<any[]> {
         const rows = Array.isArray(payload?.pricing_rows)
           ? payload.pricing_rows
           : Array.isArray(payload?.pricing)
-          ? payload.pricing
-          : [];
+            ? payload.pricing
+            : [];
         return normalizePricingRows(rows);
       });
     })
@@ -931,20 +1008,50 @@ function buildDisplayDataFromCheckoutRows(
   return createCheckoutDisplayData(extractSummaryFromRow(selectedRow), nextBatchDate);
 }
 
+type CheckoutFetchFailureReason =
+  | "none"
+  | "trip_not_found"
+  | "invalid_identifier"
+  | "network";
+
+type CheckoutFetchResult = {
+  data: CheckoutContextDisplayData | null;
+  failureReason: CheckoutFetchFailureReason;
+};
+
+function normalizeCheckoutFailureReason(
+  status: number,
+  rawMessage: string,
+): CheckoutFetchFailureReason {
+  const message = String(rawMessage || "").toLowerCase();
+  if (message.includes("trip not found")) return "trip_not_found";
+  if (
+    message.includes("invalid") ||
+    message.includes("required") ||
+    message.includes("missing")
+  ) {
+    return "invalid_identifier";
+  }
+  if (status === 404) return "trip_not_found";
+  if (status === 400 || status === 422) return "invalid_identifier";
+  return "network";
+}
+
 function fetchCheckoutDisplayData(
   params: { slug?: string; tripId?: string; date?: string },
-): Promise<CheckoutContextDisplayData | null> {
+): Promise<CheckoutFetchResult> {
   const query = new URLSearchParams();
   const slug = normalizeSlug(params.slug);
   const tripId = normalizeTripId(params.tripId);
   if (slug) query.set("slug", slug);
   if (tripId) query.set("trip_id", tripId);
   if (!slug && !tripId) {
-    return Promise.resolve(null);
+    return Promise.resolve({ data: null, failureReason: "invalid_identifier" });
   }
 
   const gatewayBases = resolveGatewayBases();
-  const request = async (): Promise<CheckoutContextDisplayData | null> => {
+  const request = async (): Promise<CheckoutFetchResult> => {
+    let lastReason: CheckoutFetchFailureReason = "network";
     for (const gatewayBase of gatewayBases) {
       try {
         const res = await fetchGateway(
@@ -953,20 +1060,29 @@ function fetchCheckoutDisplayData(
           query,
           gatewayBase,
         );
-        if (!res.ok) continue;
+        if (!res.ok) {
+          const payload = await res.json().catch(() => ({}));
+          lastReason = normalizeCheckoutFailureReason(
+            res.status,
+            String(payload?.error || payload?.message || ""),
+          );
+          continue;
+        }
         const payload = await res.json().catch(() => null);
         const rows = Array.isArray(payload?.pricing_rows)
           ? payload.pricing_rows
           : Array.isArray(payload?.pricing)
-          ? payload.pricing
-          : [];
-        const data = buildDisplayDataFromCheckoutRows(rows, params.date);
-        if (data) return data;
+            ? payload.pricing
+            : [];
+        return {
+          data: buildDisplayDataFromCheckoutRows(rows, params.date),
+          failureReason: "none",
+        };
       } catch (_error) {
-        continue;
+        lastReason = "network";
       }
     }
-    return null;
+    return { data: null, failureReason: lastReason };
   };
   return request();
 }
@@ -976,14 +1092,14 @@ function fetchTripDisplayPrice(
 ): Promise<any | null> {
   const rawSlug = String(params.slug || "").trim();
   const rawTripId = String(params.tripId || "").trim();
-  const slug = normalizeSlug(rawSlug);
+  const fallbackSlug = normalizeSlug(rawSlug);
   const tripId = normalizeTripId(rawTripId);
-  const activeSlug = slug;
-  const activeTripId = activeSlug ? "" : tripId;
+  const activeTripId = tripId;
+  const activeSlug = activeTripId ? "" : fallbackSlug;
   const activeDate = String(params.date || "").trim();
   if (!activeSlug && !activeTripId) return Promise.resolve(null);
 
-  const cacheKey = `${activeSlug}::${activeTripId}::${activeDate}`;
+  const cacheKey = `${activeSlug}::${activeTripId}::${fallbackSlug}::${activeDate}`;
   const now = Date.now();
   const cached = tripDisplayCache.get(cacheKey);
   if (cached && now - cached.ts < 120000) {
@@ -992,11 +1108,35 @@ function fetchTripDisplayPrice(
   const inFlight = tripDisplayInFlight.get(cacheKey);
   if (inFlight) return inFlight;
 
-  const request = fetchCheckoutDisplayData({
-    slug: activeSlug,
-    tripId: activeTripId,
-    date: activeDate,
-  })
+  const request = (async () => {
+    const primaryResult = await fetchCheckoutDisplayData({
+      slug: activeSlug,
+      tripId: activeTripId,
+      date: activeDate,
+    });
+    if (primaryResult.data) {
+      return primaryResult.data;
+    }
+
+    // Trip ID failed — try slug fallback before giving up.
+    // This handles stale/orphaned trip IDs in Framer CMS props.
+    const urlSlug = fallbackSlug ||
+      (typeof window !== "undefined"
+        ? getTripSlugFromPathname(window.location.pathname)
+        : "");
+    if (urlSlug && activeTripId) {
+      const slugResult = await fetchCheckoutDisplayData({
+        slug: urlSlug,
+        tripId: "",
+        date: activeDate,
+      });
+      if (slugResult.data) {
+        return slugResult.data;
+      }
+    }
+
+    return null;
+  })()
     .then((data) => {
       tripDisplayCache.set(cacheKey, { ts: Date.now(), data });
       return data;
@@ -1020,12 +1160,11 @@ function toTitleFromSlug(slug: string): string {
 
 function readCheckoutRouteContext() {
   if (typeof window === "undefined") {
-    return { tripId: "", slug: "", date: "", transport: "" };
+    return { tripId: "", date: "", transport: "" };
   }
   const query = new URLSearchParams(window.location.search);
   return {
     tripId: String(query.get("tripId") || query.get("trip_id") || "").trim(),
-    slug: String(query.get("slug") || "").trim(),
     date: String(query.get("date") || "").trim(),
     transport: String(query.get("vehicle") || query.get("transport") || "")
       .trim(),
@@ -1034,11 +1173,10 @@ function readCheckoutRouteContext() {
 
 function routeContextKey(ctx: {
   tripId: string;
-  slug: string;
   date: string;
   transport: string;
 }): string {
-  return [ctx.tripId, ctx.slug, ctx.date, ctx.transport].join("|");
+  return [ctx.tripId, ctx.date, ctx.transport].join("|");
 }
 
 function withTextFromState(
@@ -1099,120 +1237,17 @@ export function withCheckoutBootstrap(Component): ComponentType {
     useEffect(() => {
       let disposed = false;
 
-      const run = () => {
-        const ctx = readCheckoutRouteContext();
-        if (!ctx.tripId && !ctx.slug) return;
-
-        if (bootKeyRef.current === routeKey) return;
-        bootKeyRef.current = routeKey;
-
-        setStore({ loading: true });
-        let tripId = ctx.tripId;
-        let slug = ctx.slug;
-
-        if (!tripId && slug) {
-          return fetchTripIdBySlug(slug).then((resolvedTripId) => {
-            tripId = resolvedTripId;
-            if (!tripId) {
-              if (!disposed) {
-                setStore({
-                  loading: false,
-                  checkoutMessage:
-                    "Missing trip context. Open checkout from Book now button.",
-                });
-              }
-              return;
-            }
-            return Promise.all([
-              fetchTripPricing(tripId),
-              fetchTripContextById(tripId),
-            ]).then(([pricing, tripContext]) => {
-              if (disposed) return;
-
-              slug = slug || String(tripContext?.slug || "").trim();
-              const tripName = firstNonEmpty(
-                String(tripContext?.title || "").trim(),
-                toTitleFromSlug(slug),
-                tripId,
-              );
-
-              const inviteOnly = isInviteOnlyTrip(pricing);
-              const dates = getDateOptions(pricing);
-              const date = dates.includes(ctx.date) ? ctx.date : dates[0] || "";
-              const transport = getDefaultTransportForDate(
-                pricing,
-                date,
-                ctx.transport,
-              );
-              const travellers = inviteOnly
-                ? normalizeTravellers(store.travellers || [])
-                : sanitizeTravellersForDate(
-                  pricing,
-                  date,
-                  normalizeTravellers(store.travellers || []),
-                  transport,
-                );
-
-              const nextState = {
-                ...store,
-                tripId,
-                slug,
-                tripName,
-                pricingData: pricing,
-                date,
-                transport,
-                travellers,
-                inviteOnly,
-                loading: false,
-              };
-              const pricingBreakdown = buildLocalPricingBreakdown(nextState);
-
-              setStore({
-                tripId,
-                slug,
-                tripName,
-                pricingData: pricing,
-                date,
-                transport,
-                travellers,
-                inviteOnly,
-                pricingBreakdown,
-                loading: false,
-                fieldErrors: {},
-                touchedFields: {},
-                validationSubmitAttempted: false,
-                checkoutMessage: "",
-              });
-
-              console.log("[Checkout] Opened", {
-                tripId,
-                slug,
-                date,
-                defaultTransport: transport,
-                inviteOnly,
-              });
-            });
-          });
-        }
-
-        if (!tripId) {
-          if (!disposed) {
-            setStore({
-              loading: false,
-              checkoutMessage:
-                "Missing trip context. Open checkout from Book now button.",
-            });
-          }
-          return;
-        }
-
+      const loadTripData = (
+        tripId: string,
+        ctx: { date: string; transport: string },
+      ) => {
         return Promise.all([
           fetchTripPricing(tripId),
           fetchTripContextById(tripId),
         ]).then(([pricing, tripContext]) => {
           if (disposed) return;
 
-          slug = slug || String(tripContext?.slug || "").trim();
+          const slug = String(tripContext?.slug || "").trim();
           const tripName = firstNonEmpty(
             String(tripContext?.title || "").trim(),
             toTitleFromSlug(slug),
@@ -1267,20 +1302,49 @@ export function withCheckoutBootstrap(Component): ComponentType {
             checkoutMessage: "",
           });
 
-          console.log("[Checkout] Opened", {
-            tripId,
-            slug,
-            date,
-            defaultTransport: transport,
-            inviteOnly,
-          });
+          if (isFramerRuntimeHost()) {
+            console.log("[Checkout] Opened", {
+              tripId,
+              slug,
+              date,
+              defaultTransport: transport,
+              inviteOnly,
+            });
+          }
         });
+      };
+
+      const run = () => {
+        const ctx = readCheckoutRouteContext();
+        if (!ctx.tripId) {
+          // No query param tripId — try resolving from ?slug= param
+          const slugParam = String(new URLSearchParams(window.location.search).get("slug") || "").trim().toLowerCase();
+          if (!slugParam) return;
+          if (bootKeyRef.current === routeKey) return;
+          bootKeyRef.current = routeKey;
+          setStore({ loading: true });
+          return fetchTripIdBySlug(slugParam).then((resolvedTripId) => {
+            if (!resolvedTripId) {
+              if (!disposed) setStore({ loading: false, checkoutMessage: "Trip not found." });
+              return;
+            }
+            return loadTripData(resolvedTripId, ctx);
+          });
+        }
+
+        if (bootKeyRef.current === routeKey) return;
+        bootKeyRef.current = routeKey;
+
+        setStore({ loading: true });
+        const tripId = ctx.tripId;
+
+        return loadTripData(tripId, ctx);
       };
 
       Promise.resolve()
         .then(() => run())
         .catch((err) => {
-          console.error("[Checkout] Bootstrap failed", err);
+          if (isFramerRuntimeHost()) console.error("[Checkout] Bootstrap failed", err);
           if (!disposed) {
             setStore({
               loading: false,
@@ -2081,7 +2145,7 @@ export function withApplyCouponButton(Component): ComponentType {
               couponMessage: data?.message || data?.error ||
                 `Coupon failed (HTTP ${res.status})`,
             });
-            console.log("[Checkout] Coupon apply failed", data);
+            if (isFramerRuntimeHost()) console.log("[Checkout] Coupon apply failed", data);
             return;
           }
 
@@ -2121,13 +2185,12 @@ export function withApplyCouponButton(Component): ComponentType {
             couponMessageType: "success",
             couponMessage: data.message ||
               (nextBreakdown.early_bird_discount_amount > 0
-                ? `Coupon ${
-                  appliedCode || data.code || code
+                ? `Coupon ${appliedCode || data.code || code
                 } applied with Early Bird`
                 : `Coupon ${appliedCode || data.code || code} applied`),
           });
 
-          console.log("[Checkout] Coupon apply success", data);
+          if (isFramerRuntimeHost()) console.log("[Checkout] Coupon apply success", data);
         })
         .catch((err: any) => {
           setStore({
@@ -2139,7 +2202,7 @@ export function withApplyCouponButton(Component): ComponentType {
             couponMessageType: "error",
             couponMessage: "Could not validate coupon",
           });
-          console.error("[Checkout] Coupon call error", err);
+          if (isFramerRuntimeHost()) console.error("[Checkout] Coupon call error", err);
         })
         .finally(() => {
           setBusy(false);
@@ -2314,8 +2377,8 @@ export function withCheckoutCouponCode(Component): ComponentType {
     const couponAmount = totals.couponDiscount > 0
       ? totals.couponDiscount
       : (source === "coupon" || source === "both")
-      ? totals.discount
-      : 0;
+        ? totals.discount
+        : 0;
     const hasCoupon = couponAmount > 0;
     if (!hasCoupon) {
       return (
@@ -2383,7 +2446,7 @@ export function withCheckoutValidationHint(Component): ComponentType {
     const validation = getValidationState(store);
     const message = String(
       store.checkoutMessage ||
-        (store.validationSubmitAttempted ? validation.globalErrors[0] || "" : ""),
+      (store.validationSubmitAttempted ? validation.globalErrors[0] || "" : ""),
     ).trim();
 
     if (!message) {
@@ -2763,16 +2826,18 @@ export function withCheckoutPayButton(Component): ComponentType {
         fieldErrors: validation.fieldErrors,
         checkoutMessage: "",
       });
-      console.log("[Checkout] Pay initiated", {
-        tripId: store.tripId,
-        date: store.date,
-        transport: store.transport,
-        coupon: store.appliedCoupon?.code || null,
-        total: totals.total,
-        paymentMode: totals.paymentMode,
-        payableNow: totals.payableNow,
-        dueAmount: totals.dueAmount,
-      });
+      if (isFramerRuntimeHost()) {
+        console.log("[Checkout] Pay initiated", {
+          tripId: store.tripId,
+          date: store.date,
+          transport: store.transport,
+          coupon: store.appliedCoupon?.code || null,
+          total: totals.total,
+          paymentMode: totals.paymentMode,
+          payableNow: totals.payableNow,
+          dueAmount: totals.dueAmount,
+        });
+      }
 
       const normalizedTravellers = normalizeTravellers(store.travellers || [])
         .map((t) => ({
@@ -2864,11 +2929,13 @@ export function withCheckoutPayButton(Component): ComponentType {
             }
 
             if (!res.ok) {
-              console.error("[Checkout] create-booking failed", {
-                status: res.status,
-                payload,
-                response: data,
-              });
+              if (isFramerRuntimeHost()) {
+                console.error("[Checkout] create-booking failed", {
+                  status: res.status,
+                  payload,
+                  response: data,
+                });
+              }
               setStore({
                 submitting: false,
                 checkoutMessage: data?.error ||
@@ -2903,7 +2970,7 @@ export function withCheckoutPayButton(Component): ComponentType {
             form.submit();
           })
           .catch((err) => {
-            console.error("[Checkout] pay error", err);
+            if (isFramerRuntimeHost()) console.error("[Checkout] pay error", err);
             setStore({
               submitting: false,
               checkoutMessage: "Could not start payment",
@@ -2957,9 +3024,9 @@ export function withCheckoutPayButton(Component): ComponentType {
 }
 
 function getTripSlugFromPathname(pathname: string): string {
-  const clean = String(pathname || "");
-  const match = clean.match(/\/upcoming-trips\/([^/?#]+)/i);
-  return match?.[1] ? decodeURIComponent(match[1]) : "";
+  // Pass the full pathname so normalizeSlug's internal /upcoming-trips/ regex
+  // can detect URL origin and allow single-word slugs via the fromUrl exception.
+  return normalizeSlug(pathname);
 }
 
 function normalizeSlug(value: any): string {
@@ -2970,7 +3037,15 @@ function normalizeSlug(value: any): string {
   const candidate = fromUrl?.[1] ? decodeURIComponent(fromUrl[1]) : raw;
   if (candidate.startsWith("framer-")) return "";
   if (UUID_REGEX.test(candidate)) return "";
-  return /^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(candidate) ? candidate : "";
+  // Reject purely numeric values
+  if (/^\d+$/.test(candidate)) return "";
+  // Must match slug format: lowercase alphanumeric segments joined by hyphens
+  if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(candidate)) return "";
+  // Real trip slugs ALWAYS contain at least one hyphen (e.g. "winter-spiti-expedition").
+  // Single words like "inter" (font), "top" (CSS), "normal", "flex" are never trip slugs.
+  // Only allow single-word slugs if they came from a /upcoming-trips/ URL path.
+  if (!candidate.includes("-") && !fromUrl) return "";
+  return candidate;
 }
 
 function normalizeTripId(value: any): string {
@@ -2979,6 +3054,63 @@ function normalizeTripId(value: any): string {
     return "";
   }
   return clean;
+}
+
+function readTripIdFromHrefLike(value: any): string {
+  const raw = String(value || "").trim();
+  if (!raw) return "";
+
+  try {
+    const url = new URL(raw, "https://tripwithnomads.com");
+    return normalizeTripId(url.searchParams.get("tripId") || url.searchParams.get("trip_id") || "");
+  } catch {
+    const match = raw.match(/[?&](?:tripId|trip_id)=([0-9a-f-]{36})/i);
+    return normalizeTripId(match?.[1] || "");
+  }
+}
+
+// Keys to skip during deep scanning — these contain style/layout/font data, not CMS trip identifiers
+const DEEP_SCAN_SKIP_KEYS = new Set([
+  "style", "className", "font", "fonts", "fontFamily", "fontWeight", "fontSize",
+  "fontStyle", "lineHeight", "letterSpacing", "color", "background",
+  "backgroundColor", "border", "borderRadius", "padding", "margin",
+  "width", "height", "top", "left", "right", "bottom", "position",
+  "display", "overflow", "opacity", "transform", "transition", "animation",
+  "boxShadow", "textDecoration", "textAlign", "verticalAlign", "whiteSpace",
+  "zIndex", "cursor", "pointerEvents", "userSelect", "gap", "flex",
+  "flexDirection", "alignItems", "justifyContent", "gridTemplate",
+  "children", "key", "ref", "dangerouslySetInnerHTML",
+  "__css", "__styles", "__styleSelectors",
+  "inlineTextStyle", "textContent",
+]);
+
+function findSlugInCmsProps(value: any, depth = 0): string {
+  if (depth > 3 || value == null) return "";
+  if (typeof value === "string" || typeof value === "number") {
+    const raw = String(value).trim().toLowerCase();
+    const slug = normalizeSlug(raw);
+    if (slug && !UUID_REGEX.test(raw)) return slug;
+    return "";
+  }
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      const found = findSlugInCmsProps(item, depth + 1);
+      if (found) return found;
+    }
+    return "";
+  }
+  if (typeof value === "object") {
+    for (const key of TRIP_ID_PROP_KEYS) {
+      const found = findSlugInCmsProps((value as any)?.[key], depth + 1);
+      if (found) return found;
+    }
+    for (const key of Object.keys(value as any)) {
+      if (DEEP_SCAN_SKIP_KEYS.has(key)) continue;
+      const found = findSlugInCmsProps((value as any)[key], depth + 1);
+      if (found) return found;
+    }
+  }
+  return "";
 }
 
 function findTripIdInValue(value: any, depth = 0): string {
@@ -2998,11 +3130,12 @@ function findTripIdInValue(value: any, depth = 0): string {
     return "";
   }
   if (typeof value === "object") {
-    for (const key of ["tripId", "trip_id", "tripid", "awOOt0Clm"]) {
+    for (const key of TRIP_ID_PROP_KEYS) {
       const found = findTripIdInValue((value as any)?.[key], depth + 1);
       if (found) return found;
     }
     for (const key of Object.keys(value as any)) {
+      if (DEEP_SCAN_SKIP_KEYS.has(key)) continue;
       const found = findTripIdInValue((value as any)[key], depth + 1);
       if (found) return found;
     }
@@ -3011,16 +3144,30 @@ function findTripIdInValue(value: any, depth = 0): string {
 }
 
 function readTripIdCandidate(props: any): string {
+  // Priority: static data-trip-id attribute (most reliable, not affected by ?slug=),
+  // then explicit props, then CMS internal key, then href/link, then deep scan.
   const direct = normalizeTripId(
+    props?.["data-trip-id"] ||
     props?.tripId ||
-      props?.trip_id ||
-      props?.tripid ||
-      props?.awOOt0Clm ||
-      props?.["data-trip-id"] ||
-      props?.text ||
-      (typeof props?.children === "string" ? props.children : ""),
+    props?.trip_id ||
+    props?.tripid ||
+    props?.awOOt0Clm,
   );
-  return direct || findTripIdInValue(props);
+  if (direct) return direct;
+
+  const hrefCandidates = [
+    props?.href,
+    props?.link,
+    props?.link?.href,
+    props?.link?.url,
+    props?.link?.path,
+  ];
+  for (const candidate of hrefCandidates) {
+    const fromHref = readTripIdFromHrefLike(candidate);
+    if (fromHref) return fromHref;
+  }
+
+  return findTripIdInValue(props);
 }
 
 function readTripSlugCandidate(props: any): string {
@@ -3043,12 +3190,13 @@ function readTripSlugCandidate(props: any): string {
     if (linkMatch?.[1]) return normalizeSlug(linkMatch[1]);
   }
 
-  return "";
+  return findSlugInCmsProps(props);
 }
 
 export function withTripIdSource(Component): ComponentType {
   return (props: any) => {
     const nextTripId = readTripIdCandidate(props);
+    const nextSlug = readTripSlugCandidate(props);
 
     useEffect(() => {
       if (nextTripId && typeof window !== "undefined") {
@@ -3057,10 +3205,10 @@ export function withTripIdSource(Component): ComponentType {
         if (onCheckoutPage) return;
         forcedTripId = nextTripId;
         window.dispatchEvent(
-          new CustomEvent(TRIP_ID_SOURCE_EVENT, { detail: nextTripId }),
+          new CustomEvent(TRIP_ID_SOURCE_EVENT, { detail: { tripId: nextTripId, slug: nextSlug } }),
         );
       }
-    }, [nextTripId]);
+    }, [nextTripId, nextSlug]);
 
     return <Component {...props} />;
   };
@@ -3071,15 +3219,22 @@ function useTripDisplayData(props?: any) {
   const [forcedFromSource, setForcedFromSource] = useState<string>(() =>
     normalizeTripId(forcedTripId)
   );
+  const [forcedSlugFromSource, setForcedSlugFromSource] = useState<string>("");
   const propTripId = readTripIdCandidate(props);
   const propSlug = readTripSlugCandidate(props);
 
   useEffect(() => {
     if (typeof window === "undefined") return;
     const sync = (event?: Event) => {
-      const fromEvent = normalizeTripId((event as CustomEvent)?.detail);
-      const next = fromEvent || normalizeTripId(forcedTripId);
-      setForcedFromSource((prev) => (prev === next ? prev : next));
+      const detail = (event as CustomEvent)?.detail;
+      const fromEventTripId = typeof detail === "object" ? detail?.tripId : detail;
+      const fromEventSlug = typeof detail === "object" ? detail?.slug : "";
+
+      const nextTripId = normalizeTripId(fromEventTripId) || normalizeTripId(forcedTripId);
+      setForcedFromSource((prev) => (prev === nextTripId ? prev : nextTripId));
+
+      const nextSlug = normalizeSlug(fromEventSlug);
+      setForcedSlugFromSource((prev) => (prev === nextSlug ? prev : nextSlug));
     };
     window.addEventListener(TRIP_ID_SOURCE_EVENT, sync as EventListener);
     sync();
@@ -3095,12 +3250,14 @@ function useTripDisplayData(props?: any) {
     const path = String(window.location.pathname || "");
     const onCheckoutPage = path.toLowerCase().startsWith("/checkout");
     const slugFromPath = getTripSlugFromPathname(path);
-    const slug = onCheckoutPage
-      ? normalizeSlug(query.get("slug") || propSlug || slugFromPath || "")
-      : "";
+    const slug = normalizeSlug(
+      onCheckoutPage
+        ? (query.get("slug") || propSlug || slugFromPath || "")
+        : (propSlug || forcedSlugFromSource || slugFromPath || "")
+    );
     const tripId = onCheckoutPage
       ? normalizeTripId(propTripId || query.get("tripId") || query.get("trip_id") || "")
-      : normalizeTripId(forcedFromSource || forcedTripId || propTripId || "");
+      : normalizeTripId(propTripId || forcedFromSource || forcedTripId || "");
     const selectedDate = String(query.get("date") || "").trim();
 
     fetchTripDisplayPrice({ slug, tripId, date: selectedDate })
@@ -3116,7 +3273,7 @@ function useTripDisplayData(props?: any) {
     return () => {
       disposed = true;
     };
-  }, [propTripId, propSlug, forcedFromSource]);
+  }, [propTripId, propSlug, forcedFromSource, forcedSlugFromSource]);
 
   return data;
 }

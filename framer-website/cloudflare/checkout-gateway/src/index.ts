@@ -26,6 +26,63 @@ function toUpstreamFunctionUrl(baseUrl: string, path: string, requestUrl: string
   return `${baseUrl}/functions/v1/${upstreamPath}${search}`
 }
 
+/** Extract a trip slug from a URL (e.g. /upcoming-trips/vietnam-twn). */
+function extractSlugFromUrl(urlStr: string | null): string {
+  if (!urlStr) return ''
+  try {
+    const url = new URL(urlStr)
+    const match = url.pathname.match(/\/upcoming-trips\/([^/?#]+)/i)
+    if (match?.[1]) return decodeURIComponent(match[1])
+  } catch { /* ignore invalid URLs */ }
+  return ''
+}
+
+/** Attempt a slug-based fallback when trip_id lookup fails. */
+async function trySlugFallback(c: any, rawPath: string, originalUrl: string): Promise<Response | null> {
+  const upstreamPath = normalizeFunctionSlug(rawPath)
+  if (!upstreamPath) return null
+  const functionName = FUNCTION_ALIAS[rawPath] || rawPath
+  // Only apply fallback for the checkout context endpoint
+  if (functionName !== 'get-trip-checkout-context') return null
+
+  // Check original request had a trip_id
+  const reqUrl = new URL(originalUrl)
+  if (!reqUrl.searchParams.has('trip_id')) return null
+
+  // Try to get slug from page_url query param (set by Framer override),
+  // then fall back to Referer header (origin-only for cross-origin requests).
+  const pageUrl = reqUrl.searchParams.get('page_url') || ''
+  const referer = c.req.header('Referer') || ''
+  const slug = extractSlugFromUrl(pageUrl) || extractSlugFromUrl(referer)
+  if (!slug) return null
+
+  // Build fallback URL — replace trip_id with slug
+  const fallbackParams = new URLSearchParams(reqUrl.searchParams)
+  fallbackParams.delete('trip_id')
+  fallbackParams.set('slug', slug)
+
+  const url = `${c.env.SUPABASE_URL}/functions/v1/${upstreamPath}?${fallbackParams.toString()}`
+  const headers = new Headers()
+  headers.set('Authorization', `Bearer ${c.env.SUPABASE_SERVICE_ROLE_KEY}`)
+  headers.set('apikey', c.env.SUPABASE_SERVICE_ROLE_KEY)
+
+  try {
+    const response = await fetch(url, { method: 'GET', headers })
+    if (!response.ok) return null
+    const responseHeaders = new Headers(response.headers)
+    responseHeaders.delete('access-control-allow-origin')
+    responseHeaders.delete('access-control-allow-methods')
+    responseHeaders.delete('access-control-allow-headers')
+    return new Response(response.body, {
+      status: response.status,
+      statusText: response.statusText,
+      headers: responseHeaders,
+    })
+  } catch {
+    return null
+  }
+}
+
 // CORS configuration - Allow Framer sites and production domains
 app.use('*', cors({
   origin: (origin) => {
@@ -83,6 +140,13 @@ async function proxyEdgeFunction(c: any, rawPath: string) {
       body,
     })
 
+    // When the upstream returns 404 for a trip_id lookup, try slug fallback
+    // using the Referer header (which contains the Framer page URL).
+    if (response.status === 404) {
+      const fallbackResponse = await trySlugFallback(c, rawPath, c.req.url)
+      if (fallbackResponse) return fallbackResponse
+    }
+
     const responseHeaders = new Headers(response.headers)
     // Ensure CORS headers from our worker take precedence
     responseHeaders.delete('access-control-allow-origin')
@@ -108,7 +172,16 @@ app.all('/api/checkout/:path', async (c) => proxyEdgeFunction(c, c.req.param('pa
 
 // Specialized route for direct REST API (used by fetchTripIdBySlug etc)
 app.all('/rest/v1/:table', async (c) => {
+  if (c.req.method !== 'GET') {
+    return c.json({ error: 'Method not allowed for REST proxy' }, 405)
+  }
+
   const table = c.req.param('table')
+  const allowedTables = ['trips', 'trip_pricing']
+  if (!allowedTables.includes(table)) {
+    return c.json({ error: 'Forbidden table access' }, 403)
+  }
+
   const query = c.req.url.split('?')[1] || ''
   const url = `${c.env.SUPABASE_URL}/rest/v1/${table}${query ? '?' + query : ''}`
   

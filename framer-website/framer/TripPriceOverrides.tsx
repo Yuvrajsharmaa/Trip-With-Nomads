@@ -1,6 +1,22 @@
 import React from "react";
 import type { ComponentType } from "react";
 
+// Suppress ALL console output on production — only allow on staging/Framer hosts
+if (typeof window !== "undefined") {
+  const h = String(window.location.hostname || "").toLowerCase();
+  const isStaging =
+    h.includes("framer.app") || h.includes("framer.website") ||
+    h === "framercanvas.com" || h.endsWith(".framercanvas.com") ||
+    h.includes("framer.com") || h === "localhost";
+  if (!isStaging) {
+    const noop = () => {};
+    console.log = noop;
+    console.info = noop;
+    console.warn = noop;
+    console.error = noop;
+    console.debug = noop;
+  }
+}
 const { useEffect, useState, useMemo } = React;
 const UUID_REGEX =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -157,12 +173,19 @@ function formatNextBatchDate(value: any): string {
 function normalizeSlug(value: any): string {
   const raw = String(value || "").trim().toLowerCase();
   if (!raw) return "";
-
   const fromUrl = raw.match(/\/upcoming-trips\/([^/?#]+)/i);
   const candidate = fromUrl?.[1] ? decodeURIComponent(fromUrl[1]) : raw;
   if (candidate.startsWith("framer-")) return "";
   if (UUID_REGEX.test(candidate)) return "";
-  return /^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(candidate) ? candidate : "";
+  // Reject purely numeric values (e.g. price text placeholders like "0")
+  if (/^\d+$/.test(candidate)) return "";
+  // Must match slug format: lowercase alphanumeric segments joined by hyphens
+  if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(candidate)) return "";
+  // Real trip slugs ALWAYS contain at least one hyphen (e.g. "winter-spiti-expedition").
+  // Single words like "inter" (font), "top" (CSS), "normal", "flex" are never trip slugs.
+  // Only allow single-word slugs if they came from a /upcoming-trips/ URL path.
+  if (!candidate.includes("-") && !fromUrl) return "";
+  return candidate;
 }
 
 function normalizeTripId(value: any): string {
@@ -186,6 +209,21 @@ function readTripIdFromHrefLike(value: any): string {
   }
 }
 
+// Keys to skip during deep scanning — these contain style/layout/font data, not CMS trip identifiers
+const DEEP_SCAN_SKIP_KEYS = new Set([
+  "style", "className", "font", "fonts", "fontFamily", "fontWeight", "fontSize",
+  "fontStyle", "lineHeight", "letterSpacing", "color", "background",
+  "backgroundColor", "border", "borderRadius", "padding", "margin",
+  "width", "height", "top", "left", "right", "bottom", "position",
+  "display", "overflow", "opacity", "transform", "transition", "animation",
+  "boxShadow", "textDecoration", "textAlign", "verticalAlign", "whiteSpace",
+  "zIndex", "cursor", "pointerEvents", "userSelect", "gap", "flex",
+  "flexDirection", "alignItems", "justifyContent", "gridTemplate",
+  "children", "key", "ref", "dangerouslySetInnerHTML",
+  "__css", "__styles", "__styleSelectors",
+  "inlineTextStyle", "textContent",
+]);
+
 /**
  * findSlugInCmsProps: Deeply scans the entire props object for CMS prop keys
  * (like awOOt0Clm) and returns the first value that looks like a valid trip slug.
@@ -208,11 +246,14 @@ function findSlugInCmsProps(value: any, depth = 0): string {
     return "";
   }
   if (typeof value === "object") {
+    // Priority: check known CMS keys first
     for (const key of TRIP_ID_PROP_KEYS) {
       const found = findSlugInCmsProps((value as any)?.[key], depth + 1);
       if (found) return found;
     }
+    // Then scan remaining keys, but skip known non-CMS keys
     for (const key of Object.keys(value as any)) {
+      if (DEEP_SCAN_SKIP_KEYS.has(key)) continue;
       const found = findSlugInCmsProps((value as any)[key], depth + 1);
       if (found) return found;
     }
@@ -247,6 +288,7 @@ function findTripIdInValue(value: any, depth = 0): string {
       if (found) return found;
     }
     for (const key of Object.keys(value as any)) {
+      if (DEEP_SCAN_SKIP_KEYS.has(key)) continue;
       const found = findTripIdInValue((value as any)[key], depth + 1);
       if (found) return found;
     }
@@ -338,10 +380,12 @@ function logActionableFailureOnce(
   const logKey = `${cacheKey}:${reason}`;
   if (actionableFailureLogged.has(logKey)) return;
   actionableFailureLogged.add(logKey);
-  console.info("[TripPriceOverrides] Unavailable trip pricing", {
-    key: cacheKey,
-    reason,
-  });
+  if (isFramerRuntimeHost()) {
+    console.info("[TripPriceOverrides] Unavailable trip pricing", {
+      key: cacheKey,
+      reason,
+    });
+  }
 }
 
 function buildDisplayDataFromCheckoutContext(payload: any): any | null {
@@ -406,6 +450,13 @@ async function fetchDisplayFallbackFromContext(
     return { data: null, failureReason: "invalid_identifier" };
   }
 
+  // Pass the current page URL so the Cloudflare Worker can extract the
+  // trip slug when a trip_id lookup fails (since cross-origin Referer
+  // only sends origin, not the full path).
+  if (tripId && typeof window !== "undefined") {
+    query.set("page_url", window.location.href);
+  }
+
   try {
     const response = await fetchGateway(
       "get-trip-checkout-context",
@@ -430,14 +481,14 @@ async function fetchDisplayFallbackFromContext(
 }
 
 function readTripIdCandidate(props: any): string {
+  // Priority: static data-trip-id attribute (most reliable, not affected by ?slug=),
+  // then explicit props, then CMS internal key, then href/link, then deep scan.
   const direct = normalizeTripId(
-    props?.tripId ||
+    props?.["data-trip-id"] ||
+      props?.tripId ||
       props?.trip_id ||
       props?.tripid ||
-      props?.awOOt0Clm ||
-      props?.["data-trip-id"] ||
-      props?.text ||
-      (typeof props?.children === "string" ? props.children : ""),
+      props?.awOOt0Clm,
   );
   if (direct) return direct;
 
@@ -458,16 +509,14 @@ function readTripIdCandidate(props: any): string {
 
 function readSlugFromUrl(): string {
   if (typeof window === "undefined") return "";
-  const match = window.location.pathname.match(/\/upcoming-trips\/([^/?#]+)/i);
-  if (!match?.[1]) return "";
-  return normalizeSlug(decodeURIComponent(match[1]));
+  // Pass the full pathname so normalizeSlug's internal /upcoming-trips/ regex
+  // can detect URL origin and allow single-word slugs via the fromUrl exception.
+  return normalizeSlug(window.location.pathname);
 }
 
 function readTripSlugCandidate(props: any): string {
   const direct = normalizeSlug(
-    props?.slug ||
-      props?.["data-trip-slug"] ||
-      normalizeSlug(props?.text),
+    props?.slug || props?.["data-trip-slug"],
   );
   if (direct) return direct;
 
@@ -540,23 +589,23 @@ function fetchTripDisplayPrice(
     }
 
     if (
-      activeTripId &&
-      fallbackSlug &&
-      primaryResult.failureReason === "trip_not_found"
-    ) {
-      const fallbackResult = await fetchDisplayFallbackFromContext({
-        slug: fallbackSlug,
-      });
-      if (fallbackResult.data) {
-        cache.set(cacheKey, { ts: Date.now(), data: fallbackResult.data });
-        return fallbackResult.data;
-      }
-    }
-
-    if (
       primaryResult.failureReason === "trip_not_found" ||
       primaryResult.failureReason === "invalid_identifier"
     ) {
+      // Trip ID failed — try slug fallback before giving up.
+      // This handles stale/orphaned trip IDs in Framer CMS props
+      // (e.g. a deleted trip's UUID stuck in CMS metadata).
+      const urlSlug = fallbackSlug || readSlugFromUrl();
+      if (urlSlug && activeTripId) {
+        const slugResult = await fetchDisplayFallbackFromContext({
+          slug: urlSlug,
+          tripId: "",
+        });
+        if (slugResult.data) {
+          cache.set(cacheKey, { ts: Date.now(), data: slugResult.data });
+          return slugResult.data;
+        }
+      }
       const unavailable = createUnavailableData(primaryResult.failureReason);
       logActionableFailureOnce(cacheKey, primaryResult.failureReason);
       cache.set(cacheKey, { ts: Date.now(), data: unavailable });
@@ -581,13 +630,20 @@ function useTripDisplayData(props: any): any | null {
   const [forcedTripId, setForcedTripId] = useState<string>(() =>
     normalizeTripId(_forcedTripId),
   );
+  const [forcedSlug, setForcedSlug] = useState<string>("");
 
   useEffect(() => {
     if (typeof window === "undefined") return;
     const sync = (event?: Event) => {
-      const fromEvent = normalizeTripId((event as CustomEvent)?.detail);
-      const next = fromEvent || normalizeTripId(_forcedTripId);
-      setForcedTripId((prev) => (prev === next ? prev : next));
+      const detail = (event as CustomEvent)?.detail;
+      const fromEventTripId = typeof detail === "object" ? detail?.tripId : detail;
+      const fromEventSlug = typeof detail === "object" ? detail?.slug : "";
+      
+      const nextTripId = normalizeTripId(fromEventTripId) || normalizeTripId(_forcedTripId);
+      setForcedTripId((prev) => (prev === nextTripId ? prev : nextTripId));
+      
+      const nextSlug = normalizeSlug(fromEventSlug);
+      setForcedSlug((prev) => (prev === nextSlug ? prev : nextSlug));
     };
     window.addEventListener(TRIP_ID_SOURCE_EVENT, sync as EventListener);
     sync();
@@ -599,29 +655,23 @@ function useTripDisplayData(props: any): any | null {
   const slug = useMemo(() => {
     if (!isHydrated) return "";
 
-    // Recommended cards nested inside a detail page have their own slug in props
-    // (e.g. href="/upcoming-trips/kedarnath-yatra") — use that.
     const propsSlug = readTripSlugCandidate(props);
     if (propsSlug) return propsSlug;
 
-    // Main pricing on detail page — ONLY use forcedTripId from hidden source.
-    // No pathname fallback: if the hidden source hasn't broadcast yet, return
-    // empty and let the tripId-driven fetch take over when forcedTripId arrives.
-    if (forcedTripId) return "";
+    if (forcedSlug) return forcedSlug;
 
+    // Main pricing on detail page — use forcedTripId from hidden source.
+    // If the hidden source hasn't broadcast yet, return empty and let the
+    // tripId-driven fetch take over when forcedTripId arrives.
     return "";
-  }, [props, isHydrated, forcedTripId]);
+  }, [props, isHydrated, forcedSlug]);
 
   const tripId = useMemo(() => {
     if (!isHydrated) return "";
 
-    // Check if this component has its own trip identifier in props (recommended card).
-    const propsSlug = readTripSlugCandidate(props);
+    // Check if this component has its own trip ID in props.
     const propsTripId = readTripIdCandidate(props);
-    if (propsSlug || propsTripId) {
-      // Recommended card — allow tripId resolution from props.
-      return propsTripId;
-    }
+    if (propsTripId) return propsTripId;
 
     // Main pricing on detail page — use forced trip ID from hidden source if available.
     if (forcedTripId) return forcedTripId;
@@ -653,7 +703,17 @@ function withTripPriceText(
     return (props: any) => {
       const data = useTripDisplayData(props);
       const isHydrated = useHydrated();
-      const text = isHydrated ? (getValue(data) || fallback) : fallback;
+      if (!isHydrated) {
+        return <Component {...props} text="" visible={false} />;
+      }
+      // ALWAYS use the fallback when API data is unavailable.
+      // DO NOT fall through to props?.text — that contains CMS-bound values
+      // that may show raw trip UUIDs instead of a placeholder.
+      const fetchedText = getValue(data);
+      const text =
+        data && isPricedData(data) && fetchedText
+          ? fetchedText
+          : fallback;
       return <Component {...props} text={text} />;
     };
   };
@@ -775,6 +835,7 @@ export function withTripNextBatchText(Component): ComponentType {
       return <Component {...props} text="" visible={false} />;
     }
     if (tripData?.status === "unavailable") {
+      // API failed — hide instead of leaking CMS text (e.g. trip UUID)
       return <Component {...props} text="" visible={false} />;
     }
     const nextBatchLabel = isHydrated
