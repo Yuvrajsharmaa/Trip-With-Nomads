@@ -1,0 +1,10 @@
+name = "twn-checkout-gateway"
+main = "src/index.ts"
+compatibility_date = "2024-01-01"
+
+[vars]
+ENVIRONMENT = "production"
+SUPABASE_URL = "https://jxozzvwvprmnhvafmpsa.supabase.co"
+
+[env.staging]
+vars = { ENVIRONMENT = "staging", SUPABASE_URL = "https://ieuwiinbvbdvjrdqqzlb.supabase.co" }

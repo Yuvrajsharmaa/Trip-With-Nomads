@@ -1,7 +1,29 @@
-import type { ComponentType } from "react"
-import React from "react"
+import type { ComponentType } from "react";
+import React from "react";
 
-const { useEffect, useRef, useState } = React
+const { useEffect, useRef, useState, useMemo } = React;
+
+function isFramerRuntimeHost(): boolean {
+  if (typeof window === "undefined") return false;
+  const hostname = String(window.location.hostname || "").toLowerCase();
+  return (
+    hostname.includes("framer.app") ||
+    hostname.includes("framer.website") ||
+    hostname === "framercanvas.com" ||
+    hostname.endsWith(".framercanvas.com") ||
+    hostname.includes("framer.com")
+  );
+}
+
+/**
+ * useHydrated: A helper hook to prevent React hydration mismatches (#418).
+ * Ensures that components render the same content on server and first client pass.
+ */
+function useHydrated() {
+  const [hydrated, setHydrated] = useState(false);
+  useEffect(() => setHydrated(true), []);
+  return hydrated;
+}
 
 // ─────────────────────────────────────────────────────────────
 // Booking Status Override — UNIFIED SUCCESS / FAILURE PAGE
@@ -15,303 +37,318 @@ const { useEffect, useRef, useState } = React
 //   3. Fetches the full booking row from Supabase.
 //   4. All overrides adapt based on `payment_status`.
 //
-// FRAMER SETUP:
-//   1. Apply withBookingStatus  → outermost page frame
-//   2. Apply withStatusIcon     → the ✓ icon element
-//   3. Apply withHeadingText    → "Booking Confirmed!" heading
-//   4. Apply withSubheadingText → subtitle text layer
-//
-//   ┌─────────────────────────────────────────────────┐
-//   │ BOOKING DETAILS CARD                            │
-//   │   "Booking id"  → value text: withBookingId     │
-//   │   "Trip Name"   → value text: withTripName      │
-//   │   "Departure"   → value text: withDepartureDate │
-//   │   "✓ Confirmed" → badge:      withStatusBadge   │
-//   ├─────────────────────────────────────────────────┤
-//   │ TRAVELLERS CARD                                 │
-//   │   "2 Travellers" → badge: withTravellerCount    │
-//   │   Container      → list:  withTravellerList     │
-//   ├─────────────────────────────────────────────────┤
-//   │ PAYMENT SUMMARY CARD  (withHideOnFailure)       │
-//   │   "Paid"     → badge: withPaymentBadge          │
-//   │   Base Price → value: withBasePrice              │
-//   │   Subtotal   → value: withSubtotal              │
-//   │   Tax (2%)   → value: withTaxAmount             │
-//   │   Total Paid → value: withTotalPaid             │
-//   ├─────────────────────────────────────────────────┤
-//   │ RETRY BUTTON (withRetryButton)                  │
-//   │   Hidden on success, visible on failure         │
-//   └─────────────────────────────────────────────────┘
-//
 // ─────────────────────────────────────────────────────────────
 
-type RuntimeEnv = "production" | "development"
-type RuntimeConfig = {
-    siteBaseUrl: string
-    supabaseUrl: string
-    supabaseAnonKey: string
+/**
+ * CURRENT_RUNTIME: Dynamic configuration based on the environment.
+ * Ensures the app knows whether to route to staging or production gateways.
+ */
+const CURRENT_RUNTIME =
+  (typeof window !== "undefined"
+    ? (window as any).__TWN_RUNTIME_CONFIG__
+    : null) || {
+    siteBaseUrl: isFramerRuntimeHost()
+      ? "https://maroon-aside-814100.framer.app"
+      : "https://tripwithnomads.com",
+    gatewayUrl: isFramerRuntimeHost()
+      ? "https://twn-checkout-gateway-staging.tripwithnomads-crm.workers.dev"
+      : "https://twn-checkout-gateway.tripwithnomads-crm.workers.dev",
+  };
+
+const GATEWAY_URL = CURRENT_RUNTIME.gatewayUrl;
+const DOMESTIC_TRIPS_BASE_URL = `${CURRENT_RUNTIME.siteBaseUrl}/domestic-trips`;
+let razorpayScriptPromise: Promise<void> | null = null;
+
+/**
+ * fetchGateway: Secure proxy wrapper for API calls.
+ * routes requests through Cloudflare Workers to avoid exposing Supabase secrets.
+ */
+function buildGatewayUrl(path: string, params?: URLSearchParams): string {
+  const base = String(GATEWAY_URL || "").trim().replace(/\/+$/, "");
+  const gatewayPath = path.replace(/^\/+/, "");
+  const query = params?.toString() || "";
+  return `${base}/${gatewayPath}${query ? `?${query}` : ""}`;
 }
 
-const RUNTIME_CONFIG: Record<RuntimeEnv, RuntimeConfig> = {
-    production: {
-        siteBaseUrl: "https://tripwithnomads.com",
-        supabaseUrl: "https://jxozzvwvprmnhvafmpsa.supabase.co",
-        supabaseAnonKey:
-            "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imp4b3p6dnd2cHJtbmh2YWZtcHNhIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjgwNTg2NjIsImV4cCI6MjA4MzYzNDY2Mn0.KpVa9dWlJEguL1TA00Tf4QDpziJ1mgA2I0f4_l-vlOk",
+function fetchGateway(
+  path: string,
+  init: RequestInit = {},
+  params?: URLSearchParams,
+): Promise<Response> {
+  const url = buildGatewayUrl(path, params);
+  return fetch(url, {
+    ...init,
+    headers: {
+      "Content-Type": "application/json",
+      ...(init.headers || {}),
     },
-    development: {
-        siteBaseUrl: "https://maroon-aside-814100.framer.app",
-        supabaseUrl: "https://ieuwiinbvbdvjrdqqzlb.supabase.co",
-        supabaseAnonKey:
-            "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImlldXdpaW5idmJkdmpyZHFxemxiIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzIwNDYwMTksImV4cCI6MjA4NzYyMjAxOX0.UlTMeyvArixD7byDCrGwEDXsbc4LQfx6QXDL6Je3blE",
-    },
+  });
 }
 
-function normalizeBaseUrl(value: string): string {
-    return String(value || "").trim().replace(/\/+$/, "")
-}
+function ensureRazorpayScript(): Promise<void> {
+  if (typeof window === "undefined") {
+    return Promise.reject(new Error("Razorpay is not available on server"));
+  }
+  if (typeof (window as any).Razorpay === "function") return Promise.resolve();
+  if (razorpayScriptPromise) return razorpayScriptPromise;
 
-function normalizeBookingId(value: string): string {
-    const clean = String(value || "").trim()
-    if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(clean)) {
-        return ""
+  razorpayScriptPromise = new Promise<void>((resolve, reject) => {
+    const existing = document.querySelector(
+      'script[src="https://checkout.razorpay.com/v1/checkout.js"]',
+    ) as HTMLScriptElement | null;
+    if (existing) {
+      existing.addEventListener("load", () => resolve(), { once: true });
+      existing.addEventListener(
+        "error",
+        () => reject(new Error("Failed to load Razorpay script")),
+        { once: true },
+      );
+      return;
     }
-    return clean
-}
-
-function resolveRuntimeEnv(): RuntimeEnv {
-    if (typeof window === "undefined") return "production"
-    const host = String(window.location.hostname || "").trim().toLowerCase()
-    if (host === "tripwithnomads.com" || host === "www.tripwithnomads.com") return "production"
-    if (
-        host === "maroon-aside-814100.framer.app" ||
-        host === "localhost" ||
-        host === "127.0.0.1"
-    ) {
-        return "development"
+    const script = document.createElement("script");
+    script.src = "https://checkout.razorpay.com/v1/checkout.js";
+    script.async = true;
+    script.onload = () => resolve();
+    script.onerror = () => reject(new Error("Failed to load Razorpay script"));
+    document.head.appendChild(script);
+  }).finally(() => {
+    if (typeof (window as any).Razorpay !== "function") {
+      razorpayScriptPromise = null;
     }
-    return "production"
+  });
+
+  return razorpayScriptPromise || Promise.reject(new Error("Failed to initialize Razorpay script"));
 }
-
-function resolveRuntimeConfig(): RuntimeConfig {
-    const env = resolveRuntimeEnv()
-    const selected = RUNTIME_CONFIG[env]
-    const runtimeOverride =
-        typeof window !== "undefined" ? (window as any).__TWN_RUNTIME_CONFIG__ || {} : {}
-    return {
-        siteBaseUrl: normalizeBaseUrl(runtimeOverride.siteBaseUrl || selected.siteBaseUrl),
-        supabaseUrl: String(runtimeOverride.supabaseUrl || selected.supabaseUrl || "").trim(),
-        supabaseAnonKey: String(
-            runtimeOverride.supabaseAnonKey || selected.supabaseAnonKey || ""
-        ).trim(),
-    }
-}
-
-const CURRENT_RUNTIME = resolveRuntimeConfig()
-const SUPABASE_URL = CURRENT_RUNTIME.supabaseUrl
-const SUPABASE_KEY = CURRENT_RUNTIME.supabaseAnonKey
-const DOMESTIC_TRIPS_BASE_URL = `${CURRENT_RUNTIME.siteBaseUrl}/domestic-trips`
-
 
 // ─── TYPES ───────────────────────────────────────────────────
 
 interface BookingData {
-    id: string
-    trip_id: string
-    departure_date: string
-    transport?: string
-    travellers: Array<{ name: string; sharing: string; transport?: string; vehicle?: string }>
-    payment_breakdown: Array<{ label: string; price: number; variant?: string; count?: number }>
-    subtotal_amount?: number
-    discount_amount?: number
-    coupon_code?: string | null
-    coupon_snapshot?: any
-    tax_amount: number
-    total_amount: number
-    currency: string
-    payment_status: "pending" | "paid" | "failed"
-    payment_mode?: "full" | "partial_25"
-    payable_now_amount?: number
-    paid_amount?: number
-    due_amount?: number
-    settlement_status?: "pending" | "failed" | "partially_paid" | "fully_paid"
-    balance_due_note?: string | null
-    payu_txnid: string
-    name: string
-    email: string
-    phone: string
-    created_at: string
-    // Populated from trips table join
-    trip_title?: string
+  id: string;
+  trip_id: string;
+  departure_date: string;
+  transport?: string;
+  travellers: Array<
+    { name: string; sharing: string; transport?: string; vehicle?: string }
+  >;
+  payment_breakdown: Array<
+    { label: string; price: number; variant?: string; count?: number }
+  >;
+  subtotal_amount?: number;
+  discount_amount?: number;
+  coupon_code?: string | null;
+  coupon_snapshot?: any;
+  tax_amount: number;
+  total_amount: number;
+  currency: string;
+  payment_status: "pending" | "paid" | "failed";
+  payment_mode?: "full" | "partial_25";
+  payable_now_amount?: number;
+  paid_amount?: number;
+  due_amount?: number;
+  settlement_status?: "pending" | "failed" | "partially_paid" | "fully_paid";
+  balance_due_note?: string | null;
+  payment_gateway_txn_id: string;
+  name: string;
+  email: string;
+  phone: string;
+  created_at: string;
+  // Populated from trips table join
+  trip_title?: string;
 }
 
-type LoadState = "loading" | "ready" | "error"
-
+type LoadState = "loading" | "ready" | "error";
 
 // ─── SHARED STATE ────────────────────────────────────────────
 // All overrides on the page share one booking object.
 // withBookingStatus fills it; every other override reads it.
 
-let _data: BookingData | null = null
-let _state: LoadState = "loading"
-let _subs: Array<() => void> = []
-let _pendingCountdown = 0
+let _data: BookingData | null = null;
+let _state: LoadState = "loading";
+let _subs: Array<() => void> = [];
+let _pendingCountdown = 0;
 
-function notify() { _subs.forEach((fn) => fn()) }
-
-function useBooking(): [BookingData | null, LoadState] {
-    const [, bump] = useState(0)
-    useEffect(() => {
-        const cb = () => bump((n) => n + 1)
-        _subs.push(cb)
-        return () => { _subs = _subs.filter((s) => s !== cb) }
-    }, [])
-    return [_data, _state]
+function notify() {
+  _subs.forEach((fn) => fn());
 }
 
+function useBooking(): [BookingData | null, LoadState] {
+  const [, bump] = useState(0);
+  useEffect(() => {
+    const cb = () => bump((n) => n + 1);
+    _subs.push(cb);
+    return () => {
+      _subs = _subs.filter((s) => s !== cb);
+    };
+  }, []);
+  return [_data, _state];
+}
 
 // ─── HELPERS ─────────────────────────────────────────────────
 
 function fmt(amount: number): string {
-    return "₹" + amount.toLocaleString("en-IN")
+  return "₹" + Math.round(amount).toLocaleString("en-IN");
 }
 
 function toNumber(value: any): number {
-    const parsed = Number(value)
-    return Number.isFinite(parsed) ? parsed : 0
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : 0;
 }
 
 function resolvedTotalAmount(d: BookingData): number {
-    const explicit = Math.max(0, toNumber((d as any)?.total_amount))
-    if (explicit > 0) return explicit
+  const explicit = Math.max(0, toNumber((d as any)?.total_amount));
+  if (explicit > 0) return explicit;
 
-    const fromPricingSnapshot = Math.max(
-        0,
-        toNumber((d as any)?.pricing_snapshot?.total_amount)
-    )
-    if (fromPricingSnapshot > 0) return fromPricingSnapshot
+  const fromPricingSnapshot = Math.max(
+    0,
+    toNumber((d as any)?.pricing_snapshot?.total_amount),
+  );
+  if (fromPricingSnapshot > 0) return fromPricingSnapshot;
 
-    const fromPricingSummary = Math.max(
-        0,
-        toNumber((d as any)?.pricing_summary?.total_amount)
-    )
-    if (fromPricingSummary > 0) return fromPricingSummary
+  const fromPricingSummary = Math.max(
+    0,
+    toNumber((d as any)?.pricing_summary?.total_amount),
+  );
+  if (fromPricingSummary > 0) return fromPricingSummary;
 
-    const fromBreakdownSummary = Math.max(
-        0,
-        toNumber((d as any)?.payment_breakdown_summary?.total_amount)
-    )
-    if (fromBreakdownSummary > 0) return fromBreakdownSummary
+  const fromBreakdownSummary = Math.max(
+    0,
+    toNumber((d as any)?.payment_breakdown_summary?.total_amount),
+  );
+  if (fromBreakdownSummary > 0) return fromBreakdownSummary;
 
-    const fromDiscountedPlusTax = Math.max(0, discountedSubtotal(d) + toNumber(d?.tax_amount))
-    if (fromDiscountedPlusTax > 0) return fromDiscountedPlusTax
+  const fromDiscountedPlusTax = Math.max(
+    0,
+    discountedSubtotal(d) + toNumber(d?.tax_amount),
+  );
+  if (fromDiscountedPlusTax > 0) return fromDiscountedPlusTax;
 
-    const fromAmount = Math.max(0, toNumber((d as any)?.amount))
-    if (fromAmount > 0) return fromAmount
+  const fromAmount = Math.max(0, toNumber((d as any)?.amount));
+  if (fromAmount > 0) return fromAmount;
 
-    return 0
+  return 0;
 }
 
 function subtotalBeforeDiscount(d: BookingData): number {
-    const explicit = toNumber((d as any).subtotal_amount)
-    if (explicit > 0) return explicit
+  const explicit = toNumber((d as any).subtotal_amount);
+  if (explicit > 0) return explicit;
 
-    const fallbackDiscounted = toNumber(d.total_amount) - toNumber(d.tax_amount)
-    const discount = Math.max(0, toNumber((d as any).discount_amount))
-    return Math.max(0, fallbackDiscounted + discount)
+  const fallbackDiscounted = toNumber(d.total_amount) - toNumber(d.tax_amount);
+  const discount = Math.max(0, toNumber((d as any).discount_amount));
+  return Math.max(0, fallbackDiscounted + discount);
 }
 
 function discountAmount(d: BookingData): number {
-    return Math.max(0, toNumber((d as any).discount_amount))
+  return Math.max(0, toNumber((d as any).discount_amount));
 }
 
-function settlementStatus(d: BookingData): "pending" | "failed" | "partially_paid" | "fully_paid" {
-    const explicit = String((d as any)?.settlement_status || "").trim().toLowerCase()
-    if (
-        explicit === "pending" ||
-        explicit === "failed" ||
-        explicit === "partially_paid" ||
-        explicit === "fully_paid"
-    ) {
-        return explicit
-    }
-    if (d.payment_status === "failed") return "failed"
-    if (d.payment_status === "paid") {
-        const due = Math.max(0, toNumber((d as any)?.due_amount))
-        const mode = String((d as any)?.payment_mode || "").trim().toLowerCase()
-        if (mode === "partial_25" || due > 0) return "partially_paid"
-        return "fully_paid"
-    }
-    return "pending"
+function settlementStatus(
+  d: BookingData,
+): "pending" | "failed" | "partially_paid" | "fully_paid" {
+  const explicit = String((d as any)?.settlement_status || "").trim()
+    .toLowerCase();
+  if (
+    explicit === "pending" ||
+    explicit === "failed" ||
+    explicit === "partially_paid" ||
+    explicit === "fully_paid"
+  ) {
+    return explicit as any;
+  }
+  if (d.payment_status === "failed") return "failed";
+  if (d.payment_status === "paid") {
+    const due = Math.max(0, toNumber((d as any)?.due_amount));
+    const mode = String((d as any)?.payment_mode || "").trim().toLowerCase();
+    if (mode === "partial_25" || due > 0) return "partially_paid";
+    return "fully_paid";
+  }
+  return "pending";
 }
 
 function dueAmount(d: BookingData): number {
-    const explicit = Math.max(0, toNumber((d as any)?.due_amount))
-    if (explicit > 0) return explicit
-    const status = settlementStatus(d)
-    if (status === "partially_paid") {
-        const total = Math.max(0, toNumber(d.total_amount))
-        const payableNow = Math.max(0, toNumber((d as any)?.payable_now_amount))
-        if (payableNow > 0) return Math.max(0, total - payableNow)
-    }
-    return 0
+  const explicit = Math.max(0, toNumber((d as any)?.due_amount));
+  if (explicit > 0) return explicit;
+  const status = settlementStatus(d);
+  if (status === "partially_paid") {
+    const total = Math.max(0, toNumber(d.total_amount));
+    const payableNow = Math.max(0, toNumber((d as any)?.payable_now_amount));
+    if (payableNow > 0) return Math.max(0, total - payableNow);
+  }
+  return 0;
 }
 
 function paidAmount(d: BookingData): number {
-    const explicit = Math.max(0, toNumber((d as any)?.paid_amount))
-    if (explicit > 0) return explicit
-    const status = settlementStatus(d)
-    if (status === "fully_paid") return resolvedTotalAmount(d)
-    if (status === "partially_paid") return Math.max(0, toNumber((d as any)?.payable_now_amount))
-    return 0
+  const explicit = Math.max(0, toNumber((d as any)?.paid_amount));
+  if (explicit > 0) return explicit;
+  const status = settlementStatus(d);
+  if (status === "fully_paid") return resolvedTotalAmount(d);
+  if (status === "partially_paid") {
+    return Math.max(0, toNumber((d as any)?.payable_now_amount));
+  }
+  return 0;
 }
 
 function discountedSubtotal(d: BookingData): number {
-    return Math.max(0, subtotalBeforeDiscount(d) - discountAmount(d))
+  return Math.max(0, subtotalBeforeDiscount(d) - discountAmount(d));
 }
 
 function bookingRef(data: any): string {
-    if (!data) return "#—"
-    if (data.booking_ref) return "#" + data.booking_ref
-    if (!data.id) return "#—"
-    // Fallback: Generate a clean reference from the UUID
-    return "#TWN-" + data.id.replace(/-/g, "").slice(0, 8).toUpperCase()
+  if (!data) return "#\u2014";
+  if (data.booking_ref) return "#" + data.booking_ref;
+  if (!data.id) return "#\u2014";
+  // Fallback: Generate a clean reference from the UUID
+  return "#TWN-" + data.id.replace(/-/g, "").slice(0, 8).toUpperCase();
 }
 
 function nodeText(node: any): string {
-    if (typeof node === "string") return node
-    if (typeof node === "number") return String(node)
-    if (Array.isArray(node)) return node.map((n) => nodeText(n)).join(" ")
-    if (React.isValidElement(node)) return nodeText((node as any).props?.children)
-    return ""
+  if (typeof node === "string") return node;
+  if (typeof node === "number") return String(node);
+  if (Array.isArray(node)) return node.map((n) => nodeText(n)).join(" ");
+  if (React.isValidElement(node)) {
+    return nodeText((node as any).props?.children);
+  }
+  return "";
 }
 
 function normalizeSharingLabel(value: string): string {
-    const clean = String(value || "").trim().replace(/\s+/g, " ")
-    if (!clean) return ""
-    if (/\bsharing\b/i.test(clean)) return clean
-    return `${clean} Sharing`
+  const clean = String(value || "").trim().replace(/\s+/g, " ");
+  if (!clean) return "";
+  if (/\bsharing\b/i.test(clean)) return clean;
+  return `${clean} Sharing`;
 }
 
 function joinMetaParts(parts: Array<string | undefined | null>): string {
-    return parts.map((part) => String(part || "").trim()).filter(Boolean).join(" · ")
+  return parts.map((part) => String(part || "").trim()).filter(Boolean).join(
+    " \u00b7 ",
+  );
+}
+
+function normalizeBookingId(value: string): string {
+  const clean = String(value || "").trim();
+  if (
+    !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
+      .test(clean)
+  ) {
+    return clean; // Allow non-UUID if necessary, but backup logic had this check
+  }
+  return clean;
 }
 
 function buildStatusUrl(
-    pathname: string,
-    bookingId: string,
-    statusToken?: string,
-    extraParams?: Record<string, string>
+  pathname: string,
+  bookingId: string,
+  statusToken?: string,
+  extraParams?: Record<string, string>,
 ) {
-    const base = CURRENT_RUNTIME.siteBaseUrl || (typeof window !== "undefined" ? window.location.origin : "")
-    const url = new URL(pathname, base.endsWith("/") ? base : `${base}/`)
-    if (bookingId) url.searchParams.set("booking_id", bookingId)
-    const token = String(statusToken || "").trim()
-    if (token) url.searchParams.set("status_token", token)
-    for (const [key, value] of Object.entries(extraParams || {})) {
-        url.searchParams.set(key, value)
-    }
-    return url.toString()
+  const base = CURRENT_RUNTIME.siteBaseUrl ||
+    (typeof window !== "undefined" ? window.location.origin : "");
+  const url = new URL(pathname, base.endsWith("/") ? base : `${base}/`);
+  if (bookingId) url.searchParams.set("booking_id", bookingId);
+  const token = String(statusToken || "").trim();
+  if (token) url.searchParams.set("status_token", token);
+  for (const [key, value] of Object.entries(extraParams || {})) {
+    url.searchParams.set(key, value);
+  }
+  return url.toString();
 }
 
 // ═════════════════════════════════════════════════════════════
@@ -320,143 +357,165 @@ function buildStatusUrl(
 // ═════════════════════════════════════════════════════════════
 
 export function withBookingStatus(Component): ComponentType {
-    return (props: any) => {
-        useEffect(() => {
-            _data = null
-            _state = "loading"
-            _pendingCountdown = 0
+  return (props: any) => {
+    useEffect(() => {
+      _data = null;
+      _state = "loading";
+      _pendingCountdown = 0;
 
-            const fetchBooking = async () => {
-                const params = new URLSearchParams(window.location.search)
-                const bookingId = normalizeBookingId(params.get("booking_id") || "")
-                const statusToken = String(params.get("status_token") || "").trim()
-                if (!bookingId) return { error: "No booking_id" }
+      const fetchBooking = () => {
+        const params = new URLSearchParams(window.location.search);
+        const bookingId = normalizeBookingId(params.get("booking_id") || "");
+        const statusToken = String(params.get("status_token") || "").trim();
+        if (!bookingId) return Promise.resolve({ error: "No booking_id" });
 
-                try {
-                    const statusRes = await fetch(`${SUPABASE_URL}/functions/v1/get-booking-status`, {
-                        method: "POST",
-                        headers: {
-                            "Content-Type": "application/json",
-                            apikey: SUPABASE_KEY,
-                            Authorization: `Bearer ${SUPABASE_KEY}`,
-                        },
-                        body: JSON.stringify({
-                            booking_id: bookingId,
-                            status_token: statusToken,
-                        }),
-                    })
-                    if (statusRes.ok) {
-                        const payload = await statusRes.json()
-                        if (payload?.booking) return { data: payload.booking }
+        return fetchGateway("get-booking-status", {
+          method: "POST",
+          body: JSON.stringify({
+            booking_id: bookingId,
+            status_token: statusToken,
+          }),
+        })
+          .then((statusRes) => {
+            if (!statusRes.ok) return { error: "Not found" };
+            return statusRes.json()
+              .then((payload) => {
+                if (payload?.booking) return { data: payload.booking };
+                return { error: "Not found" };
+              })
+              .catch(() => ({ error: "Not found" }));
+          })
+          .catch((err) => ({ error: String(err) }));
+      };
+
+      const go = () => {
+        const params = new URLSearchParams(window.location.search);
+        const bookingId = normalizeBookingId(params.get("booking_id") || "");
+        const statusToken = String(params.get("status_token") || "").trim();
+        const isSuccessRoute = window.location.pathname.includes(
+          "/payment-success",
+        );
+        const successUrl = buildStatusUrl(
+          "/payment-success",
+          bookingId,
+          statusToken,
+        );
+        const failedUrl = buildStatusUrl(
+          "/payment-failed",
+          bookingId,
+          statusToken,
+          {
+            reason: "pending-timeout",
+          },
+        );
+
+        const maybeRedirectOnStatus = (status: string) => {
+          if (status === "paid" && !isSuccessRoute) {
+            window.location.href = successUrl;
+            return true;
+          }
+          if (status === "failed" && isSuccessRoute) {
+            window.location.href = failedUrl;
+            return true;
+          }
+          return false;
+        };
+
+        // 1. Initial fetch
+        fetchBooking().then((result) => {
+          if (result.error) {
+            console.warn("[BookingStatus]", result.error);
+            _state = "error";
+            notify();
+            return;
+          }
+
+          _data = result.data;
+          _state = "ready";
+          notify();
+
+          // 2. Poll if pending (max 15 times, 2s interval)
+          if (_data && _data.payment_status === "pending") {
+            console.log("[BookingStatus] Status is pending, starting poll...");
+            let attempts = 0;
+            const poll = () => {
+              if (attempts >= 15) {
+                // 3. Still pending after polling: show countdown
+                let remaining = 8;
+                const countdown = () => {
+                  if (remaining <= 0) {
+                    _pendingCountdown = 0;
+                    notify();
+                    if (_data?.payment_status === "pending" && bookingId) {
+                      window.location.href = failedUrl;
                     }
-                    return { error: "Not found" }
-                } catch (err) {
-                    return { error: String(err) }
-                }
-            }
+                    return;
+                  }
+                  _pendingCountdown = remaining;
+                  notify();
+                  remaining--;
 
-            const go = async () => {
-                const params = new URLSearchParams(window.location.search)
-                const bookingId = normalizeBookingId(params.get("booking_id") || "")
-                const statusToken = String(params.get("status_token") || "").trim()
-                const isSuccessRoute = window.location.pathname.includes("/payment-success")
-                const successUrl = buildStatusUrl("/payment-success", bookingId, statusToken)
-                const failedUrl = buildStatusUrl("/payment-failed", bookingId, statusToken, {
-                    reason: "pending-timeout",
-                })
-
-                const maybeRedirectOnStatus = (status: string) => {
-                    if (status === "paid" && !isSuccessRoute) {
-                        window.location.href = successUrl
-                        return true
+                  fetchBooking().then((recheck) => {
+                    if (recheck?.data) {
+                      const latest = recheck.data;
+                      const latestStatus = latest.payment_status;
+                      const changed = _data?.payment_status !== latestStatus;
+                      _data = {
+                        ...latest,
+                        trip_title: latest.trip_title || _data?.trip_title,
+                      };
+                      notify();
+                      if (changed && maybeRedirectOnStatus(latestStatus)) {
+                        return;
+                      }
+                      if (latestStatus !== "pending") {
+                        _pendingCountdown = 0;
+                        notify();
+                        return;
+                      }
                     }
-                    if (status === "failed" && isSuccessRoute) {
-                        window.location.href = failedUrl
-                        return true
+                    setTimeout(countdown, 1000);
+                  });
+                };
+                countdown();
+                return;
+              }
+
+              setTimeout(() => {
+                attempts++;
+                fetchBooking().then((res) => {
+                  if (res.data) {
+                    const newStatus = res.data.payment_status;
+                    if (_data && newStatus !== _data.payment_status) {
+                      console.log("[BookingStatus] Status changed:", newStatus);
+                      _data = res.data;
+                      notify();
+                      if (maybeRedirectOnStatus(newStatus)) return;
                     }
-                    return false
-                }
-
-                // 1. Initial fetch
-                let result = await fetchBooking()
-
-                if (result.error) {
-                    console.warn("[BookingStatus]", result.error)
-                    _state = "error"
-                    notify()
-                    return
-                }
-
-                _data = result.data
-                _state = "ready"
-                notify()
-
-                // 2. Poll if pending (max 10 times, 2s interval)
-                if (_data.payment_status === "pending") {
-                    console.log("[BookingStatus] Status is pending, starting poll...")
-                    let attempts = 0
-                    while (attempts < 15) {
-                        await new Promise((r) => setTimeout(r, 2000))
-                        attempts++
-
-                        result = await fetchBooking()
-                        if (!result.data) continue
-
-                        // Update data
-                        const newStatus = result.data.payment_status
-                        if (newStatus !== _data.payment_status) {
-                            console.log("[BookingStatus] Status changed:", newStatus)
-                            _data = result.data
-                            // Ensure trip_title is preserved
-                            if (result.data.trip_title) _data.trip_title = result.data.trip_title
-                            notify()
-
-                            if (maybeRedirectOnStatus(newStatus)) return
-                        }
-
-                        if (newStatus !== "pending") break
+                    if (newStatus === "pending") {
+                      poll();
                     }
+                  } else {
+                    poll();
+                  }
+                });
+              }, 2000);
+            };
+            poll();
+          }
+        });
+      };
 
-                    // 3. Still pending after polling:
-                    //    show countdown, keep rechecking each second, then route to failed if unresolved.
-                    if (_data?.payment_status === "pending") {
-                        for (let remaining = 8; remaining > 0; remaining--) {
-                            _pendingCountdown = remaining
-                            notify()
-                            await new Promise((r) => setTimeout(r, 1000))
+      go();
+    }, []);
 
-                            const recheck = await fetchBooking()
-                            if (!recheck?.data) continue
+    return <Component {...props} />;
+  };
+}
 
-                            const latest = recheck.data
-                            const latestStatus = latest.payment_status
-                            const changed = _data.payment_status !== latestStatus
-                            _data = {
-                                ...latest,
-                                trip_title: latest.trip_title || _data.trip_title,
-                            }
-                            notify()
-
-                            if (changed && maybeRedirectOnStatus(latestStatus)) return
-                            if (latestStatus !== "pending") break
-                        }
-
-                        _pendingCountdown = 0
-                        notify()
-
-                        if (_data?.payment_status === "pending" && bookingId) {
-                            window.location.href = failedUrl
-                            return
-                        }
-                    }
-                }
-            }
-
-            go()
-        }, [])
-
-        return <Component {...props} />
-    }
+// ALIAS for the status override as requested by the user
+export function bookingsoveride(Component): ComponentType {
+  return withBookingStatus(Component);
 }
 
 // ═════════════════════════════════════════════════════════════
@@ -465,524 +524,577 @@ export function withBookingStatus(Component): ComponentType {
 //    component and replaces its textContent.
 // ═════════════════════════════════════════════════════════════
 
-function textOverride(getter: (d: BookingData) => string, fallback = "—") {
-    return function (Component: ComponentType): ComponentType {
-        return (props: any) => {
-            const [data, state] = useBooking()
-            const ref = useRef<HTMLDivElement>(null)
+function textOverride(getter: (d: BookingData) => string, fallback = "\u2014") {
+  return function (Component: ComponentType): ComponentType {
+    return (props: any) => {
+      const [data, state] = useBooking();
+      const isHydrated = useHydrated();
 
-            useEffect(() => {
-                if (!ref.current) return
-                const el = ref.current.querySelector("p, span, h1, h2, h3, h4, h5, h6")
-                if (!el) return
+      // If we are still loading, we can optionally return a placeholder
+      // But usually, we want the template text to stay until ready.
+      const text = useMemo(() => {
+        if (!isHydrated) return fallback;
+        if (state === "ready" && data) return getter(data);
+        return fallback;
+      }, [isHydrated, state, data]);
 
-                if (state === "loading") {
-                    ; (el as HTMLElement).style.opacity = "0.4"
-                    return
-                }
-
-                ; (el as HTMLElement).style.opacity = "1"
-
-                if (state === "ready" && data) {
-                    ; (el as HTMLElement).textContent = getter(data)
-                } else {
-                    ; (el as HTMLElement).textContent = fallback
-                }
-            }, [data, state])
-
-            return (
-                <div ref={ref} style={{ display: "contents" }}>
-                    <Component {...props} />
-                </div>
-            )
-        }
-    }
+      return <Component {...props} text={text} />;
+    };
+  };
 }
 
 // --- BOOKING DETAILS CARD ---
 
 export function withBookingId(Component): ComponentType {
-    return textOverride((d) => bookingRef(d))(Component)
+  return textOverride((d) => bookingRef(d))(Component);
 }
 
 export function withTripName(Component): ComponentType {
-    return textOverride((d) => d.trip_title || "—")(Component)
+  return textOverride((d) => d.trip_title || "\u2014")(Component);
 }
 
 export function withDepartureDate(Component): ComponentType {
-    return textOverride((d) => d.departure_date || "—")(Component)
+  return textOverride((d) => d.departure_date || "\u2014")(Component);
 }
-
 export function withTransportOption(Component): ComponentType {
-    return textOverride((d) => (d.transport ? d.transport : "Seat in Coach"))(Component)
+  return textOverride((d) => (d.transport ? d.transport : "Seat in Coach"))(
+    Component,
+  );
 }
 
 // --- TRAVELLER COUNT BADGE ---
 
 export function withTravellerCount(Component): ComponentType {
-    return textOverride((d) => {
-        const n = d.travellers?.length || 0
-        return `${n} Traveller${n !== 1 ? "s" : ""}`
-    })(Component)
+  return textOverride((d) => {
+    const n = d.travellers?.length || 0;
+    return `${n} Traveller${n !== 1 ? "s" : ""}`;
+  })(Component);
 }
 
 // --- PAYMENT SUMMARY CARD ---
 
 export function withBasePrice(Component): ComponentType {
-    return textOverride((d) => {
-        return fmt(subtotalBeforeDiscount(d))
-    })(Component)
+  return textOverride((d) => fmt(subtotalBeforeDiscount(d)))(Component);
 }
 
 export function withSubtotal(Component): ComponentType {
-    return textOverride((d) => fmt(discountedSubtotal(d)))(Component)
+  return textOverride((d) => fmt(discountedSubtotal(d)))(Component);
 }
 
 export function withSubtotalBeforeDiscount(Component): ComponentType {
-    return textOverride((d) => fmt(subtotalBeforeDiscount(d)))(Component)
+  return textOverride((d) => fmt(subtotalBeforeDiscount(d)))(Component);
 }
-
 export function withDiscountAmount(Component): ComponentType {
-    return textOverride((d) => `- ${fmt(discountAmount(d))}`)(Component)
+  return textOverride((d) => `- ${fmt(discountAmount(d))}`)(Component);
 }
 
 export function withCouponCode(Component): ComponentType {
-    return textOverride((d) => {
-        const code = (d as any).coupon_code
-        return code ? String(code).toUpperCase() : ""
-    })(Component)
+  return textOverride((d) => {
+    const code = (d as any).coupon_code;
+    return code ? String(code).toUpperCase() : "";
+  })(Component);
+}
+
+// Case-insensitive aliases for Framer compatibility
+export function withdiscountamount(Component): ComponentType {
+  return withDiscountAmount(Component);
+}
+export function withtransportoption(Component): ComponentType {
+  return withTransportOption(Component);
+}
+export function withcouponcode(Component): ComponentType {
+  return withCouponCode(Component);
 }
 
 export function withTaxAmount(Component): ComponentType {
-    return textOverride((d) => fmt(d.tax_amount))(Component)
+  return textOverride((d) => fmt(d.tax_amount))(Component);
 }
 
 export function withTotalPaid(Component): ComponentType {
-    return textOverride((d) => {
-        const paid = paidAmount(d)
-        if (paid > 0) return fmt(paid)
-        const total = resolvedTotalAmount(d)
-        return fmt(total)
-    })(Component)
+  return textOverride((d) => {
+    const paid = paidAmount(d);
+    if (paid > 0) return fmt(paid);
+    const total = resolvedTotalAmount(d);
+    return fmt(total);
+  })(Component);
 }
 
 export function withPayableNowAmount(Component): ComponentType {
-    return textOverride((d) => fmt(Math.max(0, toNumber((d as any)?.payable_now_amount))))(Component)
+  return textOverride((d) =>
+    fmt(Math.max(0, toNumber((d as any)?.payable_now_amount)))
+  )(Component);
 }
 
 export function withDueAmount(Component): ComponentType {
-    return textOverride((d) => fmt(dueAmount(d)))(Component)
+  return textOverride((d) => fmt(dueAmount(d)))(Component);
 }
 
 export function withBalanceDueNote(Component): ComponentType {
-    return textOverride((d) => {
-        const due = dueAmount(d)
-        if (due <= 0) return ""
-        const explicit = String((d as any)?.balance_due_note || "").trim()
-        return explicit || `${fmt(due)} due on-site before trip departure.`
-    })(Component)
+  return textOverride((d) => {
+    const due = dueAmount(d);
+    if (due <= 0) return "";
+    const explicit = String((d as any)?.balance_due_note || "").trim();
+    return explicit || `${fmt(due)} due on-site before trip departure.`;
+  })(Component);
 }
-
 
 // ═════════════════════════════════════════════════════════════
 // 3. STATUS / PAYMENT BADGES
-//    These are Framer COMPONENTS (not text layers), so the
-//    override is applied to the component instance. The
-//    textOverride helper finds the first text element inside.
 // ═════════════════════════════════════════════════════════════
 
 export function withStatusBadge(Component): ComponentType {
-    return textOverride(
-        (d) => {
-            const status = settlementStatus(d)
-            if (status === "fully_paid") return "Confirmed"
-            if (status === "partially_paid") return "Confirmed · Balance Due"
-            if (d.payment_status === "failed") return "Failed"
-            return "Pending"
-        },
-        "Loading..."
-    )(Component)
+  return textOverride(
+    (d) => {
+      const status = settlementStatus(d);
+      if (status === "fully_paid") return "Confirmed";
+      if (status === "partially_paid") return "Confirmed \u00b7 Balance Due";
+      if (d.payment_status === "failed") return "Failed";
+      return "Pending";
+    },
+    "Loading...",
+  )(Component);
 }
 
 export function withPaymentBadge(Component): ComponentType {
-    return textOverride(
-        (d) => {
-            const status = settlementStatus(d)
-            if (status === "fully_paid") return "Paid in Full"
-            if (status === "partially_paid") return "Partially Paid"
-            if (d.payment_status === "failed") return "Failed"
-            return "Pending"
-        },
-        "…"
-    )(Component)
+  return textOverride(
+    (d) => {
+      const status = settlementStatus(d);
+      if (status === "fully_paid") return "Paid in Full";
+      if (status === "partially_paid") return "Partially Paid";
+      if (d.payment_status === "failed") return "Failed";
+      return "Pending";
+    },
+    "\u2026",
+  )(Component);
 }
-
 
 // ═════════════════════════════════════════════════════════════
 // 4. TRAVELLER LIST
-//    Apply to the container that holds the "Name" + "Sharing
-//    · Email" placeholder. This override clears the container
-//    and injects one entry per traveller from the booking.
 // ═════════════════════════════════════════════════════════════
 
 export function withTravellerList(Component): ComponentType {
-    return (props: any) => {
-        const [data, state] = useBooking()
-        const travellers = data?.travellers || []
-        const rowRefs = useRef<Array<HTMLDivElement | null>>([])
-        const childrenArray = React.Children.toArray(props.children)
-        const template =
-            (childrenArray.find((child) => {
-                if (!React.isValidElement(child)) return false
-                const text = nodeText((child as any).props?.children).toLowerCase()
-                return text.includes("name") || text.includes("sharing") || text.includes("email")
-            }) as React.ReactElement | undefined) ||
-            (childrenArray.find((child) => React.isValidElement(child)) as React.ReactElement | undefined)
+  return (props: any) => {
+    const [data, state] = useBooking();
+    const travellers = data?.travellers || [];
+    const rowRefs = useRef<Array<HTMLDivElement | null>>([]);
+    const childrenArray = React.Children.toArray(props.children);
+    const template = (childrenArray.find((child) => {
+      if (!React.isValidElement(child)) return false;
+      const text = nodeText((child as any).props?.children).toLowerCase();
+      return text.includes("name") || text.includes("sharing") ||
+        text.includes("email");
+    }) as React.ReactElement | undefined) ||
+      (childrenArray.find((child) => React.isValidElement(child)) as
+        | React.ReactElement
+        | undefined);
 
-        useEffect(() => {
-            if (state !== "ready" || !data || !template || travellers.length === 0) return
+    useEffect(() => {
+      if (state !== "ready" || !data || !template || travellers.length === 0) {
+        return;
+      }
 
-            travellers.forEach((traveller, index) => {
-                const row = rowRefs.current[index]
-                if (!row) return
+      travellers.forEach((traveller, index) => {
+        const row = rowRefs.current[index];
+        if (!row) return;
 
-                const textNodes = Array.from(
-                    row.querySelectorAll<HTMLElement>("p, span, h1, h2, h3, h4, h5, h6")
-                ).filter((el) => String(el.textContent || "").trim().length > 0)
+        const textNodes = Array.from(
+          row.querySelectorAll<HTMLElement>("p, span, h1, h2, h3, h4, h5, h6"),
+        ).filter((el) => String(el.textContent || "").trim().length > 0);
 
-                if (textNodes.length === 0) return
+        if (textNodes.length === 0) return;
 
-                const name = String(traveller?.name || "").trim() || `Traveller ${index + 1}`
-                const sharing = normalizeSharingLabel(String(traveller?.sharing || ""))
-                const vehicle = String(traveller?.vehicle || traveller?.transport || "").trim()
-                const email = index === 0 ? String(data.email || "").trim() : ""
-                const metaText = joinMetaParts([sharing, vehicle, email])
+        const name = String(traveller?.name || "").trim() ||
+          `Traveller ${index + 1}`;
+        const sharing = normalizeSharingLabel(String(traveller?.sharing || ""));
+        const vehicle = String(traveller?.vehicle || traveller?.transport || "")
+          .trim();
+        const email = index === 0 ? String(data.email || "").trim() : "";
+        const metaText = joinMetaParts([sharing, vehicle, email]);
 
-                const nameNode =
-                    textNodes.find((el) => /name/i.test(String(el.textContent || ""))) || textNodes[0]
-                const metaNode =
-                    textNodes.find((el) => /sharing|email/i.test(String(el.textContent || ""))) ||
-                    textNodes[1]
+        const nameNode = textNodes.find((el) =>
+          /name/i.test(String(el.textContent || ""))
+        ) || textNodes[0];
+        const metaNode = textNodes.find((el) =>
+          /sharing|email/i.test(String(el.textContent || ""))
+        ) ||
+          textNodes[1];
 
-                if (nameNode) nameNode.textContent = name
-                if (metaNode) {
-                    metaNode.textContent = metaText
-                    metaNode.style.whiteSpace = "normal"
-                    metaNode.style.overflowWrap = "anywhere"
-                    metaNode.style.wordBreak = "break-word"
-                }
-
-                // Remove any leftover placeholder nodes like "Sharing", "Email", bullets, etc.
-                textNodes.forEach((el) => {
-                    if (el === nameNode || el === metaNode) return
-                    const lower = String(el.textContent || "").trim().toLowerCase()
-                    if (
-                        lower === "name" ||
-                        lower === "·" ||
-                        /\bsharing\b/i.test(lower) ||
-                        /\bemail\b/i.test(lower)
-                    ) {
-                        el.textContent = ""
-                        ;(el as HTMLElement).style.display = "none"
-                    }
-                })
-            })
-        }, [state, data, template, travellers])
-
-        if (state !== "ready" || !data || !template || travellers.length === 0) {
-            return <Component {...props} />
+        if (nameNode) {
+          nameNode.textContent = name;
+        }
+        if (metaNode) {
+          metaNode.textContent = metaText;
+          metaNode.style.whiteSpace = "normal";
+          metaNode.style.overflowWrap = "anywhere";
+          metaNode.style.wordBreak = "break-word";
         }
 
-        return (
-            <Component
-                {...props}
-                style={{
-                    ...(props.style || {}),
-                    display: "flex",
-                    flexDirection: "column",
-                    gap: "12px",
-                }}
-            >
-                {travellers.map((_, index) => (
-                    <div
-                        key={`status-traveller-row-${index}`}
-                        ref={(el) => {
-                            rowRefs.current[index] = el
-                        }}
-                        style={{ width: "100%" }}
-                    >
-                        {React.cloneElement(template, {
-                            key: `status-traveller-template-${index}`,
-                            style: {
-                                ...((template.props as any)?.style || {}),
-                                width: "100%",
-                                position: "relative",
-                            },
-                        })}
-                    </div>
-                ))}
-            </Component>
-        )
+        // Remove any leftover placeholder nodes like "Sharing", "Email", bullets, etc.
+        textNodes.forEach((el) => {
+          if (el === nameNode || el === metaNode) {
+            return;
+          }
+          const lower = String(el.textContent || "").trim().toLowerCase();
+          if (
+            lower === "name" ||
+            lower === "\u00b7" ||
+            /\bsharing\b/i.test(lower) ||
+            /\bemail\b/i.test(lower)
+          ) {
+            el.textContent = "";
+            (el as HTMLElement).style.display = "none";
+          }
+        });
+      });
+    }, [state, data, template, travellers]);
+
+    if (state !== "ready" || !data || !template || travellers.length === 0) {
+      return <Component {...props} />;
     }
+
+    return (
+      <Component
+        {...props}
+        style={{
+          ...(props.style || {}),
+          display: "flex",
+          flexDirection: "column",
+          gap: "12px",
+        }}
+      >
+        {travellers.map((_, index) => (
+          <div
+            key={`status-traveller-row-${index}`}
+            ref={(el) => {
+              rowRefs.current[index] = el;
+            }}
+            style={{ width: "100%" }}
+          >
+            {React.cloneElement(template, {
+              key: `status-traveller-template-${index}`,
+              style: {
+                ...((template.props as any)?.style || {}),
+                width: "100%",
+                position: "relative",
+              },
+            })}
+          </div>
+        ))}
+      </Component>
+    );
+  };
 }
 
-
 // ═════════════════════════════════════════════════════════════
-// 5. DYNAMIC STATUS OVERRIDES — Unified success/failure page
-//    These overrides allow a single page to adapt to both
-//    successful and failed payments.
-//
-// FRAMER SETUP:
-//   Apply withStatusIcon     → the ✓ / ✗ icon element
-//   Apply withHeadingText    → "Booking Confirmed!" heading
-//   Apply withSubheadingText → "Your adventure awaits…" text
-//   Apply withRetryButton    → any element to act as "Try Again"
-//   Apply withHideOnFailure  → elements to hide when failed
-//                               (e.g. Payment Summary card)
+// 5. DYNAMIC STATUS OVERRIDES
 // ═════════════════════════════════════════════════════════════
 
-// --- Page heading: "Booking Confirmed!" / "Payment Failed" ---
 export function withHeadingText(Component): ComponentType {
-    const Wrapped = textOverride(
-        (d) => {
-            const status = settlementStatus(d)
-            if (status === "fully_paid" || status === "partially_paid") return "Booking Confirmed!"
-            if (d.payment_status === "failed") return "Payment Failed"
-            return "Processing…"
-        },
-        "Loading…"
-    )(Component)
-    return Wrapped
+  return textOverride(
+    (d) => {
+      const status = settlementStatus(d);
+      if (status === "fully_paid" || status === "partially_paid") {
+        return "Booking Confirmed!";
+      }
+      if (d.payment_status === "failed") return "Payment Failed";
+      return "Processing\u2026";
+    },
+    "Loading\u2026",
+  )(Component);
 }
 
-// --- Page subheading ---
 export function withSubheadingText(Component): ComponentType {
-    const Wrapped = textOverride(
-        (d) => {
-            const status = settlementStatus(d)
-            if (status === "fully_paid")
-                return "Your adventure awaits. Here's everything you need to know."
-            if (status === "partially_paid")
-                return `Booking confirmed. ${fmt(
-                    dueAmount(d)
-                )} is due on-site before trip departure.`
-            if (d.payment_status === "failed")
-                return "Your payment didn't go through. Don't worry, you can try again."
-            if (_pendingCountdown > 0) {
-                return `We're still confirming your payment. Rechecking and redirecting in ${_pendingCountdown}s.`
-            }
-            return "We're confirming your payment…"
-        },
-        ""
-    )(Component)
-    return Wrapped
+  return textOverride(
+    (d) => {
+      const status = settlementStatus(d);
+      if (status === "fully_paid") {
+        return "Your adventure awaits. Here's everything you need to know.";
+      }
+      if (status === "partially_paid") {
+        return `Booking confirmed. ${
+          fmt(dueAmount(d))
+        } is due on-site before trip departure.`;
+      }
+      if (d.payment_status === "failed") {
+        return "Your payment didn't go through. Don't worry, you can try again.";
+      }
+      if (_pendingCountdown > 0) {
+        return `We're still confirming your payment. Rechecking and redirecting in ${_pendingCountdown}s.`;
+      }
+      return "We're confirming your payment\u2026";
+    },
+    "",
+  )(Component);
 }
 
-// --- Status icon: swaps the ✅ to ❌ on failure ---
 export function withStatusIcon(Component): ComponentType {
-    return (props: any) => {
-        const [data, state] = useBooking()
-        const ref = useRef<HTMLDivElement>(null)
+  return (props: any) => {
+    const [data, state] = useBooking();
+    const isHydrated = useHydrated();
 
-        useEffect(() => {
-            if (!ref.current || state !== "ready" || !data) return
-
-            const el = ref.current
-            const isFailed = data.payment_status === "failed"
-            const isPending = data.payment_status === "pending"
-
-            // Try to find an SVG or img inside
-            const svg = el.querySelector("svg")
-            const img = el.querySelector("img")
-
-            if (isFailed) {
-                // Replace content with a red ✗ circle
-                el.innerHTML = `
-                    <div style="
-                        width: 64px; height: 64px; border-radius: 50%;
-                        background: #ef4444; display: flex;
-                        align-items: center; justify-content: center;
-                        margin: 0 auto;
-                    ">
-                        <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2.5" stroke-linecap="round">
-                            <line x1="18" y1="6" x2="6" y2="18"/>
-                            <line x1="6" y1="6" x2="18" y2="18"/>
-                        </svg>
-                    </div>
-                `
-            } else if (isPending) {
-                el.innerHTML = `
-                    <div style="
-                        width: 64px; height: 64px; border-radius: 50%;
-                        background: #f59e0b; display: flex;
-                        align-items: center; justify-content: center;
-                        margin: 0 auto;
-                    ">
-                        <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2.5" stroke-linecap="round">
-                            <circle cx="12" cy="12" r="10"/>
-                            <polyline points="12 6 12 12 16 14"/>
-                        </svg>
-                    </div>
-                `
-            }
-            // On "paid", leave the original ✅ icon from Framer
-        }, [data, state])
-
-        return (
-            <div ref={ref} style={{ display: "contents" }}>
-                <Component {...props} />
-            </div>
-        )
+    if (!isHydrated || state !== "ready" || !data) {
+      return <Component {...props} />;
     }
-}
 
-// --- Retry button: visible only on failure ---
-export function withRetryButton(Component): ComponentType {
-    return (props: any) => {
-        const [data, state] = useBooking()
-        const [isRetrying, setIsRetrying] = useState(false)
+    const isFailed = data.payment_status === "failed";
+    const isPending = data.payment_status === "pending";
 
-        if (state !== "ready" || !data) {
-            return <Component {...props} style={{ ...props.style, display: "none" }} />
-        }
-
-        if (data.payment_status === "paid") {
-            // Hide on success
-            return <Component {...props} style={{ ...props.style, display: "none" }} />
-        }
-
-        // Show on failure or pending — secure retry with booking_id + email.
-        const handleRetry = async () => {
-            if (isRetrying) return
-            setIsRetrying(true)
-
-            try {
-                const res = await fetch(`${SUPABASE_URL}/functions/v1/retry-payment`, {
-                    method: "POST",
-                    headers: {
-                        "Content-Type": "application/json",
-                        apikey: SUPABASE_KEY,
-                        Authorization: `Bearer ${SUPABASE_KEY}`,
-                    },
-                    body: JSON.stringify({
-                        booking_id: data.id,
-                        email: String(data.email || "").trim(),
-                    }),
-                })
-                if (!res.ok) throw new Error(`Retry failed (${res.status})`)
-
-                const payload = await res.json().catch(() => null)
-                const payu = payload?.payu
-                if (!payu?.action) throw new Error("Invalid PayU response")
-
-                const form = document.createElement("form")
-                form.method = "POST"
-                form.action = String(payu.action)
-                form.style.display = "none"
-
-                for (const [key, value] of Object.entries(payu)) {
-                    if (key === "action") continue
-                    const input = document.createElement("input")
-                    input.type = "hidden"
-                    input.name = key
-                    input.value = String(value ?? "")
-                    form.appendChild(input)
-                }
-
-                document.body.appendChild(form)
-                form.submit()
-                return
-            } catch (err) {
-                console.error("[RetryPayment] Error:", err)
-                if (data.trip_id) {
-                    window.location.href = `${DOMESTIC_TRIPS_BASE_URL}/${data.trip_id}`
-                } else {
-                    window.location.href = DOMESTIC_TRIPS_BASE_URL
-                }
-            } finally {
-                setIsRetrying(false)
-            }
-        }
-
+    const Icon = useMemo(() => {
+      if (isFailed) {
         return (
-            <div
-                onClick={handleRetry}
-                style={{
-                    cursor: isRetrying ? "wait" : "pointer",
-                    display: "inline-block",
-                    padding: "14px 32px",
-                    background: isRetrying
-                        ? "linear-gradient(135deg, #94a3b8, #64748b)"
-                        : "linear-gradient(135deg, #1b91c9, #0085c1)",
-                    color: "#fff",
-                    borderRadius: "12px",
-                    fontSize: "16px",
-                    fontWeight: 600,
-                    textAlign: "center" as const,
-                    marginTop: "16px",
-                    transition: "all 0.2s",
-                    opacity: isRetrying ? 0.7 : 1,
-                    pointerEvents: isRetrying ? "none" : "auto",
-                }}
-                onMouseEnter={(e) => {
-                    if (!isRetrying) (e.target as HTMLElement).style.opacity = "0.85"
-                }}
-                onMouseLeave={(e) => {
-                    if (!isRetrying) (e.target as HTMLElement).style.opacity = "1"
-                }}
+          <div
+            style={{
+              width: 64,
+              height: 64,
+              borderRadius: "50%",
+              background: "#ef4444",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              margin: "0 auto",
+            }}
+          >
+            <svg
+              width="32"
+              height="32"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="white"
+              strokeWidth="2.5"
+              strokeLinecap="round"
             >
-                {isRetrying ? "Retrying…" : "Try Again"}
-            </div>
-        )
-    }
+              <line x1="18" y1="6" x2="6" y2="18" />
+              <line x1="6" y1="6" x2="18" y2="18" />
+            </svg>
+          </div>
+        );
+      }
+      if (isPending) {
+        return (
+          <div
+            style={{
+              width: 64,
+              height: 64,
+              borderRadius: "50%",
+              background: "#f59e0b",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              margin: "0 auto",
+            }}
+          >
+            <svg
+              width="32"
+              height="32"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="white"
+              strokeWidth="2.5"
+              strokeLinecap="round"
+            >
+              <circle cx="12" cy="12" r="10" />
+              <polyline points="12 6 12 12 16 14" />
+            </svg>
+          </div>
+        );
+      }
+      return null;
+    }, [isFailed, isPending]);
+
+    return (
+      <Component {...props}>
+        {Icon}
+      </Component>
+    );
+  };
 }
 
-// --- Hide element on failure (e.g. Payment Summary card) ---
+export function withRetryButton(Component): ComponentType {
+  return (props: any) => {
+    const [data, state] = useBooking();
+    const [isRetrying, setIsRetrying] = useState(false);
+    const isHydrated = useHydrated();
+
+    if (!isHydrated || state !== "ready" || !data) {
+      return (
+        <Component {...props} style={{ ...props.style, display: "none" }} />
+      );
+    }
+
+    if (data.payment_status === "paid") {
+      return (
+        <Component {...props} style={{ ...props.style, display: "none" }} />
+      );
+    }
+
+    const handleRetry = () => {
+      if (isRetrying) return;
+      setIsRetrying(true);
+
+      fetchGateway("retry-payment", {
+        method: "POST",
+        body: JSON.stringify({
+          booking_id: data.id,
+          email: String(data.email || "").trim(),
+        }),
+      })
+        .then((res) => {
+          if (!res.ok) throw new Error(`Retry failed (${res.status})`);
+          return res.json();
+        })
+        .then((payload) => {
+          if (payload?.gateway === "razorpay" && payload?.razorpay?.order_id) {
+            return ensureRazorpayScript().then(() => {
+              const razorpay = payload.razorpay;
+              if (
+                typeof (window as any).Razorpay !== "function" ||
+                !razorpay?.key ||
+                !razorpay?.order_id
+              ) {
+                throw new Error("Invalid Razorpay response");
+              }
+
+              const rzp = new (window as any).Razorpay({
+                key: String(razorpay.key),
+                amount: Number(razorpay.amount || 0),
+                currency: String(razorpay.currency || "INR"),
+                name: String(razorpay.name || "Trip With Nomads"),
+                description: String(razorpay.description || "Trip Booking"),
+                order_id: String(razorpay.order_id),
+                prefill: razorpay.prefill || {},
+                notes: razorpay.notes || {},
+                callback_url: String(razorpay.callback_url || ""),
+                redirect: true,
+                modal: {
+                  ondismiss: () => setIsRetrying(false),
+                },
+              });
+              rzp.on("payment.failed", () => setIsRetrying(false));
+              rzp.open();
+            });
+          }
+
+          const payu = payload?.payu;
+          if (!payu?.action) throw new Error("Invalid payment retry response");
+
+          const form = document.createElement("form");
+          form.method = "POST";
+          form.action = String(payu.action);
+          form.style.display = "none";
+
+          for (const [key, value] of Object.entries(payu)) {
+            if (key === "action") continue;
+            const input = document.createElement("input");
+            input.type = "hidden";
+            input.name = key;
+            input.value = String(value ?? "");
+            form.appendChild(input);
+          }
+
+          document.body.appendChild(form);
+          form.submit();
+        })
+        .catch((err) => {
+          console.error("[RetryPayment] Error:", err);
+          if (data.trip_id) {
+            window.location.href = `${DOMESTIC_TRIPS_BASE_URL}/${data.trip_id}`;
+          } else {
+            window.location.href = DOMESTIC_TRIPS_BASE_URL;
+          }
+        })
+        .finally(() => {
+          setIsRetrying(false);
+        });
+    };
+
+    return (
+      <div
+        onClick={handleRetry}
+        style={{
+          cursor: isRetrying ? "wait" : "pointer",
+          display: "inline-block",
+          padding: "14px 32px",
+          background: isRetrying
+            ? "linear-gradient(135deg, #94a3b8, #64748b)"
+            : "linear-gradient(135deg, #1b91c9, #0085c1)",
+          color: "#fff",
+          borderRadius: "12px",
+          fontSize: "16px",
+          fontWeight: 600,
+          textAlign: "center" as const,
+          marginTop: "16px",
+          transition: "all 0.2s",
+          opacity: isRetrying ? 0.7 : 1,
+          pointerEvents: isRetrying ? "none" : "auto",
+        }}
+        onMouseEnter={(e) => {
+          if (!isRetrying) (e.target as HTMLElement).style.opacity = "0.85";
+        }}
+        onMouseLeave={(e) => {
+          if (!isRetrying) (e.target as HTMLElement).style.opacity = "1";
+        }}
+      >
+        {isRetrying ? "Retrying\u2026" : "Try Again"}
+      </div>
+    );
+  };
+}
+
 export function withHideOnFailure(Component): ComponentType {
-    return (props: any) => {
-        const [data, state] = useBooking()
-
-        if (state === "ready" && data && data.payment_status === "failed") {
-            return <Component {...props} style={{ ...props.style, display: "none" }} />
-        }
-
-        return <Component {...props} />
+  return (props: any) => {
+    const [data, state] = useBooking();
+    if (state === "ready" && data && data.payment_status === "failed") {
+      return (
+        <Component {...props} style={{ ...props.style, display: "none" }} />
+      );
     }
+    return <Component {...props} />;
+  };
 }
 
-// Hide element unless a due balance exists (for partial payment cards/rows).
 export function withHideWhenNoBalance(Component): ComponentType {
-    return (props: any) => {
-        const [data, state] = useBooking()
-        if (state === "ready" && data && dueAmount(data) <= 0) {
-            return <Component {...props} style={{ ...(props.style || {}), display: "none" }} />
-        }
-        return <Component {...props} />
+  return (props: any) => {
+    const [data, state] = useBooking();
+    if (state === "ready" && data && dueAmount(data) <= 0) {
+      return (
+        <Component
+          {...props}
+          style={{ ...(props.style || {}), display: "none" }}
+        />
+      );
     }
+    return <Component {...props} />;
+  };
 }
 
-// Hide coupon-related layers when no coupon is applied.
 export function withHideWhenNoCoupon(Component): ComponentType {
-    return (props: any) => {
-        const [data, state] = useBooking()
-        const hasCoupon = Boolean(String((data as any)?.coupon_code || "").trim())
-
-        if (state === "ready" && !hasCoupon) {
-            return <Component {...props} style={{ ...(props.style || {}), display: "none" }} />
-        }
-        return <Component {...props} />
+  return (props: any) => {
+    const [data, state] = useBooking();
+    const hasCoupon = Boolean(String((data as any)?.coupon_code || "").trim());
+    if (state === "ready" && !hasCoupon) {
+      return (
+        <Component
+          {...props}
+          style={{ ...(props.style || {}), display: "none" }}
+        />
+      );
     }
+    return <Component {...props} />;
+  };
 }
 
-// Hide discount rows when discount amount is zero.
 export function withHideWhenNoDiscount(Component): ComponentType {
-    return (props: any) => {
-        const [data, state] = useBooking()
-        const discount = data ? discountAmount(data) : 0
-
-        if (state === "ready" && discount <= 0) {
-            return <Component {...props} style={{ ...(props.style || {}), display: "none" }} />
-        }
-        return <Component {...props} />
+  return (props: any) => {
+    const [data, state] = useBooking();
+    const discount = data ? discountAmount(data) : 0;
+    if (state === "ready" && discount <= 0) {
+      return (
+        <Component
+          {...props}
+          style={{ ...(props.style || {}), display: "none" }}
+        />
+      );
     }
+    return <Component {...props} />;
+  };
 }

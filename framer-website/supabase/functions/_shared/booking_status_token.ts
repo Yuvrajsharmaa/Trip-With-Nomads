@@ -38,6 +38,9 @@ export function resolveBookingStatusSecret(preferredFallback?: string): string {
 export function listBookingStatusSecrets(): string[] {
     const candidates = [
         Deno.env.get("BOOKING_STATUS_TOKEN_SECRET"),
+        Deno.env.get("RAZORPAY_LIVE_KEY_SECRET"),
+        Deno.env.get("RAZORPAY_TEST_KEY_SECRET"),
+        Deno.env.get("RAZORPAY_KEY_SECRET"),
         Deno.env.get("PAYU_LIVE_SALT"),
         Deno.env.get("PAYU_TEST_SALT"),
         Deno.env.get("PAYU_SALT"),
