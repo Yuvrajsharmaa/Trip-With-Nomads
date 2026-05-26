@@ -602,6 +602,72 @@ function paymentModeSummary(paymentMode: PaymentMode, totalAmount: number) {
     return { payableNowAmount, dueAmount }
 }
 
+type PaymentGateway = "payu" | "razorpay"
+
+function resolvePaymentGateway(): PaymentGateway {
+    const raw = String(Deno.env.get("PAYMENT_GATEWAY") || "payu").trim().toLowerCase()
+    return raw === "razorpay" ? "razorpay" : "payu"
+}
+
+function resolveGatewayTestMode(gateway: PaymentGateway): boolean {
+    const explicit = Deno.env.get("PAYMENT_GATEWAY_TEST_MODE")
+    if (explicit != null && explicit !== "") return isTruthy(explicit)
+    if (gateway === "razorpay") {
+        const razorpayMode = Deno.env.get("RAZORPAY_TEST_MODE")
+        if (razorpayMode != null && razorpayMode !== "") return isTruthy(razorpayMode)
+    }
+    return isTruthy(Deno.env.get("PAYU_TEST_MODE"))
+}
+
+function toPaise(amount: number): number {
+    return Math.max(0, Math.round(Math.max(0, toNumber(amount)) * 100))
+}
+
+function withQueryParams(baseUrl: string, extra: Record<string, string>): string {
+    const url = new URL(baseUrl)
+    for (const [key, value] of Object.entries(extra)) {
+        url.searchParams.set(key, value)
+    }
+    return url.toString()
+}
+
+function normalizeTripNameForNote(value: unknown, fallback = "Trip Booking"): string {
+    const clean = String(value || "").trim().replace(/\s+/g, " ")
+    const out = clean || fallback
+    return out.length > 120 ? out.slice(0, 120) : out
+}
+
+async function createRazorpayOrder(params: {
+    keyId: string
+    keySecret: string
+    amountPaise: number
+    currency: string
+    receipt: string
+    notes?: Record<string, string>
+}) {
+    const auth = btoa(`${params.keyId}:${params.keySecret}`)
+    const response = await fetch("https://api.razorpay.com/v1/orders", {
+        method: "POST",
+        headers: {
+            Authorization: `Basic ${auth}`,
+            "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+            amount: params.amountPaise,
+            currency: params.currency,
+            receipt: params.receipt,
+            notes: params.notes || {},
+        }),
+    })
+
+    const data = await response.json().catch(() => ({}))
+    if (!response.ok || !data?.id) {
+        const message = data?.error?.description || data?.error?.reason || data?.error || "Razorpay order create failed"
+        throw new Error(String(message))
+    }
+    return data
+}
+
 serve(async (req) => {
     if (req.method === "OPTIONS") {
         return new Response("ok", { headers: corsHeaders })
@@ -662,17 +728,39 @@ serve(async (req) => {
             )
         }
 
-        const isTest = Deno.env.get("PAYU_TEST_MODE") === "true"
-        const payuKey = isTest
-            ? Deno.env.get("PAYU_TEST_KEY") || Deno.env.get("PAYU_KEY")
-            : Deno.env.get("PAYU_LIVE_KEY") || Deno.env.get("PAYU_KEY")
-        const payuSalt = isTest
-            ? Deno.env.get("PAYU_TEST_SALT") || Deno.env.get("PAYU_SALT")
-            : Deno.env.get("PAYU_LIVE_SALT") || Deno.env.get("PAYU_SALT")
+        const paymentGateway = resolvePaymentGateway()
+        const isTest = resolveGatewayTestMode(paymentGateway)
+        const payuKey = paymentGateway === "payu"
+            ? (isTest
+                ? Deno.env.get("PAYU_TEST_KEY") || Deno.env.get("PAYU_KEY")
+                : Deno.env.get("PAYU_LIVE_KEY") || Deno.env.get("PAYU_KEY")) || ""
+            : ""
+        const payuSalt = paymentGateway === "payu"
+            ? (isTest
+                ? Deno.env.get("PAYU_TEST_SALT") || Deno.env.get("PAYU_SALT")
+                : Deno.env.get("PAYU_LIVE_SALT") || Deno.env.get("PAYU_SALT")) || ""
+            : ""
+        const razorpayKeyId = paymentGateway === "razorpay"
+            ? (isTest
+                ? Deno.env.get("RAZORPAY_TEST_KEY_ID") || Deno.env.get("RAZORPAY_KEY_ID")
+                : Deno.env.get("RAZORPAY_LIVE_KEY_ID") || Deno.env.get("RAZORPAY_KEY_ID")) || ""
+            : ""
+        const razorpayKeySecret = paymentGateway === "razorpay"
+            ? (isTest
+                ? Deno.env.get("RAZORPAY_TEST_KEY_SECRET") || Deno.env.get("RAZORPAY_KEY_SECRET")
+                : Deno.env.get("RAZORPAY_LIVE_KEY_SECRET") || Deno.env.get("RAZORPAY_KEY_SECRET")) || ""
+            : ""
 
-        if (!payuKey || !payuSalt) {
+        if (paymentGateway === "payu" && (!payuKey || !payuSalt)) {
             return new Response(
-                JSON.stringify({ error: "Payment configuration missing" }),
+                JSON.stringify({ error: "PayU configuration missing" }),
+                { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+            )
+        }
+
+        if (paymentGateway === "razorpay" && (!razorpayKeyId || !razorpayKeySecret)) {
+            return new Response(
+                JSON.stringify({ error: "Razorpay configuration missing" }),
                 { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
             )
         }
@@ -784,7 +872,8 @@ serve(async (req) => {
             name,
             email,
             phone: phone || "",
-            payu_txnid: txnid,
+            payment_gateway_txn_id: txnid,
+            payment_gateway_order_or_ref_id: null,
         }
 
         let { data, error } = await supabase
@@ -839,13 +928,96 @@ serve(async (req) => {
         }
 
         const productinfo = "Trip Booking"
+        const tripDetails = await supabase
+            .from("trips")
+            .select("title")
+            .eq("id", tripId)
+            .maybeSingle()
+        const tripNameForNotes = normalizeTripNameForNote(tripDetails.data?.title, productinfo)
         const firstname = name.split(" ")[0]
         const udf1 = data.id
         const gatewayAmount = payableNowAmount.toFixed(2)
-        const bookingStatusSecret = resolveBookingStatusSecret(payuSalt)
+        const bookingStatusSecret = resolveBookingStatusSecret(
+            paymentGateway === "payu" ? payuSalt : razorpayKeySecret
+        )
         const bookingStatusToken = bookingStatusSecret
             ? await issueBookingStatusToken(udf1, bookingStatusSecret)
             : null
+
+        const callbackBaseUrl =
+            Deno.env.get("PAYMENT_CALLBACK_URL") ||
+            `${Deno.env.get("SUPABASE_URL")}/functions/v1/handle-payment`
+
+        if (paymentGateway === "razorpay") {
+            const callbackUrl = withQueryParams(callbackBaseUrl, {
+                booking_id: udf1,
+                gateway: "razorpay",
+            })
+            const amountPaise = toPaise(payableNowAmount)
+            if (amountPaise <= 0) {
+                return new Response(
+                    JSON.stringify({ error: "Invalid payable amount for Razorpay" }),
+                    { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+                )
+            }
+
+            const orderReceipt = String(txnid || udf1).slice(0, 40)
+            const order = await createRazorpayOrder({
+                keyId: razorpayKeyId,
+                keySecret: razorpayKeySecret,
+                amountPaise,
+                currency,
+                receipt: orderReceipt,
+                notes: {
+                    booking_id: udf1,
+                    trip_name: tripNameForNotes,
+                    payment_mode: paymentMode,
+                },
+            })
+
+            const orderId = String(order.id || "").trim()
+            if (orderId) {
+                await supabase
+                    .from("bookings")
+                    .update({ payment_gateway_order_or_ref_id: orderId })
+                    .eq("id", udf1)
+            }
+
+            return new Response(
+                JSON.stringify({
+                    booking_id: data.id,
+                    payment_mode: paymentMode,
+                    total_amount: totalAmount,
+                    payable_now_amount: payableNowAmount,
+                    due_amount: dueAmount,
+                    settlement_status: settlementStatus,
+                    status_token: bookingStatusToken?.token || null,
+                    status_token_expires_at: bookingStatusToken?.expiresAt || null,
+                    gateway: "razorpay",
+                    razorpay: {
+                        key: razorpayKeyId,
+                        order_id: orderId,
+                        amount: amountPaise,
+                        currency,
+                        name: "Trip With Nomads",
+                        description: productinfo,
+                        prefill: {
+                            name,
+                            email,
+                            contact: phone || "",
+                        },
+                        notes: {
+                            booking_id: udf1,
+                            trip_name: tripNameForNotes,
+                            payment_mode: paymentMode,
+                        },
+                        callback_url: callbackUrl,
+                        redirect: true,
+                    },
+                }),
+                { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+            )
+        }
 
         const hashString = `${payuKey}|${txnid}|${gatewayAmount}|${productinfo}|${firstname}|${email}|${udf1}||||||||||${payuSalt}`
         const hashBuffer = await crypto.subtle.digest("SHA-512", new TextEncoder().encode(hashString))
@@ -854,9 +1026,7 @@ serve(async (req) => {
             .join("")
 
         const actionUrl = isTest ? "https://test.payu.in/_payment" : "https://secure.payu.in/_payment"
-        const callbackUrl =
-            Deno.env.get("PAYMENT_CALLBACK_URL") ||
-            `${Deno.env.get("SUPABASE_URL")}/functions/v1/handle-payment`
+        const callbackUrl = callbackBaseUrl
 
         return new Response(
             JSON.stringify({
@@ -868,6 +1038,7 @@ serve(async (req) => {
                 settlement_status: settlementStatus,
                 status_token: bookingStatusToken?.token || null,
                 status_token_expires_at: bookingStatusToken?.expiresAt || null,
+                gateway: "payu",
                 payu: {
                     key: payuKey,
                     txnid,

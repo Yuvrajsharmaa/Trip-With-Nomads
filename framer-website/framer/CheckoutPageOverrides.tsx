@@ -100,6 +100,7 @@ const TRIP_ID_SOURCE_EVENT = "twn:trip-id-source";
 const tripDisplayCache = new Map<string, { ts: number; data: any }>();
 const tripDisplayInFlight = new Map<string, Promise<any | null>>();
 let forcedTripId = "";
+let razorpayScriptPromise: Promise<void> | null = null;
 
 type CheckoutContextDisplayData = {
   display_summary: {
@@ -840,6 +841,41 @@ function fetchGateway(
       ...(init.headers || {}),
     },
   });
+}
+
+function ensureRazorpayScript(): Promise<void> {
+  if (typeof window === "undefined") {
+    return Promise.reject(new Error("Razorpay is not available on server"));
+  }
+  if (typeof (window as any).Razorpay === "function") return Promise.resolve();
+  if (razorpayScriptPromise) return razorpayScriptPromise;
+
+  razorpayScriptPromise = new Promise<void>((resolve, reject) => {
+    const existing = document.querySelector(
+      'script[src="https://checkout.razorpay.com/v1/checkout.js"]',
+    ) as HTMLScriptElement | null;
+    if (existing) {
+      existing.addEventListener("load", () => resolve(), { once: true });
+      existing.addEventListener(
+        "error",
+        () => reject(new Error("Failed to load Razorpay script")),
+        { once: true },
+      );
+      return;
+    }
+    const script = document.createElement("script");
+    script.src = "https://checkout.razorpay.com/v1/checkout.js";
+    script.async = true;
+    script.onload = () => resolve();
+    script.onerror = () => reject(new Error("Failed to load Razorpay script"));
+    document.head.appendChild(script);
+  }).finally(() => {
+    if (typeof (window as any).Razorpay !== "function") {
+      razorpayScriptPromise = null;
+    }
+  });
+
+  return razorpayScriptPromise || Promise.reject(new Error("Failed to initialize Razorpay script"));
 }
 
 function populateDropdown(select: HTMLSelectElement, options: string[]) {
@@ -2941,6 +2977,58 @@ export function withCheckoutPayButton(Component): ComponentType {
                 checkoutMessage: data?.error ||
                   `Payment setup failed (HTTP ${res.status})`,
               });
+              return;
+            }
+
+            if (data?.gateway === "razorpay" && data?.razorpay?.order_id) {
+              ensureRazorpayScript()
+                .then(() => {
+                  const razorpay = data.razorpay;
+                  if (
+                    typeof (window as any).Razorpay !== "function" ||
+                    !razorpay?.key ||
+                    !razorpay?.order_id
+                  ) {
+                    throw new Error("Invalid Razorpay payload");
+                  }
+
+                  const rzp = new (window as any).Razorpay({
+                    key: String(razorpay.key),
+                    amount: Number(razorpay.amount || 0),
+                    currency: String(razorpay.currency || "INR"),
+                    name: String(razorpay.name || "Trip With Nomads"),
+                    description: String(razorpay.description || "Trip Booking"),
+                    order_id: String(razorpay.order_id),
+                    prefill: razorpay.prefill || {},
+                    notes: razorpay.notes || {},
+                    callback_url: String(razorpay.callback_url || ""),
+                    redirect: true,
+                    modal: {
+                      ondismiss: () => {
+                        setStore({
+                          submitting: false,
+                          checkoutMessage: "Payment was cancelled before completion.",
+                        });
+                      },
+                    },
+                  });
+                  rzp.on("payment.failed", () => {
+                    setStore({
+                      submitting: false,
+                      checkoutMessage: "Payment failed. Please try again.",
+                    });
+                  });
+                  rzp.open();
+                })
+                .catch((err) => {
+                  if (isFramerRuntimeHost()) {
+                    console.error("[Checkout] Razorpay launch error", err);
+                  }
+                  setStore({
+                    submitting: false,
+                    checkoutMessage: "Could not start payment",
+                  });
+                });
               return;
             }
 

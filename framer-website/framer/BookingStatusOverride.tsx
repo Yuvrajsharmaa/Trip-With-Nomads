@@ -57,6 +57,7 @@ const CURRENT_RUNTIME =
 
 const GATEWAY_URL = CURRENT_RUNTIME.gatewayUrl;
 const DOMESTIC_TRIPS_BASE_URL = `${CURRENT_RUNTIME.siteBaseUrl}/domestic-trips`;
+let razorpayScriptPromise: Promise<void> | null = null;
 
 /**
  * fetchGateway: Secure proxy wrapper for API calls.
@@ -82,6 +83,41 @@ function fetchGateway(
       ...(init.headers || {}),
     },
   });
+}
+
+function ensureRazorpayScript(): Promise<void> {
+  if (typeof window === "undefined") {
+    return Promise.reject(new Error("Razorpay is not available on server"));
+  }
+  if (typeof (window as any).Razorpay === "function") return Promise.resolve();
+  if (razorpayScriptPromise) return razorpayScriptPromise;
+
+  razorpayScriptPromise = new Promise<void>((resolve, reject) => {
+    const existing = document.querySelector(
+      'script[src="https://checkout.razorpay.com/v1/checkout.js"]',
+    ) as HTMLScriptElement | null;
+    if (existing) {
+      existing.addEventListener("load", () => resolve(), { once: true });
+      existing.addEventListener(
+        "error",
+        () => reject(new Error("Failed to load Razorpay script")),
+        { once: true },
+      );
+      return;
+    }
+    const script = document.createElement("script");
+    script.src = "https://checkout.razorpay.com/v1/checkout.js";
+    script.async = true;
+    script.onload = () => resolve();
+    script.onerror = () => reject(new Error("Failed to load Razorpay script"));
+    document.head.appendChild(script);
+  }).finally(() => {
+    if (typeof (window as any).Razorpay !== "function") {
+      razorpayScriptPromise = null;
+    }
+  });
+
+  return razorpayScriptPromise || Promise.reject(new Error("Failed to initialize Razorpay script"));
 }
 
 // ─── TYPES ───────────────────────────────────────────────────
@@ -111,7 +147,7 @@ interface BookingData {
   due_amount?: number;
   settlement_status?: "pending" | "failed" | "partially_paid" | "fully_paid";
   balance_due_note?: string | null;
-  payu_txnid: string;
+  payment_gateway_txn_id: string;
   name: string;
   email: string;
   phone: string;
@@ -907,8 +943,39 @@ export function withRetryButton(Component): ComponentType {
           return res.json();
         })
         .then((payload) => {
+          if (payload?.gateway === "razorpay" && payload?.razorpay?.order_id) {
+            return ensureRazorpayScript().then(() => {
+              const razorpay = payload.razorpay;
+              if (
+                typeof (window as any).Razorpay !== "function" ||
+                !razorpay?.key ||
+                !razorpay?.order_id
+              ) {
+                throw new Error("Invalid Razorpay response");
+              }
+
+              const rzp = new (window as any).Razorpay({
+                key: String(razorpay.key),
+                amount: Number(razorpay.amount || 0),
+                currency: String(razorpay.currency || "INR"),
+                name: String(razorpay.name || "Trip With Nomads"),
+                description: String(razorpay.description || "Trip Booking"),
+                order_id: String(razorpay.order_id),
+                prefill: razorpay.prefill || {},
+                notes: razorpay.notes || {},
+                callback_url: String(razorpay.callback_url || ""),
+                redirect: true,
+                modal: {
+                  ondismiss: () => setIsRetrying(false),
+                },
+              });
+              rzp.on("payment.failed", () => setIsRetrying(false));
+              rzp.open();
+            });
+          }
+
           const payu = payload?.payu;
-          if (!payu?.action) throw new Error("Invalid PayU response");
+          if (!payu?.action) throw new Error("Invalid payment retry response");
 
           const form = document.createElement("form");
           form.method = "POST";

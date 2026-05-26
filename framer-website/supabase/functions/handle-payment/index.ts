@@ -16,6 +16,8 @@ import {
     sheetsEnabled,
 } from "../_shared/sheets.ts"
 
+type PaymentGateway = "payu" | "razorpay"
+
 function toNumber(value: any): number {
     const parsed = Number(value)
     return Number.isFinite(parsed) ? parsed : 0
@@ -31,6 +33,68 @@ function firstNonEmpty(...values: any[]): string {
         if (next) return next
     }
     return ""
+}
+
+async function readRequestPayload(req: Request): Promise<Record<string, string>> {
+    const payload: Record<string, string> = {}
+    const contentType = String(req.headers.get("content-type") || "").toLowerCase()
+
+    const assignValue = (key: string, value: unknown) => {
+        const safeKey = String(key || "").trim()
+        if (!safeKey) return
+        payload[safeKey] = String(value ?? "")
+    }
+
+    const parseJsonObject = (source: unknown) => {
+        if (!source || typeof source !== "object" || Array.isArray(source)) return
+        for (const [key, value] of Object.entries(source as Record<string, unknown>)) {
+            if (value == null) continue
+            if (typeof value === "object") {
+                assignValue(key, JSON.stringify(value))
+            } else {
+                assignValue(key, value)
+            }
+        }
+    }
+
+    const parseUrlEncoded = (rawBody: string) => {
+        if (!rawBody || !rawBody.trim()) return
+        const params = new URLSearchParams(rawBody)
+        for (const [key, value] of params.entries()) {
+            assignValue(key, value)
+        }
+    }
+
+    const rawBody = await req.clone().text().catch(() => "")
+    if (rawBody.trim()) {
+        if (contentType.includes("application/json")) {
+            try {
+                parseJsonObject(JSON.parse(rawBody))
+            } catch {
+                parseUrlEncoded(rawBody)
+            }
+        } else {
+            parseUrlEncoded(rawBody)
+            if (Object.keys(payload).length === 0) {
+                try {
+                    parseJsonObject(JSON.parse(rawBody))
+                } catch {
+                    // Non-JSON body: ignore and try multipart fallback below.
+                }
+            }
+        }
+    }
+
+    if (Object.keys(payload).length === 0 && contentType.includes("multipart/form-data")) {
+        const formData = await req.clone().formData().catch(() => null)
+        if (formData) {
+            for (const [key, value] of formData.entries()) {
+                assignValue(key, value?.toString?.() ?? value)
+            }
+        }
+    }
+
+    return payload
 }
 
 function isTruthy(value: string | undefined): boolean {
@@ -51,31 +115,59 @@ function bookingSheetsWriteEnabled(): boolean {
     return isTruthy(Deno.env.get("BOOKING_SHEETS_WRITE_ENABLED"))
 }
 
+function resolvePaymentGatewayFromEnv(): PaymentGateway {
+    const raw = String(Deno.env.get("PAYMENT_GATEWAY") || "payu").trim().toLowerCase()
+    return raw === "razorpay" ? "razorpay" : "payu"
+}
+
+function resolveGatewayTestMode(gateway: PaymentGateway): boolean {
+    const explicit = Deno.env.get("PAYMENT_GATEWAY_TEST_MODE")
+    if (explicit != null && explicit !== "") return isTruthy(explicit)
+    if (gateway === "razorpay") {
+        const razorpayMode = Deno.env.get("RAZORPAY_TEST_MODE")
+        if (razorpayMode != null && razorpayMode !== "") return isTruthy(razorpayMode)
+    }
+    return isTruthy(Deno.env.get("PAYU_TEST_MODE"))
+}
+
+function inferGatewayFromPayload(payload: Record<string, string>, url: URL): PaymentGateway {
+    const fromQuery = String(url.searchParams.get("gateway") || "").trim().toLowerCase()
+    if (fromQuery === "razorpay" || fromQuery === "payu") return fromQuery as PaymentGateway
+    if (payload.razorpay_signature || payload.razorpay_order_id || payload.razorpay_payment_id) {
+        return "razorpay"
+    }
+    return resolvePaymentGatewayFromEnv()
+}
+
+async function sha512Hex(message: string): Promise<string> {
+    const hashBuffer = await crypto.subtle.digest("SHA-512", new TextEncoder().encode(message))
+    return Array.from(new Uint8Array(hashBuffer))
+        .map((b) => b.toString(16).padStart(2, "0"))
+        .join("")
+}
+
+async function hmacSha256Hex(message: string, secret: string): Promise<string> {
+    const key = await crypto.subtle.importKey(
+        "raw",
+        new TextEncoder().encode(secret),
+        { name: "HMAC", hash: "SHA-256" },
+        false,
+        ["sign"]
+    )
+    const signature = await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(message))
+    return Array.from(new Uint8Array(signature))
+        .map((b) => b.toString(16).padStart(2, "0"))
+        .join("")
+}
+
 serve(async (req) => {
     try {
-        const formData = await req.formData()
-        const data: Record<string, string> = {}
-        for (const [key, value] of formData.entries()) {
-            data[key] = value.toString()
-        }
+        const payload = await readRequestPayload(req)
 
-        console.log("📥 PayU Response:", data)
-
-        const {
-            status,
-            txnid,
-            amount,
-            productinfo,
-            firstname,
-            email,
-            udf1,
-            mihpayid,
-            hash: receivedHash,
-            key,
-        } = data
-
-        const bookingId = String(udf1 || "").trim()
-        if (!bookingId) return new Response("Missing booking id", { status: 400 })
+        const requestUrl = new URL(req.url)
+        const gateway = inferGatewayFromPayload(payload, requestUrl)
+        const bookingIdFromQuery = String(requestUrl.searchParams.get("booking_id") || "").trim()
+        const isGatewayTestMode = resolveGatewayTestMode(gateway)
 
         const supabaseUrl = Deno.env.get("SUPABASE_URL") || ""
         const serviceRoleKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || ""
@@ -85,21 +177,75 @@ serve(async (req) => {
 
         const supabase = createClient(supabaseUrl, serviceRoleKey)
 
-        const isTest = Deno.env.get("PAYU_TEST_MODE") === "true"
-        const payuKey = isTest
-            ? Deno.env.get("PAYU_TEST_KEY") || Deno.env.get("PAYU_KEY")
-            : Deno.env.get("PAYU_LIVE_KEY") || Deno.env.get("PAYU_KEY")
-        const payuSalt = isTest
-            ? Deno.env.get("PAYU_TEST_SALT") || Deno.env.get("PAYU_SALT")
-            : Deno.env.get("PAYU_LIVE_SALT") || Deno.env.get("PAYU_SALT")
+        const payuKey = gateway === "payu"
+            ? (isGatewayTestMode
+                ? Deno.env.get("PAYU_TEST_KEY") || Deno.env.get("PAYU_KEY")
+                : Deno.env.get("PAYU_LIVE_KEY") || Deno.env.get("PAYU_KEY")) || ""
+            : ""
+        const payuSalt = gateway === "payu"
+            ? (isGatewayTestMode
+                ? Deno.env.get("PAYU_TEST_SALT") || Deno.env.get("PAYU_SALT")
+                : Deno.env.get("PAYU_LIVE_SALT") || Deno.env.get("PAYU_SALT")) || ""
+            : ""
+        const razorpayKeySecret = gateway === "razorpay"
+            ? (isGatewayTestMode
+                ? Deno.env.get("RAZORPAY_TEST_KEY_SECRET") || Deno.env.get("RAZORPAY_KEY_SECRET")
+                : Deno.env.get("RAZORPAY_LIVE_KEY_SECRET") || Deno.env.get("RAZORPAY_KEY_SECRET")) || ""
+            : ""
+        const razorpayKeyId = gateway === "razorpay"
+            ? (isGatewayTestMode
+                ? Deno.env.get("RAZORPAY_TEST_KEY_ID") || Deno.env.get("RAZORPAY_KEY_ID")
+                : Deno.env.get("RAZORPAY_LIVE_KEY_ID") || Deno.env.get("RAZORPAY_KEY_ID")) || ""
+            : ""
 
-        if (!payuSalt || !payuKey) return new Response("Missing payment configuration", { status: 500 })
+        if (gateway === "payu" && (!payuKey || !payuSalt)) {
+            return new Response("Missing PayU configuration", { status: 500 })
+        }
+        if (gateway === "razorpay" && (!razorpayKeySecret || !razorpayKeyId)) {
+            return new Response("Missing Razorpay configuration", { status: 500 })
+        }
+
+        const payuStatus = String(payload.status || "").trim().toLowerCase()
+        const payuTxnId = String(payload.txnid || "").trim()
+        const payuAmount = String(payload.amount || "").trim()
+        const payuProductInfo = String(payload.productinfo || "").trim()
+        const payuFirstName = String(payload.firstname || "").trim()
+        const payuEmail = String(payload.email || "").trim()
+        const payuUdf1 = String(payload.udf1 || "").trim()
+        const payuMihpayid = String(payload.mihpayid || "").trim()
+        const payuHash = String(payload.hash || "").trim()
+        const payuIncomingKey = String(payload.key || "").trim()
+
+        const razorpayPaymentId = String(payload.razorpay_payment_id || payload["error[metadata][payment_id]"] || "")
+            .trim()
+        const razorpayOrderId = String(payload.razorpay_order_id || payload["error[metadata][order_id]"] || "")
+            .trim()
+        const razorpaySignature = String(payload.razorpay_signature || "").trim()
+        const razorpayErrorCode = String(payload["error[code]"] || payload.error_code || "").trim().toLowerCase()
+
+        let bookingId = firstNonEmpty(
+            bookingIdFromQuery,
+            payuUdf1
+        )
+
+        if (!bookingId && gateway === "razorpay" && razorpayOrderId) {
+            const lookup = await supabase
+                .from("bookings")
+                .select("id")
+                .eq("payment_gateway_order_or_ref_id", razorpayOrderId)
+                .maybeSingle()
+            if (!lookup.error && lookup.data?.id) {
+                bookingId = String(lookup.data.id || "").trim()
+            }
+        }
+
+        if (!bookingId) return new Response("Missing booking id", { status: 400 })
 
         let supportsBalanceDueNote = true
         let { data: booking, error: bookingError } = await supabase
             .from("bookings")
             .select(
-                "id, booking_ref, trip_id, departure_date, name, email, phone, travellers, payment_breakdown, coupon_code, subtotal_amount, discount_amount, tax_amount, total_amount, payment_mode, payable_now_amount, due_amount, paid_amount, payment_status, settlement_status, payu_txnid, payu_mihpayid, balance_due_note, created_at"
+                "id, booking_ref, trip_id, departure_date, name, email, phone, travellers, payment_breakdown, coupon_code, subtotal_amount, discount_amount, tax_amount, total_amount, payment_mode, payable_now_amount, due_amount, paid_amount, payment_status, settlement_status, payment_gateway_txn_id, payment_gateway_order_or_ref_id, balance_due_note, created_at"
             )
             .eq("id", bookingId)
             .single()
@@ -109,7 +255,7 @@ serve(async (req) => {
             const fallback = await supabase
                 .from("bookings")
                 .select(
-                    "id, booking_ref, trip_id, departure_date, name, email, phone, travellers, payment_breakdown, coupon_code, subtotal_amount, discount_amount, tax_amount, total_amount, payment_mode, payable_now_amount, due_amount, paid_amount, payment_status, settlement_status, payu_txnid, payu_mihpayid, created_at"
+                    "id, booking_ref, trip_id, departure_date, name, email, phone, travellers, payment_breakdown, coupon_code, subtotal_amount, discount_amount, tax_amount, total_amount, payment_mode, payable_now_amount, due_amount, paid_amount, payment_status, settlement_status, payment_gateway_txn_id, payment_gateway_order_or_ref_id, created_at"
                 )
                 .eq("id", bookingId)
                 .single()
@@ -136,42 +282,76 @@ serve(async (req) => {
             }
         }
 
-        const safeUdf1 = bookingId
-        const safeEmail = String(email || booking?.email || "").trim()
-        const safeFirstname = String(
-            firstname || (booking?.name ? String(booking.name).split(" ")[0] : "") || ""
-        ).trim()
-        const safeProductinfo = String(productinfo || "Trip Booking").trim()
-        const fallbackAmount =
-            toNumber(booking?.payable_now_amount) > 0
-                ? toNumber(booking?.payable_now_amount)
-                : toNumber(booking?.total_amount)
-        const safeAmount = String(amount || (fallbackAmount > 0 ? fallbackAmount.toFixed(2) : "")).trim()
-        const safeTxnid = String(txnid || "").trim()
-        const safeKey = String(payuKey || "").trim()
-        const incomingKey = String(key || "").trim()
-        const normalizedStatus = String(status || "").trim().toLowerCase()
-
-        const hashString = `${payuSalt}|${normalizedStatus}||||||||||${safeUdf1}|${safeEmail}|${safeFirstname}|${safeProductinfo}|${safeAmount}|${safeTxnid}|${safeKey}`
-        const hashBuffer = await crypto.subtle.digest("SHA-512", new TextEncoder().encode(hashString))
-        const calculatedHash = Array.from(new Uint8Array(hashBuffer))
-            .map((b) => b.toString(16).padStart(2, "0"))
-            .join("")
-
-        const hashMatches =
-            calculatedHash.toLowerCase() === String(receivedHash || "").trim().toLowerCase()
-        const keyMatches = safeKey.length > 0 && safeKey === incomingKey
-        const isValid = hashMatches && keyMatches
-        const isSuccess = normalizedStatus === "success" && isValid
-        const isPending = normalizedStatus === "pending" && isValid
-        const isFailed = (normalizedStatus === "failure" || normalizedStatus === "failed") && isValid
         const notes: string[] = []
+        let isValid = false
+        let isSuccess = false
+        let isPending = false
+        let isFailed = false
+        let callbackAmount = 0
+        let gatewayTxnId = ""
+        let gatewayOrderOrRefId = ""
 
-        if (!keyMatches) {
-            notes.push("PayU key mismatch; callback ignored")
-        }
-        if (!hashMatches) {
-            notes.push("PayU hash mismatch; callback ignored")
+        if (gateway === "payu") {
+            const safeUdf1 = bookingId
+            const safeEmail = String(payuEmail || booking?.email || "").trim()
+            const safeFirstname = String(
+                payuFirstName || (booking?.name ? String(booking.name).split(" ")[0] : "") || ""
+            ).trim()
+            const safeProductinfo = String(payuProductInfo || "Trip Booking").trim()
+            const fallbackAmount =
+                toNumber(booking?.payable_now_amount) > 0
+                    ? toNumber(booking?.payable_now_amount)
+                    : toNumber(booking?.total_amount)
+            const safeAmount = String(payuAmount || (fallbackAmount > 0 ? fallbackAmount.toFixed(2) : "")).trim()
+            const safeTxnid = String(payuTxnId || "").trim()
+            const safeKey = String(payuKey || "").trim()
+            const incomingKey = String(payuIncomingKey || "").trim()
+            const normalizedStatus = String(payuStatus || "").trim().toLowerCase()
+
+            const hashString = `${payuSalt}|${normalizedStatus}||||||||||${safeUdf1}|${safeEmail}|${safeFirstname}|${safeProductinfo}|${safeAmount}|${safeTxnid}|${safeKey}`
+            const calculatedHash = await sha512Hex(hashString)
+            const hashMatches = calculatedHash.toLowerCase() === String(payuHash || "").trim().toLowerCase()
+            const keyMatches = safeKey.length > 0 && safeKey === incomingKey
+            isValid = hashMatches && keyMatches
+            isSuccess = normalizedStatus === "success" && isValid
+            isPending = normalizedStatus === "pending" && isValid
+            isFailed = (normalizedStatus === "failure" || normalizedStatus === "failed") && isValid
+            callbackAmount = round2(Math.max(0, toNumber(payuAmount)))
+            gatewayTxnId = safeTxnid
+            gatewayOrderOrRefId = String(payuMihpayid || "").trim()
+
+            if (!keyMatches) notes.push("PayU key mismatch; callback ignored")
+            if (!hashMatches) notes.push("PayU hash mismatch; callback ignored")
+        } else {
+            const orderMatches = Boolean(
+                razorpayOrderId &&
+                    (
+                        !booking?.payment_gateway_order_or_ref_id ||
+                        String(booking.payment_gateway_order_or_ref_id).trim() === razorpayOrderId
+                    )
+            )
+            const hasSuccessPayload = Boolean(razorpayPaymentId && razorpayOrderId && razorpaySignature)
+            const signatureMessage = `${razorpayOrderId}|${razorpayPaymentId}`
+            const calculatedSignature = hasSuccessPayload
+                ? await hmacSha256Hex(signatureMessage, razorpayKeySecret)
+                : ""
+            const signatureMatches = hasSuccessPayload &&
+                calculatedSignature.toLowerCase() === razorpaySignature.toLowerCase()
+
+            isValid = (hasSuccessPayload && signatureMatches && orderMatches) || (!hasSuccessPayload && orderMatches)
+            isSuccess = hasSuccessPayload && signatureMatches && orderMatches
+            isPending = false
+            isFailed = !isSuccess
+            callbackAmount = 0
+            gatewayTxnId = razorpayPaymentId || String(booking?.payment_gateway_txn_id || "").trim()
+            gatewayOrderOrRefId = razorpayOrderId || String(booking?.payment_gateway_order_or_ref_id || "").trim()
+
+            if (!orderMatches) notes.push("Razorpay order mismatch; callback ignored")
+            if (hasSuccessPayload && !signatureMatches) notes.push("Razorpay signature mismatch; callback ignored")
+            if (!hasSuccessPayload) {
+                notes.push("Razorpay failure callback received")
+                if (razorpayErrorCode) notes.push(`Razorpay error: ${razorpayErrorCode}`)
+            }
         }
 
         const totalAmount = round2(Math.max(0, toNumber(booking?.total_amount)))
@@ -179,7 +359,6 @@ serve(async (req) => {
             String(booking?.payment_mode || "").trim().toLowerCase() === "partial_25"
                 ? "partial_25"
                 : "full"
-        const callbackAmount = round2(Math.max(0, toNumber(amount)))
         const expectedPayableNow = round2(
             Math.max(0, toNumber(booking?.payable_now_amount || booking?.total_amount))
         )
@@ -213,11 +392,11 @@ serve(async (req) => {
         let updatedBooking: any = booking
         let updateError: any = null
 
-        if (isValid && (isSuccess || isPending || isFailed)) {
+        if (isValid) {
             updatePayload.payment_status = nextPaymentStatus
             updatePayload.settlement_status = settlementStatus
-            updatePayload.payu_mihpayid = mihpayid || null
-            updatePayload.payu_txnid = safeTxnid || null
+            updatePayload.payment_gateway_order_or_ref_id = gatewayOrderOrRefId || null
+            updatePayload.payment_gateway_txn_id = gatewayTxnId || null
 
             if (isSuccess) {
                 updatePayload.paid_amount = nextPaidAmount
@@ -264,9 +443,8 @@ serve(async (req) => {
         } else {
             console.warn("[handle-payment] callback authenticity check failed; booking not updated", {
                 bookingId,
-                status: normalizedStatus,
-                keyMatches,
-                hashMatches,
+                gateway,
+                payload,
             })
         }
 
@@ -364,7 +542,6 @@ serve(async (req) => {
                     }
                 }
 
-                // Append immutable callback outcomes to dedicated ops tabs on the callback sheet.
                 if ((isSuccess || (!isSuccess && !isPending)) && callbackSheetId) {
                     await appendRow(
                         callbackSheetId,
@@ -398,7 +575,9 @@ serve(async (req) => {
         redirectUrlObject.searchParams.set("booking_id", bookingId)
         redirectUrlObject.searchParams.set("payment_status", nextPaymentStatus)
 
-        const bookingStatusSecret = resolveBookingStatusSecret(payuSalt)
+        const bookingStatusSecret = resolveBookingStatusSecret(
+            gateway === "payu" ? payuSalt : razorpayKeySecret
+        )
         if (bookingStatusSecret) {
             try {
                 const statusToken = await issueBookingStatusToken(bookingId, bookingStatusSecret)

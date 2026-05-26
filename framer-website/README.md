@@ -40,3 +40,40 @@ Check `IMPLEMENTATION_PLAN.md` for the full technical roadmap.
 
 Set `BOOKING_STATUS_TOKEN_SECRET` in Supabase Edge Function secrets to protect booking status reads on payment success/failure pages.  
 If this secret is not set, the functions fall back to `PAYU_*_SALT` values for backward compatibility.
+
+## Payment Gateway Runbook
+
+Use this for production/staging payment operations.
+
+### Required Supabase secrets
+
+- `PAYMENT_GATEWAY` = `razorpay` or `payu`
+- `PAYMENT_GATEWAY_TEST_MODE` = `true` (test) or `false` (live)
+- `PAYMENT_CALLBACK_URL` = `<project-supabase-url>/functions/v1/handle-payment`
+- `BOOKING_STATUS_TOKEN_SECRET` = high-entropy dedicated secret
+
+Razorpay (recommended keys):
+
+- `RAZORPAY_LIVE_KEY_ID`
+- `RAZORPAY_LIVE_KEY_SECRET`
+- `RAZORPAY_TEST_KEY_ID`
+- `RAZORPAY_TEST_KEY_SECRET`
+
+### Safe cutover order
+
+1. Deploy migrations (if schema changed).
+2. Deploy edge functions: `create-booking`, `retry-payment`, `handle-payment`, `get-booking-status`.
+3. Set/update payment secrets.
+4. Run one controlled checkout on target env (success path + status page load).
+
+### Emergency rollback
+
+Set `PAYMENT_GATEWAY=payu` and redeploy is not required for toggle-only rollback.
+
+### Razorpay secret rotation
+
+If a live key is ever exposed in plain text:
+
+1. Rotate/regenerate keys in Razorpay Dashboard immediately.
+2. Update Supabase secrets (`RAZORPAY_LIVE_KEY_ID`, `RAZORPAY_LIVE_KEY_SECRET`, optional generic mirrors).
+3. Re-run one live checkout smoke test.
