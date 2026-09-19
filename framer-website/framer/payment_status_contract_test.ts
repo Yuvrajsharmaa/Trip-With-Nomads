@@ -22,5 +22,6 @@ Deno.test("pending timeout has a distinct state instead of redirecting as failed
 
 Deno.test("payment outcome tag does not call a pending booking failed", () => {
     assertStringIncludes(source, "export function withPaymentOutcomeTag")
+    assertStringIncludes(source, '"$control__tagText": statusText')
     assertStringIncludes(source, 'return "Payment processing"')
 })

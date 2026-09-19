@@ -711,17 +711,28 @@ export function withPaymentBadge(Component): ComponentType {
 }
 
 export function withPaymentOutcomeTag(Component): ComponentType {
-  return textOverride(
-    (d) => {
-      const status = settlementStatus(d);
+  return (props: any) => {
+    const [data, state] = useBooking();
+    const isHydrated = useHydrated();
+    const statusText = useMemo(() => {
+      if (!isHydrated || state !== "ready" || !data) return "Payment processing";
+      const status = settlementStatus(data);
       if (status === "fully_paid" || status === "partially_paid") {
         return "Booking confirmed";
       }
-      if (d.payment_status === "failed") return "Payment failed";
+      if (data.payment_status === "failed") return "Payment failed";
       return "Payment processing";
-    },
-    "Payment processing",
-  )(Component);
+    }, [isHydrated, state, data]);
+
+    return (
+      <Component
+        {...props}
+        text={statusText}
+        tagText={statusText}
+        {...{"$control__tagText": statusText}}
+      />
+    );
+  };
 }
 
 // ═════════════════════════════════════════════════════════════
