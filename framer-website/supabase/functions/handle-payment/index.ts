@@ -15,6 +15,8 @@ import {
     safeUpdateRow,
     sheetsEnabled,
 } from "../_shared/sheets.ts"
+import { extractRazorpayCallbackIdentifiers } from "../_shared/razorpay_callback.ts"
+import { resolveBookingSheetId } from "../_shared/booking_sheet_config.ts"
 
 function toNumber(value: any): number {
     const parsed = Number(value)
@@ -31,6 +33,68 @@ function firstNonEmpty(...values: any[]): string {
         if (next) return next
     }
     return ""
+}
+
+async function readRequestPayload(req: Request): Promise<Record<string, string>> {
+    const payload: Record<string, string> = {}
+    const contentType = String(req.headers.get("content-type") || "").toLowerCase()
+
+    const assignValue = (key: string, value: unknown) => {
+        const safeKey = String(key || "").trim()
+        if (!safeKey) return
+        payload[safeKey] = String(value ?? "")
+    }
+
+    const parseJsonObject = (source: unknown) => {
+        if (!source || typeof source !== "object" || Array.isArray(source)) return
+        for (const [key, value] of Object.entries(source as Record<string, unknown>)) {
+            if (value == null) continue
+            if (typeof value === "object") {
+                assignValue(key, JSON.stringify(value))
+            } else {
+                assignValue(key, value)
+            }
+        }
+    }
+
+    const parseUrlEncoded = (rawBody: string) => {
+        if (!rawBody || !rawBody.trim()) return
+        const params = new URLSearchParams(rawBody)
+        for (const [key, value] of params.entries()) {
+            assignValue(key, value)
+        }
+    }
+
+    const rawBody = await req.clone().text().catch(() => "")
+    if (rawBody.trim()) {
+        if (contentType.includes("application/json")) {
+            try {
+                parseJsonObject(JSON.parse(rawBody))
+            } catch {
+                parseUrlEncoded(rawBody)
+            }
+        } else {
+            parseUrlEncoded(rawBody)
+            if (Object.keys(payload).length === 0) {
+                try {
+                    parseJsonObject(JSON.parse(rawBody))
+                } catch {
+                    // Non-JSON body: ignore and try multipart fallback below.
+                }
+            }
+        }
+    }
+
+    if (Object.keys(payload).length === 0 && contentType.includes("multipart/form-data")) {
+        const formData = await req.clone().formData().catch(() => null)
+        if (formData) {
+            for (const [key, value] of formData.entries()) {
+                assignValue(key, value?.toString?.() ?? value)
+            }
+        }
+    }
+
+    return payload
 }
 
 function isTruthy(value: string | undefined): boolean {
@@ -51,31 +115,33 @@ function bookingSheetsWriteEnabled(): boolean {
     return isTruthy(Deno.env.get("BOOKING_SHEETS_WRITE_ENABLED"))
 }
 
+function resolveRazorpayTestMode(): boolean {
+    const explicit = Deno.env.get("PAYMENT_GATEWAY_TEST_MODE")
+    if (explicit != null && explicit !== "") return isTruthy(explicit)
+    return isTruthy(Deno.env.get("RAZORPAY_TEST_MODE"))
+}
+
+async function hmacSha256Hex(message: string, secret: string): Promise<string> {
+    const key = await crypto.subtle.importKey(
+        "raw",
+        new TextEncoder().encode(secret),
+        { name: "HMAC", hash: "SHA-256" },
+        false,
+        ["sign"]
+    )
+    const signature = await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(message))
+    return Array.from(new Uint8Array(signature))
+        .map((b) => b.toString(16).padStart(2, "0"))
+        .join("")
+}
+
 serve(async (req) => {
     try {
-        const formData = await req.formData()
-        const data: Record<string, string> = {}
-        for (const [key, value] of formData.entries()) {
-            data[key] = value.toString()
-        }
+        const payload = await readRequestPayload(req)
 
-        console.log("📥 PayU Response:", data)
-
-        const {
-            status,
-            txnid,
-            amount,
-            productinfo,
-            firstname,
-            email,
-            udf1,
-            mihpayid,
-            hash: receivedHash,
-            key,
-        } = data
-
-        const bookingId = String(udf1 || "").trim()
-        if (!bookingId) return new Response("Missing booking id", { status: 400 })
+        const requestUrl = new URL(req.url)
+        const bookingIdFromQuery = String(requestUrl.searchParams.get("booking_id") || "").trim()
+        const isGatewayTestMode = resolveRazorpayTestMode()
 
         const supabaseUrl = Deno.env.get("SUPABASE_URL") || ""
         const serviceRoleKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || ""
@@ -85,21 +151,47 @@ serve(async (req) => {
 
         const supabase = createClient(supabaseUrl, serviceRoleKey)
 
-        const isTest = Deno.env.get("PAYU_TEST_MODE") === "true"
-        const payuKey = isTest
-            ? Deno.env.get("PAYU_TEST_KEY") || Deno.env.get("PAYU_KEY")
-            : Deno.env.get("PAYU_LIVE_KEY") || Deno.env.get("PAYU_KEY")
-        const payuSalt = isTest
-            ? Deno.env.get("PAYU_TEST_SALT") || Deno.env.get("PAYU_SALT")
-            : Deno.env.get("PAYU_LIVE_SALT") || Deno.env.get("PAYU_SALT")
+        const razorpayKeySecret = isGatewayTestMode
+            ? Deno.env.get("RAZORPAY_TEST_KEY_SECRET") || Deno.env.get("RAZORPAY_KEY_SECRET") || ""
+            : Deno.env.get("RAZORPAY_LIVE_KEY_SECRET") || Deno.env.get("RAZORPAY_KEY_SECRET") || ""
+        const razorpayKeyId = isGatewayTestMode
+            ? Deno.env.get("RAZORPAY_TEST_KEY_ID") || Deno.env.get("RAZORPAY_KEY_ID") || ""
+            : Deno.env.get("RAZORPAY_LIVE_KEY_ID") || Deno.env.get("RAZORPAY_KEY_ID") || ""
 
-        if (!payuSalt || !payuKey) return new Response("Missing payment configuration", { status: 500 })
+        if (!razorpayKeySecret || !razorpayKeyId) {
+            return new Response("Missing Razorpay configuration", { status: 500 })
+        }
+
+        const {
+            paymentId: razorpayPaymentId,
+            orderId: razorpayOrderId,
+            signature: razorpaySignature,
+            errorCode: razorpayErrorCode,
+            errorDescription: razorpayErrorDescription,
+        } = extractRazorpayCallbackIdentifiers(payload)
+
+        let bookingId = firstNonEmpty(
+            bookingIdFromQuery,
+        )
+
+        if (!bookingId && razorpayOrderId) {
+            const lookup = await supabase
+                .from("bookings")
+                .select("id")
+                .eq("payment_gateway_order_or_ref_id", razorpayOrderId)
+                .maybeSingle()
+            if (!lookup.error && lookup.data?.id) {
+                bookingId = String(lookup.data.id || "").trim()
+            }
+        }
+
+        if (!bookingId) return new Response("Missing booking id", { status: 400 })
 
         let supportsBalanceDueNote = true
         let { data: booking, error: bookingError } = await supabase
             .from("bookings")
             .select(
-                "id, booking_ref, trip_id, departure_date, name, email, phone, travellers, payment_breakdown, coupon_code, subtotal_amount, discount_amount, tax_amount, total_amount, payment_mode, payable_now_amount, due_amount, paid_amount, payment_status, settlement_status, payu_txnid, payu_mihpayid, balance_due_note, created_at"
+                "id, booking_ref, trip_id, departure_date, name, email, phone, travellers, payment_breakdown, coupon_code, subtotal_amount, discount_amount, tax_amount, total_amount, payment_mode, payable_now_amount, due_amount, paid_amount, payment_status, settlement_status, payment_gateway_txn_id, payment_gateway_order_or_ref_id, balance_due_note, created_at"
             )
             .eq("id", bookingId)
             .single()
@@ -109,7 +201,7 @@ serve(async (req) => {
             const fallback = await supabase
                 .from("bookings")
                 .select(
-                    "id, booking_ref, trip_id, departure_date, name, email, phone, travellers, payment_breakdown, coupon_code, subtotal_amount, discount_amount, tax_amount, total_amount, payment_mode, payable_now_amount, due_amount, paid_amount, payment_status, settlement_status, payu_txnid, payu_mihpayid, created_at"
+                    "id, booking_ref, trip_id, departure_date, name, email, phone, travellers, payment_breakdown, coupon_code, subtotal_amount, discount_amount, tax_amount, total_amount, payment_mode, payable_now_amount, due_amount, paid_amount, payment_status, settlement_status, payment_gateway_txn_id, payment_gateway_order_or_ref_id, created_at"
                 )
                 .eq("id", bookingId)
                 .single()
@@ -136,42 +228,46 @@ serve(async (req) => {
             }
         }
 
-        const safeUdf1 = bookingId
-        const safeEmail = String(email || booking?.email || "").trim()
-        const safeFirstname = String(
-            firstname || (booking?.name ? String(booking.name).split(" ")[0] : "") || ""
-        ).trim()
-        const safeProductinfo = String(productinfo || "Trip Booking").trim()
-        const fallbackAmount =
-            toNumber(booking?.payable_now_amount) > 0
-                ? toNumber(booking?.payable_now_amount)
-                : toNumber(booking?.total_amount)
-        const safeAmount = String(amount || (fallbackAmount > 0 ? fallbackAmount.toFixed(2) : "")).trim()
-        const safeTxnid = String(txnid || "").trim()
-        const safeKey = String(payuKey || "").trim()
-        const incomingKey = String(key || "").trim()
-        const normalizedStatus = String(status || "").trim().toLowerCase()
-
-        const hashString = `${payuSalt}|${normalizedStatus}||||||||||${safeUdf1}|${safeEmail}|${safeFirstname}|${safeProductinfo}|${safeAmount}|${safeTxnid}|${safeKey}`
-        const hashBuffer = await crypto.subtle.digest("SHA-512", new TextEncoder().encode(hashString))
-        const calculatedHash = Array.from(new Uint8Array(hashBuffer))
-            .map((b) => b.toString(16).padStart(2, "0"))
-            .join("")
-
-        const hashMatches =
-            calculatedHash.toLowerCase() === String(receivedHash || "").trim().toLowerCase()
-        const keyMatches = safeKey.length > 0 && safeKey === incomingKey
-        const isValid = hashMatches && keyMatches
-        const isSuccess = normalizedStatus === "success" && isValid
-        const isPending = normalizedStatus === "pending" && isValid
-        const isFailed = (normalizedStatus === "failure" || normalizedStatus === "failed") && isValid
         const notes: string[] = []
+        let isValid = false
+        let isSuccess = false
+        let isPending = false
+        let callbackAmount = 0
+        let gatewayTxnId = ""
+        let gatewayOrderOrRefId = ""
 
-        if (!keyMatches) {
-            notes.push("PayU key mismatch; callback ignored")
+        const orderMatches = Boolean(
+            razorpayOrderId &&
+                (
+                    !booking?.payment_gateway_order_or_ref_id ||
+                    String(booking.payment_gateway_order_or_ref_id).trim() === razorpayOrderId
+                )
+        )
+        const hasSuccessPayload = Boolean(razorpayPaymentId && razorpayOrderId && razorpaySignature)
+        const signatureMessage = `${razorpayOrderId}|${razorpayPaymentId}`
+        const calculatedSignature = hasSuccessPayload
+            ? await hmacSha256Hex(signatureMessage, razorpayKeySecret)
+            : ""
+        const signatureMatches = hasSuccessPayload &&
+            calculatedSignature.toLowerCase() === razorpaySignature.toLowerCase()
+
+        isValid = (hasSuccessPayload && signatureMatches && orderMatches) || (!hasSuccessPayload && orderMatches)
+        isSuccess = hasSuccessPayload && signatureMatches && orderMatches
+        if (!isSuccess && String(booking?.payment_status || "").trim().toLowerCase() === "paid") {
+            isValid = false
+            notes.push("Razorpay non-success callback ignored because booking is already paid")
         }
-        if (!hashMatches) {
-            notes.push("PayU hash mismatch; callback ignored")
+        isPending = false
+        callbackAmount = 0
+        gatewayTxnId = razorpayPaymentId || String(booking?.payment_gateway_txn_id || "").trim()
+        gatewayOrderOrRefId = razorpayOrderId || String(booking?.payment_gateway_order_or_ref_id || "").trim()
+
+        if (!orderMatches) notes.push("Razorpay order mismatch; callback ignored")
+        if (hasSuccessPayload && !signatureMatches) notes.push("Razorpay signature mismatch; callback ignored")
+        if (!hasSuccessPayload) {
+            notes.push("Razorpay failure callback received")
+            if (razorpayErrorCode) notes.push(`Razorpay error: ${razorpayErrorCode}`)
+            if (razorpayErrorDescription) notes.push(`Razorpay error description: ${razorpayErrorDescription}`)
         }
 
         const totalAmount = round2(Math.max(0, toNumber(booking?.total_amount)))
@@ -179,7 +275,6 @@ serve(async (req) => {
             String(booking?.payment_mode || "").trim().toLowerCase() === "partial_25"
                 ? "partial_25"
                 : "full"
-        const callbackAmount = round2(Math.max(0, toNumber(amount)))
         const expectedPayableNow = round2(
             Math.max(0, toNumber(booking?.payable_now_amount || booking?.total_amount))
         )
@@ -213,11 +308,11 @@ serve(async (req) => {
         let updatedBooking: any = booking
         let updateError: any = null
 
-        if (isValid && (isSuccess || isPending || isFailed)) {
+        if (isValid) {
             updatePayload.payment_status = nextPaymentStatus
             updatePayload.settlement_status = settlementStatus
-            updatePayload.payu_mihpayid = mihpayid || null
-            updatePayload.payu_txnid = safeTxnid || null
+            updatePayload.payment_gateway_order_or_ref_id = gatewayOrderOrRefId || null
+            updatePayload.payment_gateway_txn_id = gatewayTxnId || null
 
             if (isSuccess) {
                 updatePayload.paid_amount = nextPaidAmount
@@ -264,9 +359,8 @@ serve(async (req) => {
         } else {
             console.warn("[handle-payment] callback authenticity check failed; booking not updated", {
                 bookingId,
-                status: normalizedStatus,
-                keyMatches,
-                hashMatches,
+                gateway: "razorpay",
+                payload,
             })
         }
 
@@ -297,15 +391,13 @@ serve(async (req) => {
             )
         }
 
-        const bookingsSheetId = firstNonEmpty(
-            Deno.env.get("GOOGLE_SHEET_ID_TRIPS"),
-            Deno.env.get("GOOGLE_SHEET_ID"),
-        )
-        const callbackSheetId = firstNonEmpty(
-            Deno.env.get("BOOKING_CALLBACK_SHEET_ID"),
-            Deno.env.get("GOOGLE_SHEET_ID_TRIPS"),
-            Deno.env.get("GOOGLE_SHEET_ID")
-        )
+        const bookingSheetId = resolveBookingSheetId({
+            BOOKING_CALLBACK_SHEET_ID: Deno.env.get("BOOKING_CALLBACK_SHEET_ID"),
+            GOOGLE_SHEET_ID: Deno.env.get("GOOGLE_SHEET_ID"),
+            GOOGLE_SHEET_ID_TRIPS: Deno.env.get("GOOGLE_SHEET_ID_TRIPS"),
+        })
+        const bookingsSheetId = bookingSheetId
+        const callbackSheetId = bookingSheetId
         const bookingsSheetTab = firstNonEmpty(Deno.env.get("BOOKINGS_SHEET_TAB"), "Bookings")
         const successSheetTab = firstNonEmpty(Deno.env.get("BOOKING_SUCCESS_SHEET_TAB"), "Bookings_Success")
         const failedSheetTab = firstNonEmpty(Deno.env.get("BOOKING_FAILED_SHEET_TAB"), "Bookings_Failed")
@@ -364,14 +456,33 @@ serve(async (req) => {
                     }
                 }
 
-                // Append immutable callback outcomes to dedicated ops tabs on the callback sheet.
-                if ((isSuccess || (!isSuccess && !isPending)) && callbackSheetId) {
-                    await appendRow(
+                // Only authenticated callback outcomes belong in success/failure tabs.
+                // Invalid Razorpay callbacks must not be misclassified as failures.
+                if (isValid && (isSuccess || (!isSuccess && !isPending)) && callbackSheetId) {
+                    const existingCallbackRow = await findRowByColumnValue(
                         callbackSheetId,
                         callbackTab,
-                        callbackRow,
+                        "Booking ID",
+                        bookingId,
                         BOOKING_CALLBACK_HEADERS
                     )
+
+                    if (existingCallbackRow) {
+                        await safeUpdateRow(
+                            callbackSheetId,
+                            callbackTab,
+                            existingCallbackRow,
+                            callbackRow,
+                            BOOKING_CALLBACK_HEADERS
+                        )
+                    } else {
+                        await appendRow(
+                            callbackSheetId,
+                            callbackTab,
+                            callbackRow,
+                            BOOKING_CALLBACK_HEADERS
+                        )
+                    }
                 }
             } catch (sheetErr) {
                 console.error("[handle-payment] sheets sync failed", {
@@ -398,7 +509,7 @@ serve(async (req) => {
         redirectUrlObject.searchParams.set("booking_id", bookingId)
         redirectUrlObject.searchParams.set("payment_status", nextPaymentStatus)
 
-        const bookingStatusSecret = resolveBookingStatusSecret(payuSalt)
+        const bookingStatusSecret = resolveBookingStatusSecret(razorpayKeySecret)
         if (bookingStatusSecret) {
             try {
                 const statusToken = await issueBookingStatusToken(bookingId, bookingStatusSecret)

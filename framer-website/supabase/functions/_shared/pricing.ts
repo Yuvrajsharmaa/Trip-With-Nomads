@@ -98,8 +98,32 @@ export function normalizeCouponCode(raw: string): string {
     return String(raw || "").trim().toUpperCase()
 }
 
+export function resolveAppliedCouponCode(params: {
+    applied_discount_source?: unknown
+    applied_discount_code?: unknown
+}): string | null {
+    const source = String(params?.applied_discount_source || "").trim().toLowerCase()
+    if (source !== "coupon") return null
+    const code = normalizeCouponCode(String(params?.applied_discount_code || ""))
+    return code || null
+}
+
 export function getDateValue(row: any): string {
     return normalizeDateKey(row?.start_date || row?.departure_date || row?.date || "")
+}
+
+export function getTodayDateKey(now = new Date()): string {
+    return new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()))
+        .toISOString()
+        .slice(0, 10)
+}
+
+export function filterFuturePricingRows(rows: any[], now = new Date()): any[] {
+    const todayKey = getTodayDateKey(now)
+    return (Array.isArray(rows) ? rows : []).filter((row) => {
+        const dateKey = getDateValue(row)
+        return Boolean(dateKey) && dateKey >= todayKey && toNumber(row?.price) > 0
+    })
 }
 
 export function getVariantValue(row: any): string {
@@ -541,9 +565,11 @@ export function selectBestDiscount(params: {
     const { subtotal, earlyBirdDiscountAmount, couponResult } = params
     const safeSubtotal = round2(Math.max(0, subtotal))
     const early = round2(Math.max(0, Math.min(earlyBirdDiscountAmount || 0, safeSubtotal)))
-    const coupon = round2(
-        Math.max(0, Math.min(toNumber(couponResult?.discount_amount || 0), safeSubtotal))
-    )
+    const coupon = couponResult?.valid
+        ? round2(
+            Math.max(0, Math.min(toNumber(couponResult?.discount_amount || 0), safeSubtotal))
+        )
+        : 0
 
     let source: "none" | "early_bird" | "coupon" = "none"
     let discount = 0
@@ -590,20 +616,13 @@ export function buildPricingQuote(params: {
         couponResult,
     })
 
-    const couponDiscountAmount =
-        selected.applied_discount_source === "coupon"
-            ? selected.discount_amount_total
-            : round2(
-                  Math.max(
-                      0,
-                      Math.min(toNumber(couponResult?.discount_amount || 0), toNumber(baseSubtotal))
-                  )
-              )
+    const couponDiscountAmount = selected.applied_discount_source === "coupon"
+        ? selected.discount_amount_total
+        : 0
 
-    const earlyBirdDiscountAmountApplied =
-        selected.applied_discount_source === "early_bird"
-            ? selected.discount_amount_total
-            : round2(Math.max(0, Math.min(earlyBirdDiscountAmount, toNumber(baseSubtotal))))
+    const earlyBirdDiscountAmountApplied = selected.applied_discount_source === "early_bird"
+        ? selected.discount_amount_total
+        : 0
 
     return {
         base_subtotal: round2(Math.max(0, baseSubtotal)),
