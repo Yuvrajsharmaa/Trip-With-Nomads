@@ -35,6 +35,13 @@ Deno.test("checkout recomputes the payment split when partial payment is selecte
     assertStringIncludes(checkoutSource, "dueAmount")
 })
 
+Deno.test("checkout derives the payable total from taxable price plus GST", () => {
+    assertStringIncludes(checkoutSource, "const taxInclusive = calculateTaxInclusiveTotal(rawTaxableAmount)")
+    assertStringIncludes(checkoutSource, "const total = taxInclusive.totalAmount")
+    assertStringIncludes(checkoutSource, "return { ...item, amount: taxAmount, type: \"tax\" as const }")
+    assert(!checkoutSource.includes("const total = toNumber(data.total_amount ?? taxableAmount + taxAmount)"))
+})
+
 Deno.test("checkout never presents a losing coupon as an applied discount", () => {
     assert(!checkoutSource.includes('applied_discount_source: "both"'))
     assert(!checkoutSource.includes("return Boolean(store.appliedCoupon?.valid)"))

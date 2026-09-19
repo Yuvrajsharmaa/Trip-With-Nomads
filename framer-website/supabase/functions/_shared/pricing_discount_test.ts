@@ -67,6 +67,19 @@ Deno.test("invalid or empty coupon contributes no discount", () => {
     assertEquals(quote.total_amount, 1050)
 })
 
+Deno.test("winning coupon quote keeps GST inside the final trip total", () => {
+    const quote = buildPricingQuote({
+        baseSubtotal: 1000,
+        earlyBirdDiscountAmount: 0,
+        couponResult: coupon(200),
+        lineItems,
+    })
+
+    assertEquals(quote.taxable_amount, 800)
+    assertEquals(quote.tax_amount, 40)
+    assertEquals(quote.total_amount, 840)
+})
+
 Deno.test("only a winning coupon can be persisted as the applied coupon code", () => {
     assertEquals(
         resolveAppliedCouponCode({

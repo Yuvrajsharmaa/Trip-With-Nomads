@@ -221,6 +221,25 @@ function toNumber(value: any): number {
   return Number.isFinite(parsed) ? parsed : 0;
 }
 
+function roundMoney(value: any): number {
+  const parsed = toNumber(value);
+  return Math.round((parsed + Number.EPSILON) * 100) / 100;
+}
+
+function calculateTaxInclusiveTotal(taxableAmount: any): {
+  taxableAmount: number;
+  taxAmount: number;
+  totalAmount: number;
+} {
+  const taxable = roundMoney(Math.max(0, toNumber(taxableAmount)));
+  const tax = roundMoney(taxable * TAX_RATE);
+  return {
+    taxableAmount: taxable,
+    taxAmount: tax,
+    totalAmount: roundMoney(taxable + tax),
+  };
+}
+
 function fmtINR(value: number): string {
   return INR.format(Math.round(value));
 }
@@ -486,13 +505,18 @@ function buildLocalPricingBreakdown(store: CheckoutStore): PricingBreakdown {
   const appliedCouponDiscount = couponWins ? couponDiscount : 0;
   const appliedEarlyBirdDiscount = couponWins ? 0 : earlyBirdDiscount;
   const discountTotal = appliedEarlyBirdDiscount + appliedCouponDiscount;
-  const taxableAmount = Math.max(0, subtotal - discountTotal);
-  const tax = taxableAmount * TAX_RATE;
-  const total = taxableAmount + tax;
+  const taxInclusive = calculateTaxInclusiveTotal(
+    Math.max(0, subtotal - discountTotal),
+  );
+  const taxableAmount = taxInclusive.taxableAmount;
+  const tax = taxInclusive.taxAmount;
+  const total = taxInclusive.totalAmount;
 
   const paymentMode = store.paymentMode || "full";
-  const payableNow = paymentMode === "partial_25" ? total * 0.25 : total;
-  const dueAmount = total - payableNow;
+  const payableNow = paymentMode === "partial_25"
+    ? roundMoney(total * 0.25)
+    : total;
+  const dueAmount = roundMoney(total - payableNow);
 
   return {
     base_subtotal: subtotal,
@@ -575,29 +599,50 @@ function buildPricingBreakdownFromQuote(
     : appliedSource === "early_bird"
       ? earlyBirdDiscount
       : 0;
-  const taxableAmount = toNumber(
+  const rawTaxableAmount = toNumber(
     data.taxable_amount ?? Math.max(0, baseSubtotal - discountTotal),
   );
-  const taxAmount = toNumber(data.tax_amount ?? taxableAmount * TAX_RATE);
+  // Recompute the inclusive total from the taxable amount. Older quote
+  // responses can contain a pre-GST total, and the customer must never be
+  // charged or shown that amount as the final trip price.
+  const taxInclusive = calculateTaxInclusiveTotal(rawTaxableAmount);
+  const taxableAmount = taxInclusive.taxableAmount;
+  const taxAmount = taxInclusive.taxAmount;
   const paymentMode = store.paymentMode || "full";
-  const total = toNumber(data.total_amount ?? taxableAmount + taxAmount);
-  const payableNow = paymentMode === "partial_25" ? total * 0.25 : total;
-  const dueAmount = total - payableNow;
-  const lineItems: PricingBreakdown["line_items"] =
-    Array.isArray(data.line_items) && data.line_items.length > 0
-      ? data.line_items
-      : [
-        { label: "Trip Subtotal", amount: baseSubtotal, type: "base" as const },
-        ...(discountTotal > 0
-          ? [{
-            label: "Discount",
-            amount: -discountTotal,
-            type: "discount" as const,
-          }]
-          : []),
-        { label: "GST (5%)", amount: taxAmount, type: "tax" as const },
-        { label: "Total Amount", amount: total, type: "total" as const },
-      ];
+  const total = taxInclusive.totalAmount;
+  const payableNow = paymentMode === "partial_25"
+    ? roundMoney(total * 0.25)
+    : total;
+  const dueAmount = roundMoney(total - payableNow);
+  const rawLineItems = Array.isArray(data.line_items) ? data.line_items : [];
+  const hasTaxAndTotalRows = rawLineItems.some((item: any) =>
+    item?.type === "tax" || String(item?.label || "").includes("GST")
+  ) && rawLineItems.some((item: any) =>
+    item?.type === "total" || String(item?.label || "").includes("Total")
+  );
+  const lineItems: PricingBreakdown["line_items"] = hasTaxAndTotalRows
+    ? rawLineItems.map((item: any) => {
+      const label = String(item?.label || "");
+      if (item?.type === "tax" || label.includes("GST")) {
+        return { ...item, amount: taxAmount, type: "tax" as const };
+      }
+      if (item?.type === "total" || label.includes("Total")) {
+        return { ...item, amount: total, type: "total" as const };
+      }
+      return item;
+    })
+    : [
+      { label: "Trip Subtotal", amount: baseSubtotal, type: "base" as const },
+      ...(discountTotal > 0
+        ? [{
+          label: "Discount",
+          amount: -discountTotal,
+          type: "discount" as const,
+        }]
+        : []),
+      { label: "GST (5%)", amount: taxAmount, type: "tax" as const },
+      { label: "Total Amount", amount: total, type: "total" as const },
+    ];
 
   return {
     base_subtotal: baseSubtotal,
@@ -623,11 +668,9 @@ function computeTotals(store: CheckoutStore) {
   const activePaymentMode = store.paymentMode || breakdown.payment_mode || "full";
   const totalAmount = toNumber(breakdown.total_amount);
   const payableNow = activePaymentMode === "partial_25"
-    ? Math.round((totalAmount * 0.25 + Number.EPSILON) * 100) / 100
+    ? roundMoney(totalAmount * 0.25)
     : totalAmount;
-  const dueAmount = Math.round(
-    (Math.max(0, totalAmount - payableNow) + Number.EPSILON) * 100,
-  ) / 100;
+  const dueAmount = roundMoney(Math.max(0, totalAmount - payableNow));
   const activeBreakdown = {
     ...breakdown,
     payment_mode: activePaymentMode,
