@@ -528,6 +528,7 @@ serve(async (req) => {
                 finalBooking,
                 tripTitle,
                 baseOrigin,
+                redirectUrl,
             )
 
             if (paymentEmail) {
