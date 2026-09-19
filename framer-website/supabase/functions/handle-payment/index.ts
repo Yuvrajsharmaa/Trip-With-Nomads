@@ -17,6 +17,8 @@ import {
 } from "../_shared/sheets.ts"
 import { extractRazorpayCallbackIdentifiers } from "../_shared/razorpay_callback.ts"
 import { resolveBookingSheetId } from "../_shared/booking_sheet_config.ts"
+import { buildPaymentEmail } from "../_shared/payment_email.ts"
+import { sendResendEmail } from "../_shared/resend.ts"
 
 function toNumber(value: any): number {
     const parsed = Number(value)
@@ -519,6 +521,35 @@ serve(async (req) => {
             }
         }
         const redirectUrl = redirectUrlObject.toString()
+
+        if (isValid && !updateError) {
+            const paymentEmail = buildPaymentEmail(
+                booking,
+                finalBooking,
+                tripTitle,
+                baseOrigin,
+            )
+
+            if (paymentEmail) {
+                try {
+                    const emailResult = await sendResendEmail(paymentEmail)
+                    if (emailResult.sent) {
+                        console.log("[handle-payment] payment email sent", {
+                            bookingId,
+                            paymentStatus: nextPaymentStatus,
+                            settlementStatus,
+                        })
+                    }
+                } catch (emailError) {
+                    // Email delivery must not turn a confirmed payment into a failed callback.
+                    console.error("[handle-payment] payment email failed", {
+                        bookingId,
+                        paymentStatus: nextPaymentStatus,
+                        error: emailError,
+                    })
+                }
+            }
+        }
 
         console.log(`🚀 Redirecting to: ${redirectUrl}`)
         return Response.redirect(redirectUrl, 303)

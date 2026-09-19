@@ -40,3 +40,9 @@ Check `IMPLEMENTATION_PLAN.md` for the full technical roadmap.
 
 Set `BOOKING_STATUS_TOKEN_SECRET` in Supabase Edge Function secrets to protect booking status reads on payment success/failure pages.  
 If this secret is not set, the functions fall back to `PAYU_*_SALT` values for backward compatibility.
+
+## ✉️ Payment Update Emails
+
+`handle-payment` sends a transactional payment update through Resend after a valid booking status change. Set `RESEND_API_KEY` in both staging and production Supabase Edge Function secrets. The default sender is `Trip With Nomads <payments@tripwithnomads.com>` with replies routed to `support@tripwithnomads.com`.
+
+If a sending subdomain was verified instead of the root domain, also set `RESEND_FROM_EMAIL` to a sender on that verified subdomain. Email requests use deterministic Resend idempotency keys so repeated payment callbacks do not create duplicate messages.
