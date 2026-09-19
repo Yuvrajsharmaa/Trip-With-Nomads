@@ -73,6 +73,22 @@ Deno.test("builds a designed paid email with booking details", () => {
   assertStringIncludes(email.html, "1 x Quad | Bike");
   assertStringIncludes(email.html, "Discount (NOMAD10)");
   assertStringIncludes(email.html, "₹24,780.00");
+  assertStringIncludes(email.html, "#08b1ff");
+  assertStringIncludes(email.html, 'data-payment-animation="status"');
+  assertStringIncludes(
+    email.html,
+    "Nice one, nomad. Your next story is on the map.",
+  );
+  assertStringIncludes(email.html, "FR1lBzx4w9xp2fecFXEMUGGul4.png");
+  assertStringIncludes(email.html, "Chat on WhatsApp");
+  assertStringIncludes(email.html, "/privacy-policy");
+  assertStringIncludes(email.html, "/terms-and-conditions");
+  assertStringIncludes(email.html, "/cancellation-refund-policy");
+  assertStringIncludes(email.html, "Unsubscribe");
+  assertEquals(
+    email.headers?.["List-Unsubscribe"],
+    "<mailto:support@tripwithnomads.com?subject=Unsubscribe%20from%20Trip%20With%20Nomads%20emails>",
+  );
   assertStringIncludes(email.text, "Pax: 3 pax");
   assertStringIncludes(email.text, "Payment reference: pay_123");
 });

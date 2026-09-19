@@ -4,6 +4,7 @@ export type ResendEmailRequest = {
     html: string
     text: string
     idempotencyKey: string
+    headers?: Record<string, string>
     from?: string
     replyTo?: string
 }
@@ -60,6 +61,7 @@ export async function sendResendEmail(
             subject: request.subject,
             html: request.html,
             text: request.text,
+            headers: request.headers,
         }),
     })
 
