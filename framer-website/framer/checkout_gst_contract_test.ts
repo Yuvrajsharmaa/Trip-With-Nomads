@@ -16,3 +16,18 @@ Deno.test("checkout derives quoted totals from taxable price plus GST", () => {
         ),
     )
 })
+
+Deno.test("checkout keeps the trip cost separate from the GST-inclusive payable amount", () => {
+    assertStringIncludes(
+        checkoutSource,
+        "return withTextFromState((store) => fmtINR(computeTotals(store).subtotal))(Component)",
+    )
+    assertStringIncludes(
+        checkoutSource,
+        "return withTextFromState((store) => fmtINR(computeTotals(store).payableNow))(Component)",
+    )
+    assertStringIncludes(
+        checkoutSource,
+        'totals.appliedDiscountSource !== "coupon"',
+    )
+})
