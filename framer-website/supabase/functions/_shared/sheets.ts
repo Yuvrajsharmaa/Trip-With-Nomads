@@ -32,6 +32,11 @@ export function sheetsEnabled(): boolean {
     return isTruthy(Deno.env.get("SHEETS_WRITE_ENABLED"));
 }
 
+export function isSheetAlreadyExistsError(errorMessage: string): boolean {
+    const normalized = String(errorMessage || "").trim().toLowerCase();
+    return normalized.includes("addsheet") && normalized.includes("already exists");
+}
+
 function shouldBootstrapHeaders(): boolean {
     return isTruthy(Deno.env.get("SHEETS_BOOTSTRAP_HEADERS"));
 }
@@ -131,7 +136,9 @@ async function ensureTab(tab: string, sheetId: string) {
         });
         if (!createRes.ok) {
             const text = await createRes.text();
-            throw new Error(`Sheet tab create failed: ${createRes.status} ${text}`);
+            if (!isSheetAlreadyExistsError(text)) {
+                throw new Error(`Sheet tab create failed: ${createRes.status} ${text}`);
+            }
         }
     }
 
