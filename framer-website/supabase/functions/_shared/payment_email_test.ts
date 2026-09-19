@@ -10,6 +10,7 @@ const pendingBooking = {
   booking_ref: "TWN-2026-00123",
   name: "Guest User",
   email: "guest@example.com",
+  trip_type: "GTI",
   departure_date: "2026-05-09",
   travellers: [
     { id: 1, name: "Guest User", sharing: "Double", transport: "SUV" },
@@ -69,6 +70,15 @@ Deno.test("builds a designed paid email with booking details", () => {
   assertStringIncludes(email.html, "A &lt;Guest&gt;");
   assertStringIncludes(email.html, "9 May 2026");
   assertStringIncludes(email.html, "3 pax");
+  assertStringIncludes(email.html, "Trip Type: GTI");
+  assertStringIncludes(
+    email.html,
+    "We are delighted to inform you that your booking for Summer Spiti (Trip Type: GTI) has been successfully confirmed.",
+  );
+  assertStringIncludes(
+    email.html,
+    "Please review the booking summary below, including your traveller details, selected variant, and payment information.",
+  );
   assertStringIncludes(email.html, "2 x Double | SUV");
   assertStringIncludes(email.html, "1 x Quad | Bike");
   assertStringIncludes(email.html, "Discount (NOMAD10)");
@@ -118,6 +128,12 @@ Deno.test("builds a partial-payment email with the balance due", () => {
   );
   assertStringIncludes(email.html, "25% advance payment");
   assertStringIncludes(email.html, "Balance due");
+  assertStringIncludes(email.html, "Important payment information");
+  assertStringIncludes(email.html, "HDFC0011600");
+  assertStringIncludes(
+    email.text,
+    "The pending amount must be cleared at least 14 days prior to your travel date.",
+  );
   assertStringIncludes(email.text, "Balance due: ₹18,585.00");
 });
 

@@ -9,6 +9,7 @@ const pendingBooking = {
   booking_ref: "TWN-2026-00123",
   name: "Guest User",
   email: "guest@example.com",
+  trip_type: "GTI",
   departure_date: "2026-05-09",
   travellers: [
     { id: 1, name: "Guest User", sharing: "Double", transport: "SUV" },

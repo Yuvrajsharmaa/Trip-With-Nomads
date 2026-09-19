@@ -5,6 +5,8 @@ export type PaymentEmailBooking = {
   email?: unknown;
   phone?: unknown;
   departure_date?: unknown;
+  trip_type?: unknown;
+  tripType?: unknown;
   transport?: unknown;
   travellers?: unknown;
   payment_breakdown?: unknown;
@@ -293,6 +295,8 @@ export function buildPaymentEmail(
 
   const recipientName = text(next.name) || "there";
   const trip = text(tripTitle) || "your Trip With Nomads trip";
+  const tripType = text(next.trip_type) || text(next.tripType);
+  const tripDescriptor = tripType ? " (Trip Type: " + tripType + ")" : "";
   const departureDate = formatDate(next.departure_date) || "Not specified";
   const label = statusLabel(next);
   const paymentMode = paymentModeLabel(next);
@@ -311,14 +315,26 @@ export function buildPaymentEmail(
     ? (isPartial ? "Advance received: " : "Booking confirmed: ") + subjectTrip +
       " | " + bookingRef
     : "Action needed: complete payment | " + bookingRef;
+  const dueAmount = number(next.due_amount);
   const intro = isPaid
     ? isPartial
-      ? "Your advance payment for " + trip + " has been received."
-      : "Your payment for " + trip + " has been received."
+      ? "We are glad to confirm your booking for " + trip + tripDescriptor +
+        ". Your advance payment has been received and your place is reserved."
+      : "We are delighted to inform you that your booking for " + trip +
+        tripDescriptor + " has been successfully confirmed."
     : "We could not complete your payment for " + trip +
       ". Your booking is not confirmed yet.";
+  const bookingGuidance = isPaid
+    ? isPartial && dueAmount > 0
+      ? "Please review the booking summary below, including your traveller details, selected variant, and pending amount of " +
+        formatAmount(dueAmount) +
+        ". The remaining amount should be cleared at least 14 days before your travel date."
+      : "Please review the booking summary below, including your traveller details, selected variant, and payment information."
+    : "Please review the booking summary below. If you have any questions or concerns, reply to this email or contact us on WhatsApp. We are here to assist you.";
+  const closingCopy = isPaid
+    ? "Thank you for choosing Trip With Nomads. We look forward to welcoming you on your trip."
+    : "";
   const animationFallback = isPaid ? "✓" : "×";
-  const dueAmount = number(next.due_amount);
   const nextStep = isPaid
     ? isPartial && dueAmount > 0
       ? "Balance due before departure: " + formatAmount(dueAmount) + "."
@@ -426,6 +442,7 @@ export function buildPaymentEmail(
     "",
     "Hi " + recipientName + ",",
     intro,
+    bookingGuidance,
     "",
     "Booking reference: " + bookingRef,
     "Trip: " + trip,
@@ -458,8 +475,23 @@ export function buildPaymentEmail(
       ? ["Balance due: " + formatAmount(dueAmount)]
       : []),
     ...(isPaid && transactionId ? ["Payment reference: " + transactionId] : []),
+    ...(isPaid && isPartial && dueAmount > 0
+      ? [
+        "",
+        "Important payment information:",
+        "Pending amount: " + formatAmount(dueAmount),
+        "The pending amount must be cleared at least 14 days prior to your travel date.",
+        "Make any further payment only to the official Nomads Travel Club bank account. Trip With Nomads is not responsible for payments made to personal accounts or third parties.",
+        "Bank details:",
+        "Account name: Nomads Travel Club",
+        "Account number: 50200112404512",
+        "IFSC code: HDFC0011600",
+        "Bank: HDFC Bank",
+      ]
+      : []),
     "",
     nextStep,
+    ...(closingCopy ? [closingCopy] : []),
     actionLabel + ": " + actionUrl,
     "",
     "Need help? Chat on WhatsApp: " + whatsappUrl,
@@ -487,6 +519,19 @@ export function buildPaymentEmail(
     footerLink("Cancellation policy", cancellationUrl),
     footerLink("Unsubscribe", unsubscribeUrl),
   ].join(' <span style="color:#70bddd;">|</span> ');
+  const pendingPaymentHtml = isPaid && isPartial && dueAmount > 0
+    ? [
+      '<div style="margin:24px 0 0;padding-top:18px;border-top:1px solid #dceef7;">',
+      '<p style="margin:0 0 8px;color:' + BRAND_NAVY +
+      ';font-size:14px;font-weight:700;line-height:1.4;">Important payment information</p>',
+      '<p style="margin:0 0 10px;color:#355d73;font-size:13px;line-height:1.55;">Pending amount: ' +
+      escapeHtml(formatAmount(dueAmount)) +
+      ". Please clear it at least 14 days before your travel date.</p>",
+      '<p style="margin:0 0 10px;color:#355d73;font-size:13px;line-height:1.55;">Please make any further payment only to the official Nomads Travel Club bank account. Trip With Nomads is not responsible for payments made to personal accounts or third parties.</p>',
+      '<p style="margin:0;color:#355d73;font-size:13px;line-height:1.65;"><strong>Bank details</strong><br>Account name: Nomads Travel Club<br>Account number: 50200112404512<br>IFSC code: HDFC0011600<br>Bank: HDFC Bank</p>',
+      "</div>",
+    ].join("\n")
+    : "";
 
   const htmlBody = [
     "<!doctype html>",
@@ -530,6 +575,8 @@ export function buildPaymentEmail(
     escapeHtml(recipientName) + ",</h2>",
     '                <p style="margin:0;color:#5e7d8d;font-size:14px;line-height:1.5;">' +
     escapeHtml(intro) + "</p>",
+    '                <p style="margin:12px 0 0;color:#355d73;font-size:14px;line-height:1.55;">' +
+    escapeHtml(bookingGuidance) + "</p>",
     '                <div style="height:22px;line-height:22px;">&nbsp;</div>',
     "                " + sectionLabel("Your trip"),
     '                <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="border-collapse:separate;background:#f6fcff;border:1px solid #dceef7;border-radius:12px;">',
@@ -574,9 +621,14 @@ export function buildPaymentEmail(
     "                    </table>",
     "                  </td></tr>",
     "                </table>",
+    "                " + pendingPaymentHtml,
     '                <div style="height:24px;line-height:24px;">&nbsp;</div>',
     '                <p style="margin:0 0 18px;color:#355d73;font-size:14px;line-height:1.55;">' +
     escapeHtml(nextStep) + "</p>",
+    closingCopy
+      ? '                <p style="margin:0 0 18px;color:#355d73;font-size:14px;line-height:1.55;">' +
+        escapeHtml(closingCopy) + "</p>"
+      : "",
     '                <table role="presentation" cellpadding="0" cellspacing="0" border="0">',
     "                  <tr>",
     '                    <td style="border-radius:10px;background:' +
