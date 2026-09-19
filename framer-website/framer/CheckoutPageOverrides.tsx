@@ -235,6 +235,20 @@ function round2(value: number): number {
     return Math.round((Number(value) + Number.EPSILON) * 100) / 100
 }
 
+function calculateTaxInclusiveTotal(taxableAmount: any): {
+    taxableAmount: number
+    taxAmount: number
+    totalAmount: number
+} {
+    const taxable = round2(Math.max(0, toNumber(taxableAmount)))
+    const tax = round2(taxable * TAX_RATE)
+    return {
+        taxableAmount: taxable,
+        taxAmount: tax,
+        totalAmount: round2(taxable + tax),
+    }
+}
+
 function fmtINR(value: number): string {
     return "₹" + toNumber(value).toLocaleString("en-IN")
 }
@@ -290,18 +304,20 @@ function buildPricingBreakdownFromQuote(source: any, fallbackStore: any): Pricin
         .trim()
         .toUpperCase()
 
-    const taxableAmount = round2(
+    const rawTaxableAmount = round2(
         pickFirstNumber(
             source,
             ["taxable_amount", "taxableSubtotal"],
             Math.max(0, baseSubtotal - discountAmountTotal)
         )
     )
-    const fallbackTax = round2(Math.max(0, taxableAmount) * TAX_RATE)
-    const taxAmount = round2(pickFirstNumber(source, ["tax_amount", "taxAmount"], fallbackTax))
-    const totalAmount = round2(
-        pickFirstNumber(source, ["total_amount", "totalAmount"], Math.max(0, taxableAmount + taxAmount))
-    )
+    // The quote endpoint is not the final pricing source of truth for GST.
+    // Recompute the inclusive amount so an older response cannot surface or
+    // charge a pre-GST total.
+    const taxInclusive = calculateTaxInclusiveTotal(rawTaxableAmount)
+    const taxableAmount = taxInclusive.taxableAmount
+    const taxAmount = taxInclusive.taxAmount
+    const totalAmount = taxInclusive.totalAmount
 
     return {
         base_subtotal: baseSubtotal,
@@ -605,9 +621,12 @@ function buildLocalPricingBreakdown(store: any): PricingBreakdown {
         couponDiscount > 0 ? "coupon" : earlyDiscount > 0 ? "early_bird" : "none"
 
     const discountTotal = round2(Math.max(0, Math.min(subtotal, earlyDiscount + couponDiscount)))
-    const taxable = round2(Math.max(0, subtotal - discountTotal))
-    const tax = round2(taxable * TAX_RATE)
-    const total = round2(taxable + tax)
+    const taxInclusive = calculateTaxInclusiveTotal(
+        Math.max(0, subtotal - discountTotal)
+    )
+    const taxable = taxInclusive.taxableAmount
+    const tax = taxInclusive.taxAmount
+    const total = taxInclusive.totalAmount
 
     return {
         base_subtotal: round2(subtotal),
@@ -2190,7 +2209,11 @@ export function withCheckoutHideWhenNoCoupon(Component): ComponentType {
 export function withCheckoutHideWhenNoDiscount(Component): ComponentType {
     return (props: any) => {
         const [store] = useStore()
-        const hasDiscount = computeTotals(store).discount > 0
+        const totals = computeTotals(store)
+        // Coupon Discount has its own summary row. Keep this row for an
+        // early-bird discount so a coupon amount is never shown twice.
+        const hasDiscount =
+            totals.discount > 0 && totals.appliedDiscountSource !== "coupon"
 
         if (!hasDiscount) {
             return <Component {...props} style={{ ...(props.style || {}), display: "none" }} />

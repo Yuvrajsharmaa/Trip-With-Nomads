@@ -250,7 +250,7 @@ function dueAmount(d: BookingData): number {
     if (explicit > 0) return explicit
     const status = settlementStatus(d)
     if (status === "partially_paid") {
-        const total = Math.max(0, toNumber(d.total_amount))
+        const total = resolvedTotalAmount(d)
         const payableNow = Math.max(0, toNumber((d as any)?.payable_now_amount))
         if (payableNow > 0) return Math.max(0, total - payableNow)
     }
