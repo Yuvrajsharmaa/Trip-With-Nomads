@@ -2209,7 +2209,11 @@ export function withCheckoutHideWhenNoCoupon(Component): ComponentType {
 export function withCheckoutHideWhenNoDiscount(Component): ComponentType {
     return (props: any) => {
         const [store] = useStore()
-        const hasDiscount = computeTotals(store).discount > 0
+        const totals = computeTotals(store)
+        // Coupon Discount has its own summary row. Keep this row for an
+        // early-bird discount so a coupon amount is never shown twice.
+        const hasDiscount =
+            totals.discount > 0 && totals.appliedDiscountSource !== "coupon"
 
         if (!hasDiscount) {
             return <Component {...props} style={{ ...(props.style || {}), display: "none" }} />
