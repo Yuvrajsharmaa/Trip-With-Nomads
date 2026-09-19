@@ -218,7 +218,7 @@ const preview = `<!doctype html>
   <body>
     <header class="preview-bar">
       <h1>Trip With Nomads email preview</h1>
-      <p>Minimal transactional email treatment with the supplied Lottie status moment, sample Summer Spiti booking data, and the blue-to-white brand gradient.</p>
+      <p>Minimal transactional email treatment with the supplied Lottie status moment, sample Summer Spiti booking data, and the white-to-blue footer gradient.</p>
       <div class="controls">
         <label for="email-state">State</label>
         <select id="email-state">

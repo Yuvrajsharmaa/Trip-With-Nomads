@@ -272,7 +272,7 @@ function buildUnsubscribeUrl(): string {
 
 function footerLink(label: string, url: string): string {
   return '<a href="' + escapeHtml(url) +
-    '" style="color:#dff5ff;text-decoration:underline;">' +
+    '" style="color:#0b3550;text-decoration:underline;">' +
     escapeHtml(label) + "</a>";
 }
 
@@ -317,14 +317,6 @@ export function buildPaymentEmail(
       : "Your payment for " + trip + " has been received."
     : "We could not complete your payment for " + trip +
       ". Your booking is not confirmed yet.";
-  const heroTitle = isPaid
-    ? isPartial ? "Your advance is in" : "Your payment is confirmed"
-    : "Payment needs attention";
-  const quirkyMessage = isPaid
-    ? isPartial
-      ? "Nice one, nomad. Your spot is warming up."
-      : "Nice one, nomad. Your next story is on the map."
-    : "Not quite, nomad. Let us get your next story back on the map.";
   const animationFallback = isPaid ? "✓" : "×";
   const dueAmount = number(next.due_amount);
   const nextStep = isPaid
@@ -340,8 +332,6 @@ export function buildPaymentEmail(
   const actionUrl = isPaid ? normalizedWebsiteUrl : normalizedRetryUrl;
   const actionLabel = isPaid ? "Visit Trip With Nomads" : "Try payment again";
   const statusColor = isPaid ? BRAND_NAVY : "#9b473f";
-  const statusSurface = isPaid ? "#dff5ff" : "#eef7fb";
-  const statusBorder = isPaid ? "#8edcff" : "#c8e4f1";
   const preheader = isPaid
     ? label + " for " + trip + ". Booking " + bookingRef + "."
     : "Payment action needed for booking " + bookingRef + ".";
@@ -436,7 +426,6 @@ export function buildPaymentEmail(
     "",
     "Hi " + recipientName + ",",
     intro,
-    quirkyMessage,
     "",
     "Booking reference: " + bookingRef,
     "Trip: " + trip,
@@ -503,11 +492,11 @@ export function buildPaymentEmail(
     "<!doctype html>",
     '<html lang="en">',
     '  <head><meta charset="UTF-8"></head>',
-    '  <body style="margin:0;background:#f4fbff;color:' + BRAND_NAVY +
+    '  <body style="margin:0;background:#ffffff;color:' + BRAND_NAVY +
     ';font-family:Arial,Helvetica,sans-serif;line-height:1.5;">',
     '    <span style="display:none!important;max-height:0;overflow:hidden;opacity:0;color:transparent;">' +
     escapeHtml(preheader) + "</span>",
-    '    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="width:100%;border-collapse:collapse;background:#f4fbff;">',
+    '    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="width:100%;border-collapse:collapse;background:#ffffff;">',
     "      <tr>",
     '        <td align="center" style="padding:22px 12px;">',
     '          <table role="presentation" width="600" cellpadding="0" cellspacing="0" border="0" style="width:100%;max-width:600px;border-collapse:separate;background:#ffffff;border:1px solid #cbeafa;border-radius:16px;overflow:hidden;">',
@@ -527,41 +516,20 @@ export function buildPaymentEmail(
     "              </td>",
     "            </tr>",
     "            <tr>",
-    '              <td style="padding:20px 24px 28px;">',
-    '                <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="border-collapse:separate;background:' +
-    statusSurface + ";background:linear-gradient(135deg," + BRAND_BLUE +
-    " 0%,#ffffff 100%);border:1px solid " + statusBorder +
-    ';border-radius:16px;">',
-    "                  <tr>",
-    '                    <td align="center" style="padding:22px 20px 24px;">',
-    '                      <div data-payment-animation="status" data-animation-loop="' +
+    '              <td style="padding:24px 24px 8px;">',
+    '                <div data-payment-animation="status" data-animation-loop="' +
     (isPaid ? "false" : "true") +
-    '" style="width:120px;height:112px;margin:0 auto 2px;text-align:center;">',
-    '                        <span class="payment-animation-fallback" style="display:inline-block;width:72px;height:72px;margin-top:14px;border:2px solid ' +
+    '" style="width:120px;height:112px;margin:0 auto 14px;text-align:center;">',
+    '                  <span class="payment-animation-fallback" style="display:inline-block;width:72px;height:72px;margin-top:14px;border:2px solid ' +
     statusColor + ";border-radius:50%;color:" + statusColor +
     ';font-size:40px;font-weight:700;line-height:72px;">' +
     escapeHtml(animationFallback) + "</span>",
-    "                      </div>",
-    '                      <p style="margin:0 0 8px;color:' + statusColor +
-    ';font-size:11px;font-weight:700;letter-spacing:.08em;line-height:1.4;text-transform:uppercase;">' +
-    escapeHtml(label) + "</p>",
-    '                      <h1 style="margin:0;color:' + BRAND_NAVY +
-    ';font-size:28px;font-weight:700;line-height:1.15;">' +
-    escapeHtml(heroTitle) +
-    "</h1>",
-    '                      <p style="margin:10px 0 0;color:#244d65;font-size:15px;line-height:1.5;">' +
-    escapeHtml(intro) + "</p>",
-    '                      <p style="margin:12px 0 0;color:' + BRAND_NAVY +
-    ';font-size:14px;font-weight:700;line-height:1.45;">' +
-    escapeHtml(quirkyMessage) + "</p>",
-    "                    </td>",
-    "                  </tr>",
-    "                </table>",
-    '                <div style="height:24px;line-height:24px;">&nbsp;</div>',
+    "                </div>",
     '                <h2 style="margin:0 0 4px;color:' + BRAND_NAVY +
     ';font-size:22px;line-height:1.3;">Hi ' +
     escapeHtml(recipientName) + ",</h2>",
-    '                <p style="margin:0;color:#5e7d8d;font-size:14px;">Here is the latest update for your trip.</p>',
+    '                <p style="margin:0;color:#5e7d8d;font-size:14px;line-height:1.5;">' +
+    escapeHtml(intro) + "</p>",
     '                <div style="height:22px;line-height:22px;">&nbsp;</div>',
     "                " + sectionLabel("Your trip"),
     '                <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="border-collapse:separate;background:#f6fcff;border:1px solid #dceef7;border-radius:12px;">',
@@ -624,10 +592,12 @@ export function buildPaymentEmail(
     "              </td>",
     "            </tr>",
     "            <tr>",
-    '              <td style="padding:24px 26px 26px;background:' + BRAND_NAVY +
-    ';color:#dff5ff;">',
-    '                <p style="margin:0 0 6px;color:#ffffff;font-size:16px;font-weight:700;line-height:1.4;">Need help with your booking?</p>',
-    '                <p style="margin:0 0 16px;color:#b9e8fb;font-size:13px;line-height:1.55;">Our team is here to help with payment, traveller details, or your trip plan.</p>',
+    '              <td style="padding:28px 26px 30px;background:#ffffff;background:linear-gradient(180deg,#ffffff 0%,#08b1ff 100%);border-top:1px solid #cbeafa;color:' +
+    BRAND_NAVY +
+    ';">',
+    '                <p style="margin:0 0 6px;color:' + BRAND_NAVY +
+    ';font-size:16px;font-weight:700;line-height:1.4;">Need help with your booking?</p>',
+    '                <p style="margin:0 0 16px;color:#23536a;font-size:13px;line-height:1.55;">Our team is here to help with payment, traveller details, or your trip plan.</p>',
     '                <table role="presentation" cellpadding="0" cellspacing="0" border="0">',
     "                  <tr>",
     '                    <td style="border-radius:10px;background:' +
@@ -640,14 +610,16 @@ export function buildPaymentEmail(
     "                    </td>",
     "                  </tr>",
     "                </table>",
-    '                <p style="margin:18px 0 0;color:#b9e8fb;font-size:12px;line-height:1.6;">Reply to this email or contact <a href="mailto:' +
-    SUPPORT_EMAIL + '" style="color:#ffffff;text-decoration:underline;">' +
+    '                <p style="margin:18px 0 0;color:#174e6a;font-size:12px;line-height:1.6;">Reply to this email or contact <a href="mailto:' +
+    SUPPORT_EMAIL + '" style="color:' + BRAND_NAVY +
+    ';text-decoration:underline;">' +
     SUPPORT_EMAIL + "</a>.</p>",
-    '                <p style="margin:16px 0 0;color:#b9e8fb;font-size:11px;line-height:1.6;">Trip With Nomads<br>Registered office: ' +
+    '                <p style="margin:16px 0 0;color:#174e6a;font-size:11px;line-height:1.6;">Trip With Nomads<br>Registered office: ' +
     escapeHtml(REGISTERED_OFFICE) + "</p>",
-    '                <p style="margin:16px 0 0;color:#b9e8fb;font-size:11px;line-height:1.7;">' +
+    '                <p style="margin:16px 0 0;color:' + BRAND_NAVY +
+    ';font-size:11px;line-height:1.7;">' +
     legalLinks + "</p>",
-    '                <p style="margin:12px 0 0;color:#83c7e4;font-size:10px;line-height:1.5;">You are receiving this service email because you made a booking or payment request. Booking and payment messages may still be sent when needed to manage your reservation.</p>',
+    '                <p style="margin:12px 0 0;color:#174e6a;font-size:10px;line-height:1.5;">You are receiving this service email because you made a booking or payment request. Booking and payment messages may still be sent when needed to manage your reservation.</p>',
     "              </td>",
     "            </tr>",
     "          </table>",
