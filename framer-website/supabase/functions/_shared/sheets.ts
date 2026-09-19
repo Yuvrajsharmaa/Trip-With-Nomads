@@ -32,6 +32,11 @@ export function sheetsEnabled(): boolean {
     return isTruthy(Deno.env.get("SHEETS_WRITE_ENABLED"));
 }
 
+export function isSheetAlreadyExistsError(errorMessage: string): boolean {
+    const normalized = String(errorMessage || "").trim().toLowerCase();
+    return normalized.includes("addsheet") && normalized.includes("already exists");
+}
+
 function shouldBootstrapHeaders(): boolean {
     return isTruthy(Deno.env.get("SHEETS_BOOTSTRAP_HEADERS"));
 }
@@ -131,7 +136,9 @@ async function ensureTab(tab: string, sheetId: string) {
         });
         if (!createRes.ok) {
             const text = await createRes.text();
-            throw new Error(`Sheet tab create failed: ${createRes.status} ${text}`);
+            if (!isSheetAlreadyExistsError(text)) {
+                throw new Error(`Sheet tab create failed: ${createRes.status} ${text}`);
+            }
         }
     }
 
@@ -329,7 +336,7 @@ export async function appendRow(
     if (headers?.length) await ensureHeaders(tab, headers, sheetId);
 
     const res = await sheetsFetch(
-        `/values/${encodeURIComponent(tab)}!A:ZZ:append?valueInputOption=RAW`,
+        `/values/${encodeURIComponent(tab)}!A:ZZ:append?valueInputOption=RAW&insertDataOption=INSERT_ROWS`,
         sheetId,
         {
             method: "POST",
@@ -399,27 +406,85 @@ export async function findRowByColumnValue(
     value: string,
     headers?: string[],
 ): Promise<number | null> {
-    if (!sheetsEnabled()) return null;
-    const needle = String(value || "").trim();
-    if (!needle) return null;
+    const rows = await findRowsByColumnValue(sheetId, tab, columnName, value, headers);
+    return rows[0] || null;
+}
 
-    await ensureTab(tab, sheetId);
+export async function findRowsByColumnValue(
+    sheetId: string,
+    tab: string,
+    columnName: string,
+    value: string,
+    headers?: string[],
+): Promise<number[]> {
+    if (!sheetsEnabled()) return [];
+    const needle = String(value || "").trim();
+    if (!needle) return [];
+
+    const tabs = await getSpreadsheetTabs(sheetId);
+    const exists = tabs.some((entry) => entry.title === tab);
+    if (!exists) return [];
+
     if (headers?.length) await ensureHeaders(tab, headers, sheetId);
 
-    const rows = await readTabValues(sheetId, tab, "A1:ZZ");
-    if (rows.length === 0) return null;
+    const rows = await readTabValues(sheetId, tab, "A1:P");
+    if (rows.length === 0) return [];
 
-    const header = Array.isArray(rows[0]) ? rows[0].map((cell) => String(cell || "").trim()) : [];
-    const index = header.findIndex((cell) => cell.toLowerCase() === String(columnName || "").trim().toLowerCase());
-    if (index < 0) return null;
+    const header = Array.isArray(rows[0])
+        ? rows[0].map((cell) => String(cell || "").trim())
+        : [];
+    const index = header.findIndex((cell) =>
+        cell.toLowerCase() === String(columnName || "").trim().toLowerCase()
+    );
+    if (index < 0) return [];
 
+    const matches: number[] = [];
     for (let i = 1; i < rows.length; i++) {
         const row = Array.isArray(rows[i]) ? rows[i] : [];
         const cell = String(row[index] || "").trim();
-        if (cell === needle) return i + 1;
+        if (cell === needle) matches.push(i + 1);
     }
 
-    return null;
+    return matches;
+}
+
+export async function deleteRows(
+    sheetId: string,
+    tab: string,
+    rows: number[],
+): Promise<number> {
+    if (!sheetsEnabled() || rows.length === 0) return 0;
+
+    const tabs = await getSpreadsheetTabs(sheetId);
+    const target = tabs.find((entry) => entry.title === tab);
+    if (!target) return 0;
+
+    const uniqueRows = [...new Set(rows)]
+        .filter((row) => Number.isInteger(row) && row > 1)
+        .sort((a, b) => b - a);
+    if (uniqueRows.length === 0) return 0;
+
+    const res = await sheetsFetch(":batchUpdate", sheetId, {
+        method: "POST",
+        body: JSON.stringify({
+            requests: uniqueRows.map((row) => ({
+                deleteDimension: {
+                    range: {
+                        sheetId: target.sheetId,
+                        dimension: "ROWS",
+                        startIndex: row - 1,
+                        endIndex: row,
+                    },
+                },
+            })),
+        }),
+    });
+    if (!res.ok) {
+        const text = await res.text();
+        throw new Error(`Delete rows failed: ${res.status} ${text}`);
+    }
+
+    return uniqueRows.length;
 }
 
 export async function safeUpdateRow(

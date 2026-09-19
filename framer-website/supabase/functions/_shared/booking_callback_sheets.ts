@@ -17,8 +17,8 @@ export const BOOKING_CALLBACK_HEADERS = [
     "Payable Now",
     "Paid Amount",
     "Due Amount",
-    "PayU TxnID",
-    "PayU MihPayID",
+    "Gateway Txn ID",
+    "Gateway Order/Ref ID",
     "Updated At (IST)",
     "Notes",
 ]
@@ -88,8 +88,8 @@ export function buildBookingCallbackRow(params: {
         formatINR(booking.payable_now_amount),
         formatINR(booking.paid_amount),
         formatINR(booking.due_amount),
-        compact(booking.payu_txnid),
-        compact(booking.payu_mihpayid),
+        compact(booking.payment_gateway_txn_id),
+        compact(booking.payment_gateway_order_or_ref_id),
         formatTimestampIST(updatedAt),
         compact(params.notes),
     ]

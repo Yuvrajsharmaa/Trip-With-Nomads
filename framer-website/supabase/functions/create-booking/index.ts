@@ -5,7 +5,13 @@ import {
     issueBookingStatusToken,
     resolveBookingStatusSecret,
 } from "../_shared/booking_status_token.ts"
-import { appendRow, sheetsEnabled } from "../_shared/sheets.ts"
+import {
+    appendRow,
+    sheetsEnabled,
+} from "../_shared/sheets.ts"
+import { resolveBookingSheetId } from "../_shared/booking_sheet_config.ts"
+import { resolveAppliedCouponCode } from "../_shared/pricing.ts"
+import { calculatePaymentAmounts } from "../_shared/payment_amounts.ts"
 
 const corsHeaders = {
     "Access-Control-Allow-Origin": "*",
@@ -345,32 +351,50 @@ function buildPricingBreakdownFromQuote(source: any, fallback: PricingBreakdown)
         Math.max(0, toNumber(source?.base_subtotal ?? source?.subtotal_amount ?? fallback.base_subtotal))
     )
 
-    const earlyBirdDiscountAmount = round2(
+    const earlyBirdDiscountCandidate = round2(
         Math.max(
             0,
             toNumber(source?.early_bird_discount_amount ?? source?.earlyBirdDiscountAmount ?? fallback.early_bird_discount_amount)
         )
     )
 
-    const couponDiscountAmount = round2(
+    const couponDiscountCandidate = round2(
         Math.max(
             0,
             toNumber(source?.coupon_discount_amount ?? source?.couponDiscountAmount ?? fallback.coupon_discount_amount)
         )
     )
 
-    const discountAmountTotal = round2(
+    const rawDiscountAmountTotal = round2(
         Math.max(
             0,
             toNumber(source?.discount_amount_total ?? source?.discount_amount ?? source?.discountAmount ?? fallback.discount_amount_total)
         )
     )
 
-    const appliedDiscountSource = (
+    const requestedDiscountSource = (
         String(source?.applied_discount_source || source?.final_applied_source || fallback.applied_discount_source || "none")
             .trim()
             .toLowerCase()
     ) as PricingBreakdown["applied_discount_source"]
+
+    const appliedDiscountSource = ["none", "early_bird", "coupon"].includes(requestedDiscountSource)
+        ? requestedDiscountSource
+        : fallback.applied_discount_source
+
+    const earlyBirdDiscountAmount = appliedDiscountSource === "early_bird"
+        ? earlyBirdDiscountCandidate > 0 ? earlyBirdDiscountCandidate : rawDiscountAmountTotal
+        : 0
+    const couponDiscountAmount = appliedDiscountSource === "coupon"
+        ? couponDiscountCandidate > 0 ? couponDiscountCandidate : rawDiscountAmountTotal
+        : 0
+    const discountAmountTotal = round2(
+        appliedDiscountSource === "coupon"
+            ? couponDiscountAmount
+            : appliedDiscountSource === "early_bird"
+                ? earlyBirdDiscountAmount
+                : 0
+    )
 
     const taxableAmount = round2(
         Math.max(
@@ -389,7 +413,9 @@ function buildPricingBreakdownFromQuote(source: any, fallback: PricingBreakdown)
     )
 
     const appliedDiscountCode = String(
-        source?.applied_discount_code || source?.code || fallback.applied_discount_code || ""
+        appliedDiscountSource === "coupon"
+            ? source?.applied_discount_code || source?.code || fallback.applied_discount_code || ""
+            : ""
     )
         .trim()
         .toUpperCase()
@@ -398,9 +424,7 @@ function buildPricingBreakdownFromQuote(source: any, fallback: PricingBreakdown)
         base_subtotal: baseSubtotal,
         early_bird_discount_amount: earlyBirdDiscountAmount,
         coupon_discount_amount: couponDiscountAmount,
-        applied_discount_source: ["none", "early_bird", "coupon"].includes(appliedDiscountSource)
-            ? appliedDiscountSource
-            : fallback.applied_discount_source,
+        applied_discount_source: appliedDiscountSource,
         applied_discount_code: appliedDiscountCode || null,
         discount_amount_total: discountAmountTotal,
         taxable_amount: taxableAmount,
@@ -596,10 +620,59 @@ function extractBearerToken(authHeader: string | null): string {
     return String(match?.[1] || "").trim()
 }
 
-function paymentModeSummary(paymentMode: PaymentMode, totalAmount: number) {
-    const payableNowAmount = paymentMode === "partial_25" ? round2(totalAmount * 0.25) : round2(totalAmount)
-    const dueAmount = round2(Math.max(0, totalAmount - payableNowAmount))
-    return { payableNowAmount, dueAmount }
+function resolveRazorpayTestMode(): boolean {
+    const explicit = Deno.env.get("PAYMENT_GATEWAY_TEST_MODE")
+    if (explicit != null && explicit !== "") return isTruthy(explicit)
+    return isTruthy(Deno.env.get("RAZORPAY_TEST_MODE"))
+}
+
+function toPaise(amount: number): number {
+    return Math.max(0, Math.round(Math.max(0, toNumber(amount)) * 100))
+}
+
+function withQueryParams(baseUrl: string, extra: Record<string, string>): string {
+    const url = new URL(baseUrl)
+    for (const [key, value] of Object.entries(extra)) {
+        url.searchParams.set(key, value)
+    }
+    return url.toString()
+}
+
+function normalizeTripNameForNote(value: unknown, fallback = "Trip Booking"): string {
+    const clean = String(value || "").trim().replace(/\s+/g, " ")
+    const out = clean || fallback
+    return out.length > 120 ? out.slice(0, 120) : out
+}
+
+async function createRazorpayOrder(params: {
+    keyId: string
+    keySecret: string
+    amountPaise: number
+    currency: string
+    receipt: string
+    notes?: Record<string, string>
+}) {
+    const auth = btoa(`${params.keyId}:${params.keySecret}`)
+    const response = await fetch("https://api.razorpay.com/v1/orders", {
+        method: "POST",
+        headers: {
+            Authorization: `Basic ${auth}`,
+            "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+            amount: params.amountPaise,
+            currency: params.currency,
+            receipt: params.receipt,
+            notes: params.notes || {},
+        }),
+    })
+
+    const data = await response.json().catch(() => ({}))
+    if (!response.ok || !data?.id) {
+        const message = data?.error?.description || data?.error?.reason || data?.error || "Razorpay order create failed"
+        throw new Error(String(message))
+    }
+    return data
 }
 
 serve(async (req) => {
@@ -662,17 +735,17 @@ serve(async (req) => {
             )
         }
 
-        const isTest = Deno.env.get("PAYU_TEST_MODE") === "true"
-        const payuKey = isTest
-            ? Deno.env.get("PAYU_TEST_KEY") || Deno.env.get("PAYU_KEY")
-            : Deno.env.get("PAYU_LIVE_KEY") || Deno.env.get("PAYU_KEY")
-        const payuSalt = isTest
-            ? Deno.env.get("PAYU_TEST_SALT") || Deno.env.get("PAYU_SALT")
-            : Deno.env.get("PAYU_LIVE_SALT") || Deno.env.get("PAYU_SALT")
+        const isTest = resolveRazorpayTestMode()
+        const razorpayKeyId = isTest
+            ? Deno.env.get("RAZORPAY_TEST_KEY_ID") || Deno.env.get("RAZORPAY_KEY_ID") || ""
+            : Deno.env.get("RAZORPAY_LIVE_KEY_ID") || Deno.env.get("RAZORPAY_KEY_ID") || ""
+        const razorpayKeySecret = isTest
+            ? Deno.env.get("RAZORPAY_TEST_KEY_SECRET") || Deno.env.get("RAZORPAY_KEY_SECRET") || ""
+            : Deno.env.get("RAZORPAY_LIVE_KEY_SECRET") || Deno.env.get("RAZORPAY_KEY_SECRET") || ""
 
-        if (!payuKey || !payuSalt) {
+        if (!razorpayKeyId || !razorpayKeySecret) {
             return new Response(
-                JSON.stringify({ error: "Payment configuration missing" }),
+                JSON.stringify({ error: "Razorpay configuration missing" }),
                 { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
             )
         }
@@ -730,6 +803,8 @@ serve(async (req) => {
             pricingBreakdown = buildPricingBreakdownFromQuote(couponQuote, baseBreakdown)
             couponSnapshot = {
                 ...couponQuote,
+                requested_code: couponCodeRequested || null,
+                applied_coupon: pricingBreakdown.applied_discount_source === "coupon",
                 validated_at: new Date().toISOString(),
                 validated_by: "create-booking",
             }
@@ -740,7 +815,10 @@ serve(async (req) => {
         const discountAmount = round2(Math.max(0, pricingBreakdown.discount_amount_total))
         const taxAmount = round2(Math.max(0, pricingBreakdown.tax_amount))
 
-        const { payableNowAmount, dueAmount } = paymentModeSummary(paymentMode, totalAmount)
+        const { payableNowAmount, dueAmount } = calculatePaymentAmounts({
+            paymentMode,
+            totalAmount,
+        })
         if (totalAmount <= 0 || payableNowAmount <= 0) {
             return new Response(
                 JSON.stringify({ error: "Total amount must be greater than zero" }),
@@ -758,8 +836,7 @@ serve(async (req) => {
                 ? `₹${dueAmount.toLocaleString("en-IN")} due on-site before trip departure.`
                 : null
 
-        const couponCode =
-            String(pricingBreakdown.applied_discount_code || couponCodeRequested || "").trim().toUpperCase() || null
+        const couponCode = resolveAppliedCouponCode(pricingBreakdown)
 
         const insertPayload: Record<string, any> = {
             trip_id: tripId,
@@ -784,7 +861,8 @@ serve(async (req) => {
             name,
             email,
             phone: phone || "",
-            payu_txnid: txnid,
+            payment_gateway_txn_id: txnid,
+            payment_gateway_order_or_ref_id: null,
         }
 
         let { data, error } = await supabase
@@ -813,10 +891,11 @@ serve(async (req) => {
             )
         }
 
-        const bookingsSheetId = firstNonEmpty(
-            Deno.env.get("GOOGLE_SHEET_ID_TRIPS"),
-            Deno.env.get("GOOGLE_SHEET_ID")
-        )
+        const bookingsSheetId = resolveBookingSheetId({
+            BOOKING_CALLBACK_SHEET_ID: Deno.env.get("BOOKING_CALLBACK_SHEET_ID"),
+            GOOGLE_SHEET_ID: Deno.env.get("GOOGLE_SHEET_ID"),
+            GOOGLE_SHEET_ID_TRIPS: Deno.env.get("GOOGLE_SHEET_ID_TRIPS"),
+        })
         const bookingsSheetTab = firstNonEmpty(Deno.env.get("BOOKINGS_SHEET_TAB"), "Bookings")
         if (bookingLifecycleSheetsWriteEnabled() && sheetsEnabled() && bookingsSheetId) {
             try {
@@ -839,24 +918,60 @@ serve(async (req) => {
         }
 
         const productinfo = "Trip Booking"
-        const firstname = name.split(" ")[0]
+        const tripDetails = await supabase
+            .from("trips")
+            .select("title")
+            .eq("id", tripId)
+            .maybeSingle()
+        const tripNameForNotes = normalizeTripNameForNote(tripDetails.data?.title, productinfo)
         const udf1 = data.id
-        const gatewayAmount = payableNowAmount.toFixed(2)
-        const bookingStatusSecret = resolveBookingStatusSecret(payuSalt)
+        const bookingStatusSecret = resolveBookingStatusSecret(razorpayKeySecret)
         const bookingStatusToken = bookingStatusSecret
             ? await issueBookingStatusToken(udf1, bookingStatusSecret)
             : null
 
-        const hashString = `${payuKey}|${txnid}|${gatewayAmount}|${productinfo}|${firstname}|${email}|${udf1}||||||||||${payuSalt}`
-        const hashBuffer = await crypto.subtle.digest("SHA-512", new TextEncoder().encode(hashString))
-        const hash = Array.from(new Uint8Array(hashBuffer))
-            .map((b) => b.toString(16).padStart(2, "0"))
-            .join("")
-
-        const actionUrl = isTest ? "https://test.payu.in/_payment" : "https://secure.payu.in/_payment"
-        const callbackUrl =
+        const callbackBaseUrl =
             Deno.env.get("PAYMENT_CALLBACK_URL") ||
             `${Deno.env.get("SUPABASE_URL")}/functions/v1/handle-payment`
+        const callbackUrl = withQueryParams(callbackBaseUrl, {
+            booking_id: udf1,
+            gateway: "razorpay",
+        })
+        const amountPaise = toPaise(payableNowAmount)
+        if (amountPaise <= 0) {
+            return new Response(
+                JSON.stringify({ error: "Invalid payable amount for Razorpay" }),
+                { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+            )
+        }
+
+        const orderReceipt = String(txnid || udf1).slice(0, 40)
+        let order: any
+        try {
+            order = await createRazorpayOrder({
+                keyId: razorpayKeyId,
+                keySecret: razorpayKeySecret,
+                amountPaise,
+                currency,
+                receipt: orderReceipt,
+                notes: {
+                    booking_id: udf1,
+                    trip_name: tripNameForNotes,
+                    payment_mode: paymentMode,
+                },
+            })
+        } catch (orderError) {
+            console.error("[create-booking] Razorpay order creation failed", orderError)
+            throw orderError
+        }
+
+        const orderId = String(order.id || "").trim()
+        if (orderId) {
+            await supabase
+                .from("bookings")
+                .update({ payment_gateway_order_or_ref_id: orderId })
+                .eq("id", udf1)
+        }
 
         return new Response(
             JSON.stringify({
@@ -868,19 +983,26 @@ serve(async (req) => {
                 settlement_status: settlementStatus,
                 status_token: bookingStatusToken?.token || null,
                 status_token_expires_at: bookingStatusToken?.expiresAt || null,
-                payu: {
-                    key: payuKey,
-                    txnid,
-                    amount: gatewayAmount,
-                    productinfo,
-                    firstname,
-                    email,
-                    phone: phone || "",
-                    surl: callbackUrl,
-                    furl: callbackUrl,
-                    hash,
-                    udf1,
-                    action: actionUrl,
+                gateway: "razorpay",
+                razorpay: {
+                    key: razorpayKeyId,
+                    order_id: orderId,
+                    amount: amountPaise,
+                    currency,
+                    name: "Trip With Nomads",
+                    description: productinfo,
+                    prefill: {
+                        name,
+                        email,
+                        contact: phone || "",
+                    },
+                    notes: {
+                        booking_id: udf1,
+                        trip_name: tripNameForNotes,
+                        payment_mode: paymentMode,
+                    },
+                    callback_url: callbackUrl,
+                    redirect: true,
                 },
             }),
             { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
