@@ -9,4 +9,8 @@ Deno.test("create-booking persists a checkout request and replays its attempt", 
     assertStringIncludes(source, "from(\"payment_attempts\")")
     assertStringIncludes(source, "IDEMPOTENCY_CONFLICT")
     assertStringIncludes(source, "!replayed")
+    assertStringIncludes(source, "gateway: activeProvider")
+    assertStringIncludes(source, "todayISTDateKey")
+    assertStringIncludes(source, "computeBasePricing")
+    assertStringIncludes(source, "already_paid")
 })

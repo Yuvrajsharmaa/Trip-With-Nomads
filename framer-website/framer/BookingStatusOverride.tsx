@@ -7,13 +7,11 @@ const { useEffect, useRef, useState } = React
 // Booking Status Override — UNIFIED SUCCESS / FAILURE PAGE
 //
 // HOW IT WORKS:
-//   1. handle-payment Edge Function redirects BOTH success
-//      and failure to:
-//         /payment-success?booking_id=<UUID> or
-//         /payment-failed?booking_id=<UUID>
+//   1. handle-payment Edge Function redirects to the neutral status UI.
+//      The webhook and signed status response decide whether payment passed.
 //   2. withBookingStatus reads `booking_id` from URL.
 //   3. Fetches the full booking row from Supabase.
-//   4. All overrides adapt based on `payment_status`.
+//   4. Payment status and settlement status remain separate throughout.
 //
 // FRAMER SETUP:
 //   1. Apply withBookingStatus  → outermost page frame
@@ -36,7 +34,7 @@ const { useEffect, useRef, useState } = React
 //   │   "Paid"     → badge: withPaymentBadge          │
 //   │   Base Price → value: withBasePrice              │
 //   │   Subtotal   → value: withSubtotal              │
-//   │   Tax (2%)   → value: withTaxAmount             │
+//   │   GST        → value: withTaxAmount             │
 //   │   Total Paid → value: withTotalPaid             │
 //   ├─────────────────────────────────────────────────┤
 //   │ RETRY BUTTON (withRetryButton)                  │
@@ -50,6 +48,7 @@ type RuntimeConfig = {
     siteBaseUrl: string
     supabaseUrl: string
     supabaseAnonKey: string
+    apiBaseUrl: string
 }
 
 const RUNTIME_CONFIG: Record<RuntimeEnv, RuntimeConfig> = {
@@ -58,12 +57,15 @@ const RUNTIME_CONFIG: Record<RuntimeEnv, RuntimeConfig> = {
         supabaseUrl: "https://jxozzvwvprmnhvafmpsa.supabase.co",
         supabaseAnonKey:
             "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imp4b3p6dnd2cHJtbmh2YWZtcHNhIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjgwNTg2NjIsImV4cCI6MjA4MzYzNDY2Mn0.KpVa9dWlJEguL1TA00Tf4QDpziJ1mgA2I0f4_l-vlOk",
+        // Production must not call the staging worker by default.
+        apiBaseUrl: "",
     },
     development: {
         siteBaseUrl: "https://maroon-aside-814100.framer.app",
         supabaseUrl: "https://ieuwiinbvbdvjrdqqzlb.supabase.co",
         supabaseAnonKey:
             "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImlldXdpaW5idmJkdmpyZHFxemxiIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzIwNDYwMTksImV4cCI6MjA4NzYyMjAxOX0.UlTMeyvArixD7byDCrGwEDXsbc4LQfx6QXDL6Je3blE",
+        apiBaseUrl: "https://twn-checkout-gateway-staging.tripwithnomads-crm.workers.dev",
     },
 }
 
@@ -104,6 +106,7 @@ function resolveRuntimeConfig(): RuntimeConfig {
         supabaseAnonKey: String(
             runtimeOverride.supabaseAnonKey || selected.supabaseAnonKey || ""
         ).trim(),
+        apiBaseUrl: normalizeBaseUrl(runtimeOverride.apiBaseUrl || selected.apiBaseUrl),
     }
 }
 
@@ -111,6 +114,96 @@ const CURRENT_RUNTIME = resolveRuntimeConfig()
 const SUPABASE_URL = CURRENT_RUNTIME.supabaseUrl
 const SUPABASE_KEY = CURRENT_RUNTIME.supabaseAnonKey
 const DOMESTIC_TRIPS_BASE_URL = `${CURRENT_RUNTIME.siteBaseUrl}/domestic-trips`
+
+function createUuid(): string {
+    const randomUuid = (globalThis as any)?.crypto?.randomUUID
+    if (typeof randomUuid === "function") return randomUuid.call((globalThis as any).crypto)
+    return "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, (character) => {
+        const random = (Math.random() * 16) | 0
+        const value = character === "x" ? random : (random & 0x3) | 0x8
+        return value.toString(16)
+    })
+}
+
+function getRetryRequestId(bookingId: string, attempt: any): string {
+    const attemptKey = String(attempt || "latest").trim() || "latest"
+    const key = `__twn_retry_request_id_v1:${bookingId}:${attemptKey}`
+    try {
+        const existing = window.sessionStorage.getItem(key)
+        if (existing && /^[0-9a-f-]{36}$/i.test(existing)) return existing
+        const next = createUuid()
+        window.sessionStorage.setItem(key, next)
+        return next
+    } catch (_) {
+        return createUuid()
+    }
+}
+
+function retryApiUrl(): string {
+    return CURRENT_RUNTIME.apiBaseUrl
+        ? `${CURRENT_RUNTIME.apiBaseUrl}/retry-payment`
+        : `${SUPABASE_URL}/functions/v1/retry-payment`
+}
+
+function retryApiHeaders(): Record<string, string> {
+    const headers: Record<string, string> = { "Content-Type": "application/json" }
+    if (!CURRENT_RUNTIME.apiBaseUrl) {
+        headers.apikey = SUPABASE_KEY
+        headers.Authorization = `Bearer ${SUPABASE_KEY}`
+    }
+    return headers
+}
+
+async function loadRazorpayScript(): Promise<void> {
+    if (typeof window === "undefined") throw new Error("Payment gateway is unavailable")
+    if ((window as any).Razorpay) return
+    await new Promise<void>((resolve, reject) => {
+        const existing = document.querySelector('script[data-twn-razorpay="true"]') as HTMLScriptElement | null
+        if (existing) {
+            existing.addEventListener("load", () => resolve(), { once: true })
+            existing.addEventListener("error", () => reject(new Error("Could not load payment gateway")), { once: true })
+            return
+        }
+        const script = document.createElement("script")
+        script.src = "https://checkout.razorpay.com/v1/checkout.js"
+        script.async = true
+        script.dataset.twnRazorpay = "true"
+        script.onload = () => resolve()
+        script.onerror = () => reject(new Error("Could not load payment gateway"))
+        document.head.appendChild(script)
+    })
+}
+
+async function openRetryRazorpay(
+    payload: any,
+    data: BookingData,
+    onDismiss: () => void
+): Promise<void> {
+    const razorpay = payload?.razorpay
+    if (!razorpay?.order_id || !razorpay?.key_id) throw new Error("Invalid Razorpay response")
+    await loadRazorpayScript()
+    const Razorpay = (window as any).Razorpay
+    if (typeof Razorpay !== "function") throw new Error("Payment gateway is unavailable")
+    const instance = new Razorpay({
+        key: String(razorpay.key_id),
+        amount: Number(razorpay.amount || 0),
+        currency: String(razorpay.currency || data.currency || "INR"),
+        name: "Trip With Nomads",
+        description: String(data.trip_title || "Trip booking retry"),
+        order_id: String(razorpay.order_id),
+        prefill: {
+            name: String(data.name || ""),
+            email: String(data.email || ""),
+            contact: String(data.phone || ""),
+        },
+        notes: razorpay.notes || {},
+        callback_url: razorpay.callback_url || `${CURRENT_RUNTIME.siteBaseUrl}/payment-success`,
+        redirect: true,
+        modal: { ondismiss: onDismiss },
+    })
+    instance.on?.("payment.failed", onDismiss)
+    instance.open()
+}
 
 
 // ─── TYPES ───────────────────────────────────────────────────
@@ -617,6 +710,26 @@ export function withPaymentBadge(Component): ComponentType {
     )(Component)
 }
 
+// Use these as separate labels in the status page so gateway confirmation and
+// the amount still due are never conflated.
+export function withPaymentStatusText(Component): ComponentType {
+    return textOverride((d) => {
+        if (d.payment_status === "paid") return "Payment Status: Paid"
+        if (d.payment_status === "failed") return "Payment Status: Failed"
+        return "Payment Status: Awaiting confirmation"
+    })(Component)
+}
+
+export function withSettlementStatusText(Component): ComponentType {
+    return textOverride((d) => {
+        const status = settlementStatus(d)
+        if (status === "fully_paid") return "Settlement Status: Fully settled"
+        if (status === "partially_paid") return `Settlement Status: Balance due (${fmt(dueAmount(d))})`
+        if (status === "failed") return "Settlement Status: Not settled"
+        return "Settlement Status: Pending"
+    })(Component)
+}
+
 
 // ═════════════════════════════════════════════════════════════
 // 4. TRAVELLER LIST
@@ -841,37 +954,49 @@ export function withRetryButton(Component): ComponentType {
     return (props: any) => {
         const [data, state] = useBooking()
         const [isRetrying, setIsRetrying] = useState(false)
+        const retryLockRef = useRef(false)
 
         if (state !== "ready" || !data) {
             return <Component {...props} style={{ ...props.style, display: "none" }} />
         }
 
-        if (data.payment_status === "paid") {
-            // Hide on success
+        if (data.payment_status !== "failed") {
+            // A pending attempt must be explicitly expired by the server before retrying.
             return <Component {...props} style={{ ...props.style, display: "none" }} />
         }
 
-        // Show on failure or pending — secure retry with booking_id + email.
         const handleRetry = async () => {
-            if (isRetrying) return
+            if (isRetrying || retryLockRef.current) return
+            retryLockRef.current = true
             setIsRetrying(true)
 
             try {
-                const res = await fetch(`${SUPABASE_URL}/functions/v1/retry-payment`, {
+                const retryRequestId = getRetryRequestId(
+                    data.id,
+                    (data as any).active_payment_attempt_id ||
+                        (data as any).payment_attempt_number ||
+                        (data as any).payment_attempt ||
+                        "latest"
+                )
+                const res = await fetch(retryApiUrl(), {
                     method: "POST",
-                    headers: {
-                        "Content-Type": "application/json",
-                        apikey: SUPABASE_KEY,
-                        Authorization: `Bearer ${SUPABASE_KEY}`,
-                    },
+                    headers: retryApiHeaders(),
                     body: JSON.stringify({
                         booking_id: data.id,
                         email: String(data.email || "").trim(),
+                        retry_request_id: retryRequestId,
                     }),
                 })
                 if (!res.ok) throw new Error(`Retry failed (${res.status})`)
 
                 const payload = await res.json().catch(() => null)
+                if (payload?.gateway === "razorpay" && payload?.razorpay?.order_id) {
+                    await openRetryRazorpay(payload, data, () => {
+                        retryLockRef.current = false
+                        setIsRetrying(false)
+                    })
+                    return
+                }
                 const payu = payload?.payu
                 if (!payu?.action) throw new Error("Invalid PayU response")
 
@@ -894,13 +1019,15 @@ export function withRetryButton(Component): ComponentType {
                 return
             } catch (err) {
                 console.error("[RetryPayment] Error:", err)
+                retryLockRef.current = false
+                setIsRetrying(false)
                 if (data.trip_id) {
                     window.location.href = `${DOMESTIC_TRIPS_BASE_URL}/${data.trip_id}`
                 } else {
                     window.location.href = DOMESTIC_TRIPS_BASE_URL
                 }
             } finally {
-                setIsRetrying(false)
+                // Keep the retry locked while the gateway modal is open or the browser is redirecting.
             }
         }
 

@@ -9,4 +9,6 @@ Deno.test("retry-payment requires a retry key and persists payment attempts", as
     assertStringIncludes(source, "from(\"payment_attempts\")")
     assertStringIncludes(source, "attempt_no")
     assertStringIncludes(source, "IDEMPOTENCY_CONFLICT")
+    assertStringIncludes(source, "gateway: paymentProvider")
+    assertStringIncludes(source, "paymentCallbackUrl")
 })

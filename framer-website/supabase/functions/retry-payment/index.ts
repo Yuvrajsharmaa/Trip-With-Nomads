@@ -6,6 +6,15 @@ import {
     nextPaymentAttemptNumber,
     normalizeIdempotencyKey,
 } from "../_shared/payment_idempotency.ts"
+import {
+    createRazorpayOrder,
+    paymentCallbackUrl,
+    razorpayCredentials,
+} from "../_shared/razorpay.ts"
+import {
+    issueBookingStatusToken,
+    resolveBookingStatusSecret,
+} from "../_shared/booking_status_token.ts"
 
 const corsHeaders = {
     "Access-Control-Allow-Origin": "*",
@@ -52,8 +61,9 @@ async function buildPayuPayload(params: {
     payuSalt: string
     isTest: boolean
     supabaseUrl: string
+    statusToken?: string | null
 }) {
-    const { attempt, booking, payuKey, payuSalt, isTest, supabaseUrl } = params
+    const { attempt, booking, payuKey, payuSalt, isTest, supabaseUrl, statusToken } = params
     const amount = round2(Math.max(0, toNumber(attempt?.amount_minor) / 100)).toFixed(2)
     const txnid = String(
         attempt?.provider_transaction_id || booking?.payu_txnid || `txn_${String(attempt?.id || Date.now()).slice(-16)}`,
@@ -68,8 +78,11 @@ async function buildPayuPayload(params: {
         .map((b) => b.toString(16).padStart(2, "0"))
         .join("")
 
-    const callbackUrl =
-        Deno.env.get("PAYMENT_CALLBACK_URL") || `${supabaseUrl}/functions/v1/handle-payment`
+    const callbackUrl = paymentCallbackUrl({
+        bookingId: String(booking.id),
+        statusToken,
+        supabaseUrl,
+    })
 
     return {
         action: isTest ? "https://test.payu.in/_payment" : "https://secure.payu.in/_payment",
@@ -87,6 +100,62 @@ async function buildPayuPayload(params: {
     }
 }
 
+async function buildRazorpayPayload(params: {
+    supabase: any
+    attempt: any
+    booking: any
+    supabaseUrl: string
+    statusToken?: string | null
+}) {
+    const credentials = razorpayCredentials()
+    if (!credentials.keyId || !credentials.keySecret) {
+        throw new Error("Razorpay payment configuration missing")
+    }
+    let orderId = String(params.attempt?.provider_order_id || params.booking?.payment_gateway_order_or_ref_id || "").trim()
+    if (!orderId) {
+        const order = await createRazorpayOrder({
+            amount: Math.max(0, toNumber(params.attempt?.amount_minor) / 100),
+            currency: params.booking?.currency || "INR",
+            receipt: `twn_${String(params.attempt?.id || Date.now()).replace(/-/g, "").slice(0, 32)}`,
+            notes: {
+                booking_id: String(params.booking.id),
+                attempt_id: String(params.attempt.id),
+            },
+        })
+        orderId = String(order.id)
+        const attemptUpdate = await params.supabase
+            .from("payment_attempts")
+            .update({ provider: "razorpay", provider_order_id: orderId, updated_at: new Date().toISOString() })
+            .eq("id", params.attempt.id)
+        if (attemptUpdate.error) throw attemptUpdate.error
+        params.attempt = { ...params.attempt, provider: "razorpay", provider_order_id: orderId }
+    }
+    const bookingUpdate = await params.supabase
+        .from("bookings")
+        .update({
+            payment_provider: "razorpay",
+            payment_gateway_order_or_ref_id: orderId,
+            active_payment_attempt_id: params.attempt.id,
+            payment_attempt_number: params.attempt.attempt_no,
+        })
+        .eq("id", params.booking.id)
+    if (bookingUpdate.error && !String(bookingUpdate.error.message || "").toLowerCase().includes("payment_gateway_order_or_ref_id")) {
+        throw bookingUpdate.error
+    }
+    return {
+        key_id: credentials.keyId,
+        order_id: orderId,
+        amount: Math.max(1, Math.round(Math.max(0, toNumber(params.attempt.amount_minor) / 100) * 100)),
+        currency: String(params.booking.currency || "INR").toUpperCase(),
+        callback_url: paymentCallbackUrl({
+            bookingId: String(params.booking.id),
+            statusToken: params.statusToken,
+            supabaseUrl: params.supabaseUrl,
+        }),
+        notes: { booking_id: String(params.booking.id), attempt_id: String(params.attempt.id) },
+    }
+}
+
 Deno.serve(async (req) => {
     if (req.method === "OPTIONS") {
         return new Response("ok", { headers: corsHeaders })
@@ -97,17 +166,6 @@ Deno.serve(async (req) => {
         const supabaseKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")
         if (!supabaseUrl || !supabaseKey) {
             throw new Error("Missing Supabase Secrets (URL/RoleKey)")
-        }
-
-        const isTest = Deno.env.get("PAYU_TEST_MODE") === "true"
-        const payuKey = isTest
-            ? Deno.env.get("PAYU_TEST_KEY") || Deno.env.get("PAYU_KEY")
-            : Deno.env.get("PAYU_LIVE_KEY") || Deno.env.get("PAYU_KEY")
-        const payuSalt = isTest
-            ? Deno.env.get("PAYU_TEST_SALT") || Deno.env.get("PAYU_SALT")
-            : Deno.env.get("PAYU_LIVE_SALT") || Deno.env.get("PAYU_SALT")
-        if (!payuKey || !payuSalt) {
-            throw new Error("Missing PayU Secrets")
         }
 
         const body = await req.json().catch(() => ({}))
@@ -134,7 +192,7 @@ Deno.serve(async (req) => {
         const { data: booking, error: bookingError } = await supabase
             .from("bookings")
             .select(
-                "id, booking_ref, total_amount, payable_now_amount, payment_mode, payment_status, settlement_status, name, email, phone, currency, payu_txnid, payment_provider",
+                "id, booking_ref, total_amount, payable_now_amount, payment_mode, payment_status, settlement_status, name, email, phone, currency, payu_txnid, payment_provider, payment_gateway_order_or_ref_id",
             )
             .eq("id", bookingId)
             .single()
@@ -159,26 +217,52 @@ Deno.serve(async (req) => {
                 }, 409)
             }
 
-            const payu = await buildPayuPayload({
-                attempt: existingRequest.data,
-                booking,
-                payuKey,
-                payuSalt,
-                isTest,
-                supabaseUrl,
-            })
+            const statusSecret = resolveBookingStatusSecret(String(
+                Deno.env.get("PAYMENT_STATUS_SECRET") ||
+                Deno.env.get("RAZORPAY_LIVE_KEY_SECRET") ||
+                Deno.env.get("RAZORPAY_TEST_KEY_SECRET") ||
+                Deno.env.get("RAZORPAY_KEY_SECRET") ||
+                Deno.env.get("PAYU_LIVE_SALT") ||
+                Deno.env.get("PAYU_TEST_SALT") ||
+                Deno.env.get("PAYU_SALT") ||
+                "",
+            ))
+            const statusToken = statusSecret
+                ? await issueBookingStatusToken(booking.id, statusSecret)
+                : null
+            const existingProvider = String(existingRequest.data.provider || booking.payment_provider || "razorpay").toLowerCase()
+            const existingGateway = existingProvider === "razorpay"
+                ? await buildRazorpayPayload({
+                    supabase,
+                    attempt: existingRequest.data,
+                    booking,
+                    supabaseUrl,
+                    statusToken: statusToken?.token,
+                })
+                : await buildPayuPayload({
+                    attempt: existingRequest.data,
+                    booking,
+                    payuKey: (Deno.env.get("PAYU_TEST_MODE") === "true" ? Deno.env.get("PAYU_TEST_KEY") || Deno.env.get("PAYU_KEY") : Deno.env.get("PAYU_LIVE_KEY") || Deno.env.get("PAYU_KEY")) || "",
+                    payuSalt: (Deno.env.get("PAYU_TEST_MODE") === "true" ? Deno.env.get("PAYU_TEST_SALT") || Deno.env.get("PAYU_SALT") : Deno.env.get("PAYU_LIVE_SALT") || Deno.env.get("PAYU_SALT")) || "",
+                    isTest: Deno.env.get("PAYU_TEST_MODE") === "true",
+                    supabaseUrl,
+                    statusToken: statusToken?.token,
+                })
             return responseJson({
                 booking_id: booking.id,
                 retry_request_id: retryRequestId,
                 replayed: true,
                 attempt_id: existingRequest.data.id,
                 attempt_no: existingRequest.data.attempt_no,
+                gateway: existingProvider,
                 payment_provider: existingRequest.data.provider,
                 payment_status: booking.payment_status,
                 payment_mode: booking.payment_mode,
                 payable_now_amount: round2(toNumber(booking.payable_now_amount)),
                 total_amount: round2(toNumber(booking.total_amount)),
-                payu,
+                status_token: statusToken?.token || null,
+                status_token_expires_at: statusToken?.expiresAt || null,
+                [existingProvider]: existingGateway,
             })
         }
 
@@ -226,7 +310,7 @@ Deno.serve(async (req) => {
         const txnid = `${baseRef}-${Date.now().toString().slice(-6)}`
         const attemptNo = nextPaymentAttemptNumber(Array.isArray(attempts) ? attempts : [])
         const paymentProvider = String(
-            booking.payment_provider || Deno.env.get("PAYMENT_PROVIDER") || "payu",
+            booking.payment_provider || Deno.env.get("PAYMENT_PROVIDER") || "razorpay",
         ).trim().toLowerCase()
         const attemptPayload = buildPaymentAttemptInsert({
             bookingId: booking.id,
@@ -235,7 +319,7 @@ Deno.serve(async (req) => {
             provider: paymentProvider,
             amount: amountToRetry,
             currency: booking.currency || "INR",
-            providerTransactionId: txnid,
+            providerTransactionId: paymentProvider === "payu" ? txnid : null,
             status: "pending",
         })
         attemptPayload.expires_at = new Date(Date.now() + 30 * 60 * 1000).toISOString()
@@ -278,8 +362,8 @@ Deno.serve(async (req) => {
         const bookingUpdate = await supabase
             .from("bookings")
             .update({
-                payu_txnid: txnid,
-                payment_gateway_txn_id: txnid,
+                ...(paymentProvider === "payu" ? { payu_txnid: txnid } : {}),
+                payment_gateway_txn_id: paymentProvider === "payu" ? txnid : null,
                 payment_status: "pending",
                 settlement_status: "pending",
                 active_payment_attempt_id: paymentAttempt.id,
@@ -289,14 +373,49 @@ Deno.serve(async (req) => {
             .eq("id", booking.id)
         if (bookingUpdate.error) throw new Error(bookingUpdate.error.message || "Could not update booking retry state")
 
-        const payu = await buildPayuPayload({
-            attempt: paymentAttempt,
-            booking: { ...booking, payu_txnid: txnid },
-            payuKey,
-            payuSalt,
-            isTest,
-            supabaseUrl,
-        })
+        const statusSecret = resolveBookingStatusSecret(String(
+            Deno.env.get("PAYMENT_STATUS_SECRET") ||
+            Deno.env.get("RAZORPAY_LIVE_KEY_SECRET") ||
+            Deno.env.get("RAZORPAY_TEST_KEY_SECRET") ||
+            Deno.env.get("RAZORPAY_KEY_SECRET") ||
+            Deno.env.get("PAYU_LIVE_SALT") ||
+            Deno.env.get("PAYU_TEST_SALT") ||
+            Deno.env.get("PAYU_SALT") ||
+            "",
+        ))
+        const statusToken = statusSecret
+            ? await issueBookingStatusToken(booking.id, statusSecret)
+            : null
+        let gateway: any
+        if (paymentProvider === "razorpay") {
+            gateway = await buildRazorpayPayload({
+                supabase,
+                attempt: paymentAttempt,
+                booking: { ...booking, payment_provider: "razorpay" },
+                supabaseUrl,
+                statusToken: statusToken?.token,
+            })
+        } else if (paymentProvider === "payu") {
+            const isTest = Deno.env.get("PAYU_TEST_MODE") === "true"
+            const payuKey = isTest
+                ? Deno.env.get("PAYU_TEST_KEY") || Deno.env.get("PAYU_KEY")
+                : Deno.env.get("PAYU_LIVE_KEY") || Deno.env.get("PAYU_KEY")
+            const payuSalt = isTest
+                ? Deno.env.get("PAYU_TEST_SALT") || Deno.env.get("PAYU_SALT")
+                : Deno.env.get("PAYU_LIVE_SALT") || Deno.env.get("PAYU_SALT")
+            if (!payuKey || !payuSalt) throw new Error("PayU payment configuration missing")
+            gateway = await buildPayuPayload({
+                attempt: paymentAttempt,
+                booking: { ...booking, payu_txnid: txnid },
+                payuKey,
+                payuSalt,
+                isTest,
+                supabaseUrl,
+                statusToken: statusToken?.token,
+            })
+        } else {
+            throw new Error(`Unsupported payment provider: ${paymentProvider}`)
+        }
 
         return responseJson({
             booking_id: booking.id,
@@ -304,12 +423,15 @@ Deno.serve(async (req) => {
             replayed,
             attempt_id: paymentAttempt.id,
             attempt_no: paymentAttempt.attempt_no,
+            gateway: paymentProvider,
             payment_provider: paymentAttempt.provider || paymentProvider,
             payment_status: "pending",
             payment_mode: mode,
             payable_now_amount: payableNow,
             total_amount: totalAmount,
-            payu,
+            status_token: statusToken?.token || null,
+            status_token_expires_at: statusToken?.expiresAt || null,
+            [paymentProvider]: gateway,
         })
     } catch (error: any) {
         return responseJson({ error: error?.message || "Retry failed" }, 400)
