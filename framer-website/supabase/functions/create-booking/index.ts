@@ -5,6 +5,12 @@ import {
     issueBookingStatusToken,
     resolveBookingStatusSecret,
 } from "../_shared/booking_status_token.ts"
+import {
+    buildPaymentAttemptInsert,
+    fingerprintBookingRequest,
+    isCompatibleIdempotentReplay,
+    normalizeIdempotencyKey,
+} from "../_shared/payment_idempotency.ts"
 import { appendRow, sheetsEnabled } from "../_shared/sheets.ts"
 
 const corsHeaders = {
@@ -84,6 +90,10 @@ function isMissingColumnError(error: any, columnName: string): boolean {
         .trim()
         .toLowerCase()
     return message.includes("column") && message.includes(needle)
+}
+
+function isUniqueViolation(error: any): boolean {
+    return String(error?.code || "").trim() === "23505"
 }
 
 function bookingSheetsWriteEnabled(): boolean {
@@ -520,6 +530,7 @@ async function readPayload(req: Request): Promise<any> {
     ) {
         const form = await req.formData()
         return {
+            checkout_request_id: form.get("checkout_request_id") || form.get("idempotency_key"),
             trip_id: form.get("trip_id"),
             date: form.get("date"),
             departure_date: form.get("departure_date"),
@@ -609,7 +620,20 @@ serve(async (req) => {
 
     try {
         const body = await readPayload(req)
-        console.log("📥 Incoming booking payload:", body)
+
+        const rawCheckoutRequestId = firstNonEmpty(
+            body?.checkout_request_id,
+            req.headers.get("idempotency-key"),
+        )
+        let checkoutRequestId = ""
+        try {
+            checkoutRequestId = normalizeIdempotencyKey(rawCheckoutRequestId, "checkout_request_id")
+        } catch (error: any) {
+            return new Response(
+                JSON.stringify({ error: error?.message || "checkout_request_id is required" }),
+                { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } },
+            )
+        }
 
         const tripId = firstNonEmpty(body?.trip_id)
         const departureDate = normalizeDateKey(firstNonEmpty(body?.departure_date, body?.date))
@@ -617,7 +641,7 @@ serve(async (req) => {
         const travellersInput = Array.isArray(body?.travellers) ? body.travellers : []
 
         const name = firstNonEmpty(body?.name)
-        const email = firstNonEmpty(body?.email)
+        const email = firstNonEmpty(body?.email).toLowerCase()
         const phone = firstNonEmpty(body?.phone)
         const currency = firstNonEmpty(body?.currency, "INR")
         const paymentMode = normalizePaymentMode(body?.payment_mode || body?.pricing_snapshot?.payment_mode)
@@ -628,7 +652,7 @@ serve(async (req) => {
         if (!tripId || !departureDate || !travellersInput.length || !name || !email) {
             return new Response(
                 JSON.stringify({
-                    error: "Missing required fields (trip_id, departure_date, travellers, name, email)",
+                    error: "Missing required fields (trip_id, departure_date, travellers, name, email, checkout_request_id)",
                 }),
                 { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
             )
@@ -678,6 +702,11 @@ serve(async (req) => {
         }
 
         const supabase = createClient(supabaseUrl, serviceRoleKey)
+        console.log("[create-booking] request received", {
+            checkout_request_id: checkoutRequestId,
+            trip_id: tripId,
+            departure_date: departureDate,
+        })
         const pricingRows = await fetchPricingRows(supabase, tripId)
 
         if (!pricingRows.length) {
@@ -749,7 +778,29 @@ serve(async (req) => {
         }
 
         const paymentBreakdown = buildGroupedPaymentBreakdown(pricingBreakdown.line_items)
-        const txnid = "txn_" + Date.now().toString().slice(-10) + Math.floor(Math.random() * 10000)
+        const checkoutRequestFingerprint = await fingerprintBookingRequest({
+            trip_id: tripId,
+            departure_date: departureDate,
+            transport: fallbackTransport,
+            travellers: resolvedTravellers,
+            name,
+            email,
+            phone,
+            currency: currency.toUpperCase(),
+            payment_mode: paymentMode,
+            coupon_code: couponCodeRequested,
+            pricing: {
+                subtotal_amount: subtotalAmount,
+                discount_amount: discountAmount,
+                tax_amount: taxAmount,
+                total_amount: totalAmount,
+                payable_now_amount: payableNowAmount,
+                due_amount: dueAmount,
+            },
+        })
+
+        const generatedTxnid = "txn_" + Date.now().toString().slice(-10) + Math.floor(Math.random() * 10000)
+        const paymentProvider = firstNonEmpty(Deno.env.get("PAYMENT_PROVIDER"), "payu").toLowerCase()
 
         const initialPaidAmount = 0
         const settlementStatus = "pending"
@@ -784,14 +835,37 @@ serve(async (req) => {
             name,
             email,
             phone: phone || "",
-            payu_txnid: txnid,
+            payu_txnid: generatedTxnid,
+            checkout_request_id: checkoutRequestId,
+            checkout_request_fingerprint: checkoutRequestFingerprint,
+            payment_provider: paymentProvider,
+            payment_attempt_number: 1,
         }
 
-        let { data, error } = await supabase
+        let replayed = false
+        let data: any = null
+        let error: any = null
+
+        const existingLookup = await supabase
             .from("bookings")
-            .insert(insertPayload)
             .select("*")
-            .single()
+            .eq("checkout_request_id", checkoutRequestId)
+            .maybeSingle()
+
+        if (existingLookup.error) {
+            error = existingLookup.error
+        } else if (existingLookup.data) {
+            data = existingLookup.data
+            replayed = true
+        } else {
+            const inserted = await supabase
+                .from("bookings")
+                .insert(insertPayload)
+                .select("*")
+                .single()
+            data = inserted.data
+            error = inserted.error
+        }
 
         if (error && isMissingColumnError(error, "balance_due_note")) {
             const fallbackInsertPayload = { ...insertPayload }
@@ -805,6 +879,17 @@ serve(async (req) => {
             error = fallback.error
         }
 
+        if (error && isUniqueViolation(error)) {
+            const concurrentLookup = await supabase
+                .from("bookings")
+                .select("*")
+                .eq("checkout_request_id", checkoutRequestId)
+                .maybeSingle()
+            data = concurrentLookup.data
+            error = concurrentLookup.error
+            replayed = Boolean(data)
+        }
+
         if (error || !data) {
             console.error("❌ Supabase insert error:", error)
             return new Response(
@@ -813,12 +898,94 @@ serve(async (req) => {
             )
         }
 
+        if (replayed && !isCompatibleIdempotentReplay(data.checkout_request_fingerprint, checkoutRequestFingerprint)) {
+            return new Response(
+                JSON.stringify({
+                    error: "checkout_request_id was already used with different booking data",
+                    code: "IDEMPOTENCY_CONFLICT",
+                }),
+                { status: 409, headers: { ...corsHeaders, "Content-Type": "application/json" } },
+            )
+        }
+
+        const latestAttemptLookup = await supabase
+            .from("payment_attempts")
+            .select("*")
+            .eq("booking_id", data.id)
+            .order("attempt_no", { ascending: false })
+            .limit(1)
+        if (latestAttemptLookup.error) {
+            return new Response(
+                JSON.stringify({ error: latestAttemptLookup.error.message || "Could not read payment attempt" }),
+                { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } },
+            )
+        }
+
+        let paymentAttempt = Array.isArray(latestAttemptLookup.data) ? latestAttemptLookup.data[0] : null
+        if (!paymentAttempt) {
+            const attemptPayload = buildPaymentAttemptInsert({
+                bookingId: data.id,
+                attemptNo: 1,
+                idempotencyKey: checkoutRequestId,
+                provider: paymentProvider,
+                amount: payableNowAmount,
+                currency,
+                providerTransactionId: firstNonEmpty(data.payu_txnid, generatedTxnid),
+                status: "pending",
+            })
+            attemptPayload.expires_at = new Date(Date.now() + 30 * 60 * 1000).toISOString()
+
+            const attemptInsert = await supabase
+                .from("payment_attempts")
+                .insert(attemptPayload)
+                .select("*")
+                .single()
+            if (attemptInsert.error && !isUniqueViolation(attemptInsert.error)) {
+                return new Response(
+                    JSON.stringify({ error: attemptInsert.error.message || "Could not create payment attempt" }),
+                    { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } },
+                )
+            }
+
+            if (attemptInsert.data) {
+                paymentAttempt = attemptInsert.data
+            } else {
+                const replayAttempt = await supabase
+                    .from("payment_attempts")
+                    .select("*")
+                    .eq("idempotency_key", checkoutRequestId)
+                    .maybeSingle()
+                if (replayAttempt.error || !replayAttempt.data) {
+                    return new Response(
+                        JSON.stringify({ error: replayAttempt.error?.message || "Could not resolve payment attempt" }),
+                        { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } },
+                    )
+                }
+                paymentAttempt = replayAttempt.data
+            }
+        }
+
+        const activeAttemptUpdate = await supabase
+            .from("bookings")
+            .update({
+                active_payment_attempt_id: paymentAttempt.id,
+                payment_attempt_number: paymentAttempt.attempt_no || 1,
+                payment_provider: paymentAttempt.provider || paymentProvider,
+            })
+            .eq("id", data.id)
+        if (activeAttemptUpdate.error && !isMissingColumnError(activeAttemptUpdate.error, "active_payment_attempt_id")) {
+            return new Response(
+                JSON.stringify({ error: activeAttemptUpdate.error.message || "Could not link payment attempt" }),
+                { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } },
+            )
+        }
+
         const bookingsSheetId = firstNonEmpty(
             Deno.env.get("GOOGLE_SHEET_ID_TRIPS"),
             Deno.env.get("GOOGLE_SHEET_ID")
         )
         const bookingsSheetTab = firstNonEmpty(Deno.env.get("BOOKINGS_SHEET_TAB"), "Bookings")
-        if (bookingLifecycleSheetsWriteEnabled() && sheetsEnabled() && bookingsSheetId) {
+        if (!replayed && bookingLifecycleSheetsWriteEnabled() && sheetsEnabled() && bookingsSheetId) {
             try {
                 const rowValues = buildBookingSheetRow({
                     booking: {
@@ -832,22 +999,31 @@ serve(async (req) => {
             } catch (sheetErr) {
                 console.error("[create-booking] sheets append failed", sheetErr)
             }
-        } else if (bookingSheetsWriteEnabled() && sheetsEnabled() && bookingsSheetId) {
+        } else if (!replayed && bookingSheetsWriteEnabled() && sheetsEnabled() && bookingsSheetId) {
             console.log(
                 "[create-booking] lifecycle sheet write skipped (BOOKING_LIFECYCLE_SHEETS_WRITE_ENABLED is false)"
             )
         }
 
         const productinfo = "Trip Booking"
-        const firstname = name.split(" ")[0]
+        const effectiveName = firstNonEmpty(data.name, name)
+        const effectiveEmail = firstNonEmpty(data.email, email).toLowerCase()
+        const effectivePhone = firstNonEmpty(data.phone, phone)
+        const firstname = effectiveName.split(" ")[0]
         const udf1 = data.id
-        const gatewayAmount = payableNowAmount.toFixed(2)
+        const effectivePayableNowAmount = round2(Math.max(0, toNumber(data.payable_now_amount || payableNowAmount)))
+        const gatewayAmount = effectivePayableNowAmount.toFixed(2)
+        const txnid = firstNonEmpty(
+            paymentAttempt.provider_transaction_id,
+            data.payu_txnid,
+            generatedTxnid,
+        )
         const bookingStatusSecret = resolveBookingStatusSecret(payuSalt)
         const bookingStatusToken = bookingStatusSecret
             ? await issueBookingStatusToken(udf1, bookingStatusSecret)
             : null
 
-        const hashString = `${payuKey}|${txnid}|${gatewayAmount}|${productinfo}|${firstname}|${email}|${udf1}||||||||||${payuSalt}`
+        const hashString = `${payuKey}|${txnid}|${gatewayAmount}|${productinfo}|${firstname}|${effectiveEmail}|${udf1}||||||||||${payuSalt}`
         const hashBuffer = await crypto.subtle.digest("SHA-512", new TextEncoder().encode(hashString))
         const hash = Array.from(new Uint8Array(hashBuffer))
             .map((b) => b.toString(16).padStart(2, "0"))
@@ -861,11 +1037,17 @@ serve(async (req) => {
         return new Response(
             JSON.stringify({
                 booking_id: data.id,
-                payment_mode: paymentMode,
-                total_amount: totalAmount,
-                payable_now_amount: payableNowAmount,
-                due_amount: dueAmount,
-                settlement_status: settlementStatus,
+                checkout_request_id: checkoutRequestId,
+                replayed,
+                attempt_id: paymentAttempt.id,
+                attempt_no: paymentAttempt.attempt_no || 1,
+                payment_provider: paymentAttempt.provider || paymentProvider,
+                payment_status: data.payment_status || "pending",
+                payment_mode: data.payment_mode || paymentMode,
+                total_amount: toNumber(data.total_amount || totalAmount),
+                payable_now_amount: effectivePayableNowAmount,
+                due_amount: toNumber(data.due_amount || dueAmount),
+                settlement_status: data.settlement_status || settlementStatus,
                 status_token: bookingStatusToken?.token || null,
                 status_token_expires_at: bookingStatusToken?.expiresAt || null,
                 payu: {
@@ -874,8 +1056,8 @@ serve(async (req) => {
                     amount: gatewayAmount,
                     productinfo,
                     firstname,
-                    email,
-                    phone: phone || "",
+                    email: effectiveEmail,
+                    phone: effectivePhone,
                     surl: callbackUrl,
                     furl: callbackUrl,
                     hash,

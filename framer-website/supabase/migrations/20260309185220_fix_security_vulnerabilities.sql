@@ -37,7 +37,12 @@ CREATE POLICY "anon_select_coupons"
 -- ──────────────────────────────────────────────────────────────
 -- 3. PAYMENT_ATTEMPTS: Drop dangerous INSERT-for-anon policy
 -- ──────────────────────────────────────────────────────────────
-DROP POLICY IF EXISTS "Enable insert for anon" ON public.payment_attempts;
+DO $$
+BEGIN
+  IF to_regclass('public.payment_attempts') IS NOT NULL THEN
+    EXECUTE 'DROP POLICY IF EXISTS "Enable insert for anon" ON public.payment_attempts';
+  END IF;
+END $$;
 
 -- ──────────────────────────────────────────────────────────────
 -- 4. TRIP_PRICING: Drop dangerous INSERT-for-anon policy
@@ -66,8 +71,12 @@ ALTER FUNCTION public.generate_booking_ref() SET search_path = public;
 -- ──────────────────────────────────────────────────────────────
 -- 7. ADD MISSING INDEX on payment_attempts.booking_id
 -- ──────────────────────────────────────────────────────────────
-CREATE INDEX IF NOT EXISTS idx_payment_attempts_booking_id
-  ON public.payment_attempts (booking_id);
+DO $$
+BEGIN
+  IF to_regclass('public.payment_attempts') IS NOT NULL THEN
+    EXECUTE 'CREATE INDEX IF NOT EXISTS idx_payment_attempts_booking_id ON public.payment_attempts (booking_id)';
+  END IF;
+END $$;
 
 -- ──────────────────────────────────────────────────────────────
 -- 8. DROP UNUSED INDEXES on coupons
