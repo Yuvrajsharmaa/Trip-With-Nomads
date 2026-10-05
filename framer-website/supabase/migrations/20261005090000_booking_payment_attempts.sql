@@ -95,16 +95,30 @@ create table if not exists public.payment_events (
     verification_status text not null default 'received'
         check (verification_status in ('received', 'verified', 'invalid', 'ignored')),
     processing_status text not null default 'received'
-        check (processing_status in ('received', 'applied', 'ignored', 'failed')),
+        check (processing_status in ('received', 'processing', 'applied', 'ignored', 'failed')),
     sheet_sync_status text not null default 'pending'
         check (sheet_sync_status in ('not_required', 'pending', 'synced', 'failed')),
+    reconciliation_result text,
     error_message text,
+    notes text,
     received_at timestamptz not null default timezone('utc', now()),
     verified_at timestamptz,
     processed_at timestamptz,
     sheet_synced_at timestamptz,
     unique (provider, provider_event_id)
 );
+
+alter table public.payment_events
+    add column if not exists reconciliation_result text,
+    add column if not exists notes text;
+
+-- Keep a stable constraint name when this migration is replayed against a
+-- database that already has the earlier event table shape.
+alter table public.payment_events
+    drop constraint if exists payment_events_processing_status_check;
+alter table public.payment_events
+    add constraint payment_events_processing_status_check
+    check (processing_status in ('received', 'processing', 'applied', 'ignored', 'failed'));
 
 create index if not exists payment_events_booking_id_idx
     on public.payment_events (booking_id);
