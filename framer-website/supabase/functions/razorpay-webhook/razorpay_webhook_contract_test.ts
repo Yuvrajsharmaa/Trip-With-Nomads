@@ -10,6 +10,7 @@ Deno.test("Razorpay webhook verifies raw payloads and persists generic payment e
     assertStringIncludes(source, "provider_event_id")
     assertStringIncludes(source, "sheet_sync_status")
     assertStringIncludes(source, "Razorpay API")
+    assertStringIncludes(source, 'processing === "processing"')
     assert(!source.includes("callback_orphan"))
     assertNotEquals(source.indexOf("await req.text()"), -1)
 })

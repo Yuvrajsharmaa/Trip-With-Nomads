@@ -7,9 +7,9 @@ import {
 } from "../_shared/booking_callback_sheets.ts"
 import {
     appendRow,
-    findRowByColumnValue,
-    safeUpdateRow,
+    appendHistoryRowOnce,
     sheetsEnabled,
+    upsertCurrentRow,
 } from "../_shared/sheets.ts"
 import {
     calculateSettlementStatus,
@@ -264,6 +264,10 @@ async function claimPaymentEvent(supabase: any, row: any): Promise<"process" | "
     const sheet = String(row?.sheet_sync_status || "").toLowerCase()
     if (processing === "ignored") return "done"
     if (processing === "applied") return sheet === "synced" || sheet === "not_required" ? "done" : "sheet"
+    // A worker can terminate after marking an event as processing. Reclaim it
+    // on the provider retry; reconciliation is monotonic and Sheet history is
+    // deduplicated by provider event ID, so replay is safe.
+    if (processing === "processing") return "process"
 
     const claimed = await supabase
         .from("payment_events")
@@ -513,9 +517,17 @@ function bookingSheetId(): string {
 
 async function syncPaymentSheets(params: {
     booking: any
+    attempt?: any
     eventId: string
     eventName: string
     notes: string
+    eventReceivedAt?: string
+    processedAt?: string
+    amountMinor?: number
+    expectedAmountMinor?: number
+    orderId?: string
+    paymentId?: string
+    reconciliationResult?: string
 }): Promise<boolean> {
     if (!isTruthy(Deno.env.get("BOOKING_SHEETS_WRITE_ENABLED")) || !sheetsEnabled()) return false
     const sheetId = bookingSheetId()
@@ -526,19 +538,44 @@ async function syncPaymentSheets(params: {
         booking: params.booking,
         eventStage: params.eventName,
         notes: params.notes,
+        updatedAt: params.processedAt,
     })
-    const currentMatch = await findRowByColumnValue(sheetId, bookingsTab, "Booking ID", String(params.booking.id), BOOKING_HEADERS)
-    if (currentMatch) await safeUpdateRow(sheetId, bookingsTab, currentMatch, currentRow, BOOKING_HEADERS)
-    else await appendRow(sheetId, bookingsTab, currentRow, BOOKING_HEADERS)
+    await upsertCurrentRow(
+        sheetId,
+        bookingsTab,
+        "Booking ID",
+        String(params.booking.id),
+        currentRow,
+        BOOKING_HEADERS,
+    )
 
     const historyTab = String(params.eventName === "payment.failed"
         ? firstNonEmpty(Deno.env.get("BOOKING_FAILED_SHEET_TAB"), "Bookings_Failed")
         : firstNonEmpty(Deno.env.get("BOOKING_SUCCESS_SHEET_TAB"), "Bookings_Success"))
     const historyRow = buildBookingCallbackRow({
         booking: params.booking,
-        notes: `${params.notes}; Event ID: ${params.eventId}`,
+        eventId: params.eventId,
+        eventReceivedAt: params.eventReceivedAt,
+        processedAt: params.processedAt,
+        eventType: params.eventName,
+        paymentResult: params.eventName === "payment.failed" ? "failed" : "paid",
+        paymentProvider: PROVIDER,
+        paymentAttempt: params.attempt?.attempt_no || params.booking.payment_attempt_number,
+        providerOrderReference: params.orderId,
+        providerPaymentReference: params.paymentId,
+        amountReceived: toNumber(params.amountMinor) / 100,
+        expectedAmount: toNumber(params.expectedAmountMinor) / 100,
+        reconciliationResult: params.reconciliationResult,
+        notes: params.notes,
     })
-    await appendRow(sheetId, historyTab, historyRow, BOOKING_CALLBACK_HEADERS)
+    await appendHistoryRowOnce(
+        sheetId,
+        historyTab,
+        "Event ID",
+        params.eventId,
+        historyRow,
+        BOOKING_CALLBACK_HEADERS,
+    )
     return true
 }
 
@@ -600,12 +637,30 @@ serve(async (req) => {
             if (!eventRow.booking_id) throw new Error("Applied event has no booking reference")
             const booking = await loadBooking(supabase, eventRow.booking_id, eventRow.provider_order_id || "")
             if (!booking) throw new Error("Booking for Sheet retry was not found")
+            let attempt = null
+            if (eventRow.payment_attempt_id) {
+                const attemptLookup = await supabase
+                    .from("payment_attempts")
+                    .select("*")
+                    .eq("id", eventRow.payment_attempt_id)
+                    .maybeSingle()
+                if (attemptLookup.error) throw attemptLookup.error
+                attempt = attemptLookup.data
+            }
             try {
                 const synced = await syncPaymentSheets({
                     booking,
+                    attempt,
                     eventId: eventRow.provider_event_id,
                     eventName: eventRow.event_type,
                     notes: eventRow.notes || eventRow.error_message || "Retrying payment Sheet projection",
+                    eventReceivedAt: eventRow.received_at,
+                    processedAt: new Date().toISOString(),
+                    amountMinor: eventRow.amount_minor,
+                    expectedAmountMinor: attempt?.amount_minor,
+                    orderId: eventRow.provider_order_id,
+                    paymentId: eventRow.provider_payment_id,
+                    reconciliationResult: eventRow.reconciliation_result,
                 })
                 eventRow = await updatePaymentEvent(supabase, eventRow.id, {
                     sheet_sync_status: synced ? "synced" : "not_required",
@@ -714,9 +769,17 @@ serve(async (req) => {
         try {
             const synced = await syncPaymentSheets({
                 booking: reconciliation.booking,
+                attempt,
                 eventId,
                 eventName,
                 notes: reconciliation.notes,
+                eventReceivedAt: eventRow.received_at,
+                processedAt: eventRow.processed_at || new Date().toISOString(),
+                amountMinor: gatewayState.amountMinor,
+                expectedAmountMinor: expectedAmountMinor,
+                orderId: identifiers.orderId,
+                paymentId: identifiers.paymentId,
+                reconciliationResult: reconciliation.reconciliationResult,
             })
             eventRow = await updatePaymentEvent(supabase, eventRow.id, {
                 sheet_sync_status: synced ? "synced" : "not_required",

@@ -20,6 +20,7 @@ export type SheetTabMetadata = {
 
 const ensuredHeaders = new Map<string, Set<string>>(); // map sheetId -> Set of tab names
 const ensuredTabs = new Map<string, Set<string>>();
+const ensuredFormatting = new Map<string, Set<string>>();
 let cachedToken: TokenCache | null = null;
 let cachedServiceAccount: ServiceAccount | null = null;
 
@@ -32,8 +33,16 @@ export function sheetsEnabled(): boolean {
     return isTruthy(Deno.env.get("SHEETS_WRITE_ENABLED"));
 }
 
-function shouldBootstrapHeaders(): boolean {
-    return isTruthy(Deno.env.get("SHEETS_BOOTSTRAP_HEADERS"));
+export type CurrentRowAction = "append" | "update" | "fail"
+
+export function currentRowAction(matchCount: number): CurrentRowAction {
+    if (matchCount === 0) return "append";
+    if (matchCount === 1) return "update";
+    return "fail";
+}
+
+export function hasExactHeaders(actual: string[], expected: string[]): boolean {
+    return actual.length === expected.length && expected.every((header, index) => actual[index] === header);
 }
 
 function getServiceAccount(): ServiceAccount {
@@ -123,16 +132,7 @@ async function ensureTab(tab: string, sheetId: string) {
         );
 
     if (!exists) {
-        const createRes = await sheetsFetch(":batchUpdate", sheetId, {
-            method: "POST",
-            body: JSON.stringify({
-                requests: [{ addSheet: { properties: { title: tab } } }],
-            }),
-        });
-        if (!createRes.ok) {
-            const text = await createRes.text();
-            throw new Error(`Sheet tab create failed: ${createRes.status} ${text}`);
-        }
+        throw new Error(`Managed Sheet tab not found: ${tab}`);
     }
 
     ensuredTabs.get(sheetId)!.add(tab);
@@ -140,23 +140,27 @@ async function ensureTab(tab: string, sheetId: string) {
 
 async function ensureHeaders(tab: string, headers: string[], sheetId: string) {
     await ensureTab(tab, sheetId);
-    if (!shouldBootstrapHeaders()) return;
-
     if (!ensuredHeaders.has(sheetId)) ensuredHeaders.set(sheetId, new Set());
     if (ensuredHeaders.get(sheetId)!.has(tab)) return;
 
-    const check = await sheetsFetch(`/values/${encodeURIComponent(tab)}!A1:A1`, sheetId);
+    const check = await sheetsFetch(`/values/${encodeURIComponent(tab)}!A1:ZZ1`, sheetId);
     if (!check.ok) {
         const text = await check.text();
         throw new Error(`Header check failed: ${check.status} ${text}`);
     }
     const data = await check.json();
-    const hasHeader = Array.isArray(data.values) && data.values.length > 0 &&
-        data.values[0][0];
-    if (!hasHeader) {
-        await updateRow(sheetId, tab, 1, headers);
+    const actual = Array.isArray(data?.values?.[0])
+        ? data.values[0].map((cell: any) => String(cell ?? "").trim())
+        : [];
+    const expected = headers.map((header) => String(header || "").trim());
+    const matches = hasExactHeaders(actual, expected);
+    if (!matches) {
+        throw new Error(
+            `Managed Sheet header drift in ${tab}: expected ${JSON.stringify(expected)}, got ${JSON.stringify(actual)}`,
+        );
     }
     ensuredHeaders.get(sheetId)!.add(tab);
+    await formatManagedTab(sheetId, tab, headers);
 }
 
 function parseRowIndex(range?: string | null): number | null {
@@ -194,79 +198,90 @@ export async function getSpreadsheetTabs(sheetId: string): Promise<SheetTabMetad
         .filter((sheet: SheetTabMetadata) => sheet.title && Number.isFinite(sheet.sheetId));
 }
 
-export async function duplicateTab(
+export async function formatManagedTab(
     sheetId: string,
-    sourceTab: string,
-    newTab: string,
+    tab: string,
+    headers: string[],
 ): Promise<void> {
-    if (!sheetsEnabled()) return;
-    const sourceTitle = String(sourceTab || "").trim();
-    const targetTitle = String(newTab || "").trim();
-    if (!sourceTitle || !targetTitle) {
-        throw new Error("duplicateTab requires sourceTab and newTab");
-    }
+    if (!sheetsEnabled() || !headers.length) return;
+    if (!ensuredFormatting.has(sheetId)) ensuredFormatting.set(sheetId, new Set());
+    if (ensuredFormatting.get(sheetId)!.has(tab)) return;
 
-    const tabs = await getSpreadsheetTabs(sheetId);
-    const source = tabs.find((tab) => tab.title === sourceTitle);
-    if (!source) {
-        throw new Error(`Source tab not found: ${sourceTitle}`);
-    }
-    const existing = tabs.find((tab) => tab.title === targetTitle);
-    if (existing) return;
+    const metadata = await getSpreadsheetTabs(sheetId);
+    const target = metadata.find((item) => item.title === tab);
+    if (!target) throw new Error(`Managed Sheet tab not found: ${tab}`);
+
+    const amountHeaders = new Set([
+        "Subtotal", "Discount", "GST", "Trip Total", "Payable Now", "Paid Amount", "Balance Due",
+        "Amount Received", "Expected Amount",
+    ]);
+    const wrapHeaders = new Set(["Traveller Summary", "Notes", "Reason", "Latest Page URL"]);
+    const requests: any[] = [
+        {
+            updateSheetProperties: {
+                properties: { sheetId: target.sheetId, gridProperties: { frozenRowCount: 1 } },
+                fields: "gridProperties.frozenRowCount",
+            },
+        },
+        {
+            setBasicFilter: {
+                filter: {
+                    range: { sheetId: target.sheetId, startRowIndex: 0, endColumnIndex: headers.length },
+                },
+            },
+        },
+        {
+            repeatCell: {
+                range: { sheetId: target.sheetId, startRowIndex: 0, endRowIndex: 1, endColumnIndex: headers.length },
+                cell: {
+                    userEnteredFormat: {
+                        textFormat: { bold: true },
+                        backgroundColor: { red: 0.91, green: 0.94, blue: 0.98 },
+                    },
+                },
+                fields: "userEnteredFormat(textFormat,backgroundColor)",
+            },
+        },
+    ];
+
+    headers.forEach((header, index) => {
+        const width = wrapHeaders.has(header) ? 280 : /url/i.test(header) ? 240 : 140;
+        requests.push({
+            updateDimensionProperties: {
+                range: { sheetId: target.sheetId, dimension: "COLUMNS", startIndex: index, endIndex: index + 1 },
+                properties: { pixelSize: width },
+                fields: "pixelSize",
+            },
+        });
+        if (amountHeaders.has(header)) {
+            requests.push({
+                repeatCell: {
+                    range: { sheetId: target.sheetId, startRowIndex: 1, startColumnIndex: index, endColumnIndex: index + 1 },
+                    cell: { userEnteredFormat: { numberFormat: { type: "NUMBER", pattern: "₹#,##0.00" } } },
+                    fields: "userEnteredFormat.numberFormat",
+                },
+            });
+        }
+        if (wrapHeaders.has(header)) {
+            requests.push({
+                repeatCell: {
+                    range: { sheetId: target.sheetId, startRowIndex: 1, startColumnIndex: index, endColumnIndex: index + 1 },
+                    cell: { userEnteredFormat: { wrapStrategy: "WRAP", verticalAlignment: "TOP" } },
+                    fields: "userEnteredFormat(wrapStrategy,verticalAlignment)",
+                },
+            });
+        }
+    });
 
     const res = await sheetsFetch(":batchUpdate", sheetId, {
         method: "POST",
-        body: JSON.stringify({
-            requests: [
-                {
-                    duplicateSheet: {
-                        sourceSheetId: source.sheetId,
-                        newSheetName: targetTitle,
-                    },
-                },
-            ],
-        }),
+        body: JSON.stringify({ requests }),
     });
     if (!res.ok) {
         const text = await res.text();
-        throw new Error(`Duplicate tab failed: ${res.status} ${text}`);
+        throw new Error(`Managed Sheet formatting failed: ${res.status} ${text}`);
     }
-    if (!ensuredTabs.has(sheetId)) ensuredTabs.set(sheetId, new Set());
-    ensuredTabs.get(sheetId)!.add(targetTitle);
-}
-
-export async function deleteTab(
-    sheetId: string,
-    tabTitle: string,
-): Promise<boolean> {
-    if (!sheetsEnabled()) return false;
-    const title = String(tabTitle || "").trim();
-    if (!title) return false;
-
-    const tabs = await getSpreadsheetTabs(sheetId);
-    const target = tabs.find((tab) => tab.title === title);
-    if (!target) return false;
-
-    const res = await sheetsFetch(":batchUpdate", sheetId, {
-        method: "POST",
-        body: JSON.stringify({
-            requests: [
-                {
-                    deleteSheet: {
-                        sheetId: target.sheetId,
-                    },
-                },
-            ],
-        }),
-    });
-    if (!res.ok) {
-        const text = await res.text();
-        throw new Error(`Delete tab failed: ${res.status} ${text}`);
-    }
-
-    ensuredTabs.get(sheetId)?.delete(title);
-    ensuredHeaders.get(sheetId)?.delete(title);
-    return true;
+    ensuredFormatting.get(sheetId)!.add(tab);
 }
 
 export async function clearTabValues(
@@ -399,27 +414,86 @@ export async function findRowByColumnValue(
     value: string,
     headers?: string[],
 ): Promise<number | null> {
-    if (!sheetsEnabled()) return null;
+    const matches = await findRowsByColumnValue(sheetId, tab, columnName, value, headers);
+    if (currentRowAction(matches.length) === "fail") {
+        throw new Error(
+            `Multiple current-state Sheet rows match ${columnName}=${String(value || "").trim()} in ${tab}`,
+        );
+    }
+    return matches[0] || null;
+}
+
+export async function findRowsByColumnValue(
+    sheetId: string,
+    tab: string,
+    columnName: string,
+    value: string,
+    headers?: string[],
+): Promise<number[]> {
+    if (!sheetsEnabled()) return [];
     const needle = String(value || "").trim();
-    if (!needle) return null;
+    if (!needle) return [];
 
     await ensureTab(tab, sheetId);
     if (headers?.length) await ensureHeaders(tab, headers, sheetId);
 
     const rows = await readTabValues(sheetId, tab, "A1:ZZ");
-    if (rows.length === 0) return null;
+    if (rows.length === 0) return [];
 
     const header = Array.isArray(rows[0]) ? rows[0].map((cell) => String(cell || "").trim()) : [];
     const index = header.findIndex((cell) => cell.toLowerCase() === String(columnName || "").trim().toLowerCase());
-    if (index < 0) return null;
+    if (index < 0) return [];
 
+    const matches: number[] = [];
     for (let i = 1; i < rows.length; i++) {
         const row = Array.isArray(rows[i]) ? rows[i] : [];
         const cell = String(row[index] || "").trim();
-        if (cell === needle) return i + 1;
+        if (cell === needle) matches.push(i + 1);
     }
 
-    return null;
+    return matches;
+}
+
+export async function upsertCurrentRow(
+    sheetId: string,
+    tab: string,
+    keyColumn: string,
+    keyValue: string,
+    values: (string | number | null)[],
+    headers?: string[],
+): Promise<{ row: number; created: boolean }> {
+    if (!String(keyValue || "").trim()) {
+        throw new Error(`Current-state Sheet key is required for ${tab}`)
+    }
+    const matches = await findRowsByColumnValue(sheetId, tab, keyColumn, keyValue, headers);
+    if (currentRowAction(matches.length) === "fail") {
+        throw new Error(
+            `Multiple current-state Sheet rows match ${keyColumn}=${String(keyValue || "").trim()} in ${tab}`,
+        );
+    }
+    if (matches.length === 1) {
+        await updateRow(sheetId, tab, matches[0], values, headers);
+        return { row: matches[0], created: false };
+    }
+    const row = await appendRow(sheetId, tab, values, headers);
+    if (!row) throw new Error(`Current-state Sheet row append returned no row for ${tab}`);
+    return { row, created: true };
+}
+
+export async function appendHistoryRowOnce(
+    sheetId: string,
+    tab: string,
+    eventIdColumn: string,
+    eventId: string,
+    values: (string | number | null)[],
+    headers?: string[],
+): Promise<{ row: number | null; appended: boolean }> {
+    if (!String(eventId || "").trim()) {
+        throw new Error(`History event key is required for ${tab}`)
+    }
+    const matches = await findRowsByColumnValue(sheetId, tab, eventIdColumn, eventId, headers);
+    if (matches.length > 0) return { row: matches[0], appended: false };
+    return { row: await appendRow(sheetId, tab, values, headers), appended: true };
 }
 
 export async function safeUpdateRow(
