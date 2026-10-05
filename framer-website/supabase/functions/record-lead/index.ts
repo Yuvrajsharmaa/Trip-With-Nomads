@@ -1,181 +1,492 @@
-import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
-import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
-import { appendRow, sheetsEnabled } from "../_shared/sheets.ts";
+import { createClient } from "https://esm.sh/@supabase/supabase-js@2"
+import {
+    appendHistoryRowOnce,
+    sheetsEnabled,
+    upsertCurrentRow,
+} from "../_shared/sheets.ts"
+import {
+    ABANDONED_LEAD_HEADERS,
+    buildAbandonedLeadSheetRow,
+    buildInviteLeadSheetRow,
+    buildLeadSheetRow,
+    LEAD_HEADERS,
+    NTC_INVITE_HEADERS,
+} from "../_shared/lead_sheets.ts"
 
 const corsHeaders = {
     "Access-Control-Allow-Origin": "*",
-    "Access-Control-Allow-Headers":
-        "authorization, x-client-info, apikey, content-type",
+    "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
     "Access-Control-Allow-Methods": "POST, OPTIONS",
-};
+}
 
 function json(payload: Record<string, unknown>, status = 200) {
     return new Response(JSON.stringify(payload), {
         status,
         headers: { ...corsHeaders, "Content-Type": "application/json" },
-    });
+    })
 }
 
-const LEAD_HEADERS = [
-    "Lead ID",
-    "Created At",
-    "Name",
-    "Email",
-    "Phone",
-    "Instagram ID",
-    "Reason",
-    "Source",
-    "Page URL",
-    "Trip ID",
-    "Trip Slug",
-    "UTM Source",
-    "UTM Medium",
-    "UTM Campaign",
-    "Status",
-];
-
-function formatTimestamp(value: string): string {
-    const date = new Date(value);
-    if (Number.isNaN(date.getTime())) return value;
-    const text = new Intl.DateTimeFormat("en-IN", {
-        timeZone: "Asia/Kolkata",
-        day: "2-digit",
-        month: "short",
-        year: "numeric",
-        hour: "2-digit",
-        minute: "2-digit",
-        second: "2-digit",
-        hour12: true,
-    }).format(date);
-    return `${text} IST`;
+function compact(value: any): string {
+    return String(value ?? "").trim()
 }
 
-serve(async (req) => {
-    if (req.method === "OPTIONS") {
-        return new Response("ok", { headers: corsHeaders });
+function normalizeEmail(value: unknown): string {
+    return compact(value).toLowerCase()
+}
+
+function isUuid(value: unknown): boolean {
+    return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(compact(value))
+}
+
+function isValidEmail(value: string): boolean {
+    return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value)
+}
+
+function normalizeSource(value: unknown): string {
+    return compact(value) || "unknown"
+}
+
+function isTerminalStatus(value: unknown): boolean {
+    return new Set([
+        "converted",
+        "booked",
+        "paid",
+        "customer",
+        "closed_won",
+        "won",
+        "lost",
+        "closed_lost",
+    ]).has(compact(value).toLowerCase())
+}
+
+function firstNonEmpty(...values: unknown[]): string {
+    for (const value of values) {
+        const next = compact(value)
+        if (next) return next
+    }
+    return ""
+}
+
+function stableObject(value: any): any {
+    if (Array.isArray(value)) return value.map(stableObject)
+    if (!value || typeof value !== "object") return value
+    return Object.keys(value).sort().reduce((result: Record<string, any>, key) => {
+        result[key] = stableObject(value[key])
+        return result
+    }, {})
+}
+
+async function payloadHash(value: any): Promise<string> {
+    const bytes = new TextEncoder().encode(JSON.stringify(stableObject(value)))
+    const digest = await crypto.subtle.digest("SHA-256", bytes)
+    return Array.from(new Uint8Array(digest)).map((byte) => byte.toString(16).padStart(2, "0")).join("")
+}
+
+function routeForLead(source: string, status: string): { sheetId: string; tab: string; note: string } {
+    const ntcSheetId = compact(Deno.env.get("GOOGLE_SHEET_ID_NTC"))
+    const tripsSheetId = compact(Deno.env.get("GOOGLE_SHEET_ID_TRIPS"))
+    const generalSheetId = compact(Deno.env.get("GOOGLE_SHEET_ID_GENERAL") || Deno.env.get("GOOGLE_SHEET_ID"))
+    const isPartial = status === "partial_fill"
+    const knownSource = new Set(["waitlist_popup", "booking_invite", "trip_page_lead", "general_lead"])
+    const sourceNote = knownSource.has(source) ? "" : `unknown_source:${source}`
+
+    if (source === "booking_invite") {
+        return {
+            sheetId: ntcSheetId,
+            tab: isPartial ? "Abandoned Leads" : "NTC - Invites",
+            note: sourceNote,
+        }
+    }
+    if (source === "trip_page_lead") {
+        return {
+            sheetId: tripsSheetId,
+            tab: isPartial ? "Abandoned Leads" : "Leads",
+            note: sourceNote,
+        }
+    }
+    return {
+        sheetId: generalSheetId,
+        tab: isPartial ? "Abandoned Leads" : "Leads",
+        note: sourceNote,
+    }
+}
+
+async function findExistingLead(supabase: any, normalizedEmail: string): Promise<any | null> {
+    if (!normalizedEmail) return null
+    const result = await supabase.from("leads").select("*").not("email", "is", null).limit(1000)
+    if (result.error) throw result.error
+    const matches = (Array.isArray(result.data) ? result.data : []).filter(
+        (lead: any) => normalizeEmail(lead?.email) === normalizedEmail,
+    )
+    if (matches.length > 1) {
+        throw new Error(`Multiple lead rows match normalized email ${normalizedEmail}; repair required`)
+    }
+    return matches[0] || null
+}
+
+async function resolveLeadIdentity(params: {
+    supabase: any
+    normalizedEmail: string
+    suppliedLeadId: string
+}): Promise<{ leadId: string; existingLead: any | null }> {
+    const { supabase, normalizedEmail, suppliedLeadId } = params
+    if (suppliedLeadId && !isUuid(suppliedLeadId)) throw new Error("lead_id must be a UUID")
+
+    if (suppliedLeadId) {
+        const supplied = await supabase.from("leads").select("*").eq("id", suppliedLeadId).maybeSingle()
+        if (supplied.error) throw supplied.error
+        if (supplied.data && normalizedEmail && normalizeEmail(supplied.data.email) !== normalizedEmail) {
+            throw new Error("lead_id does not belong to the supplied normalized email")
+        }
     }
 
-    if (req.method !== "POST") {
-        return json({ error: "Method not allowed" }, 405);
+    const existingLead = await findExistingLead(supabase, normalizedEmail)
+    if (existingLead && suppliedLeadId && String(existingLead.id) !== suppliedLeadId) {
+        throw new Error("lead_id conflicts with the existing normalized email identity")
     }
+
+    if (!normalizedEmail) return { leadId: suppliedLeadId, existingLead: null }
+
+    const identity = await supabase
+        .from("lead_identities")
+        .select("*")
+        .eq("normalized_email", normalizedEmail)
+        .maybeSingle()
+    if (identity.error) throw identity.error
+    if (identity.data) {
+        const identityLeadId = compact(identity.data.lead_id)
+        if (suppliedLeadId && identityLeadId !== suppliedLeadId) {
+            throw new Error("lead_id conflicts with the existing normalized email identity")
+        }
+        if (existingLead && String(existingLead.id) !== identityLeadId) {
+            throw new Error(`Duplicate lead identity rows require repair for ${normalizedEmail}`)
+        }
+        return { leadId: identityLeadId, existingLead }
+    }
+
+    const requestedLeadId = suppliedLeadId || String(existingLead?.id || "")
+    const leadId = requestedLeadId || crypto.randomUUID()
+    const inserted = await supabase
+        .from("lead_identities")
+        .insert({ normalized_email: normalizedEmail, lead_id: leadId })
+        .select("*")
+        .maybeSingle()
+    if (inserted.error && String(inserted.error.code || "") !== "23505") throw inserted.error
+    if (inserted.data) {
+        const insertedLeadId = compact(inserted.data.lead_id)
+        if (suppliedLeadId && insertedLeadId !== suppliedLeadId) {
+            throw new Error("lead_id conflicts with the existing normalized email identity")
+        }
+        if (existingLead && String(existingLead.id) !== insertedLeadId) {
+            throw new Error(`Duplicate lead identity rows require repair for ${normalizedEmail}`)
+        }
+        return { leadId: insertedLeadId, existingLead }
+    }
+    if (inserted.error) {
+        const concurrent = await supabase
+            .from("lead_identities")
+            .select("*")
+            .eq("normalized_email", normalizedEmail)
+            .single()
+        if (concurrent.error) throw concurrent.error
+        const concurrentLeadId = compact(concurrent.data?.lead_id)
+        if (suppliedLeadId && concurrentLeadId !== suppliedLeadId) {
+            throw new Error("lead_id conflicts with the existing normalized email identity")
+        }
+        if (existingLead && String(existingLead.id) !== concurrentLeadId) {
+            throw new Error(`Duplicate lead identity rows require repair for ${normalizedEmail}`)
+        }
+        return { leadId: concurrentLeadId, existingLead }
+    }
+    return { leadId, existingLead }
+}
+
+async function updateCurrentLead(params: {
+    supabase: any
+    leadId: string
+    existingLead: any | null
+    body: any
+    normalizedEmail: string
+    source: string
+    status: string
+    submissionId: string
+    now: string
+}) {
+    const { supabase, leadId, existingLead, body, normalizedEmail, source, status, submissionId, now } = params
+    if (!leadId) return null
+    const existingStatus = firstNonEmpty(existingLead?.current_status, existingLead?.status, "submitted")
+    const currentStatus = isTerminalStatus(existingStatus) ? existingStatus : status
+    const submissionCountLookup = await supabase
+        .from("lead_submissions")
+        .select("id", { count: "exact", head: true })
+        .eq("lead_id", leadId)
+    if (submissionCountLookup.error) throw submissionCountLookup.error
+    const submissionCount = Number.isFinite(Number(submissionCountLookup.count))
+        ? Number(submissionCountLookup.count)
+        : Math.max(0, Number(existingLead?.submission_count || 0)) + 1
+    const current = {
+        id: leadId,
+        email: normalizedEmail || compact(existingLead?.email) || null,
+        name: firstNonEmpty(body?.name, existingLead?.name) || null,
+        phone: firstNonEmpty(body?.phone, existingLead?.phone) || null,
+        instagram_id: firstNonEmpty(body?.instagram_id, existingLead?.instagram_id) || null,
+        source,
+        latest_source: source,
+        page_url: firstNonEmpty(body?.page_url, existingLead?.page_url) || null,
+        latest_page_url: firstNonEmpty(body?.page_url, existingLead?.latest_page_url, existingLead?.page_url) || null,
+        trip_id: firstNonEmpty(body?.trip_id, existingLead?.trip_id) || null,
+        latest_trip_id: firstNonEmpty(body?.trip_id, existingLead?.latest_trip_id, existingLead?.trip_id) || null,
+        trip_slug: firstNonEmpty(body?.trip_slug, existingLead?.trip_slug) || null,
+        latest_trip_slug: firstNonEmpty(body?.trip_slug, existingLead?.latest_trip_slug, existingLead?.trip_slug) || null,
+        utm_source: firstNonEmpty(body?.utm_source, existingLead?.utm_source) || null,
+        latest_utm_source: firstNonEmpty(body?.utm_source, existingLead?.latest_utm_source, existingLead?.utm_source) || null,
+        utm_medium: firstNonEmpty(body?.utm_medium, existingLead?.utm_medium) || null,
+        latest_utm_medium: firstNonEmpty(body?.utm_medium, existingLead?.latest_utm_medium, existingLead?.utm_medium) || null,
+        utm_campaign: firstNonEmpty(body?.utm_campaign, existingLead?.utm_campaign) || null,
+        latest_utm_campaign: firstNonEmpty(body?.utm_campaign, existingLead?.latest_utm_campaign, existingLead?.utm_campaign) || null,
+        utm_term: firstNonEmpty(body?.utm_term, existingLead?.utm_term) || null,
+        latest_utm_term: firstNonEmpty(body?.utm_term, existingLead?.latest_utm_term, existingLead?.utm_term) || null,
+        utm_content: firstNonEmpty(body?.utm_content, existingLead?.utm_content) || null,
+        latest_utm_content: firstNonEmpty(body?.utm_content, existingLead?.latest_utm_content, existingLead?.utm_content) || null,
+        first_seen_at: firstNonEmpty(existingLead?.first_seen_at, existingLead?.created_at, now),
+        last_seen_at: now,
+        submission_count: submissionCount,
+        current_status: currentStatus,
+        status: currentStatus,
+        latest_submission_id: submissionId,
+        updated_at: now,
+    }
+    const result = await supabase.from("leads").upsert(current, { onConflict: "id" }).select("*").single()
+    if (result.error) throw result.error
+    const reconciledCount = await supabase.rpc("reconcile_lead_submission_count", {
+        target_lead_id: leadId,
+    })
+    if (reconciledCount.error) throw reconciledCount.error
+    if (Number.isFinite(Number(reconciledCount.data))) {
+        result.data.submission_count = Number(reconciledCount.data)
+    }
+    return result.data
+}
+
+async function projectLead(params: {
+    lead: any | null
+    submission: any
+    submissionId: string
+    source: string
+    status: string
+    notes: string
+}) {
+    if (!sheetsEnabled()) return { sheetLogged: false, sheetStatus: "not_required" }
+    const route = routeForLead(params.source, params.status)
+    if (!route.sheetId) return { sheetLogged: false, sheetStatus: "not_required" }
+
+    if (params.status === "partial_fill") {
+        const values = buildAbandonedLeadSheetRow({
+            submission: {
+                ...params.submission,
+                submission_id: params.submissionId,
+                lead_id: params.lead?.id || "",
+                reason: params.submission.reason || "partial_fill",
+            },
+        })
+        await appendHistoryRowOnce(
+            route.sheetId,
+            route.tab,
+            "Submission ID",
+            params.submissionId,
+            values,
+            ABANDONED_LEAD_HEADERS,
+        )
+    } else {
+        if (!params.lead) throw new Error("Current lead row is missing before Sheet projection")
+        const routeNotes = [route.note, params.notes].filter(Boolean).join(" | ")
+        const isInviteRoute = route.tab === "NTC - Invites"
+        const values = isInviteRoute
+            ? buildInviteLeadSheetRow({ lead: params.lead, submission: params.submission, notes: routeNotes })
+            : buildLeadSheetRow({
+                lead: params.lead,
+                latestSubmissionId: params.submissionId,
+                notes: routeNotes,
+            })
+        await upsertCurrentRow(
+            route.sheetId,
+            route.tab,
+            "Email",
+            normalizeEmail(params.lead.email),
+            values,
+            isInviteRoute ? NTC_INVITE_HEADERS : LEAD_HEADERS,
+        )
+    }
+    return { sheetLogged: true, sheetStatus: "synced" }
+}
+
+Deno.serve(async (req) => {
+    if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders })
+    if (req.method !== "POST") return json({ error: "Method not allowed" }, 405)
 
     try {
-        const body = await req.json();
-        const email = String(body?.email || "").trim().toLowerCase();
-        if (!email) return json({ error: "Email is required" }, 400);
+        const body = await req.json().catch(() => ({}))
+        const submissionId = compact(body?.submission_id)
+        if (!isUuid(submissionId)) return json({ error: "submission_id must be a UUID" }, 400)
 
-        const leadId = body?.lead_id ? String(body.lead_id).trim() : undefined;
-        const status = body?.status ? String(body.status).trim() : "submitted";
+        const status = compact(body?.status || "submitted").toLowerCase()
+        const partialFill = status === "partial_fill"
+        const normalizedEmail = normalizeEmail(body?.email)
+        if (!normalizedEmail && !partialFill) return json({ error: "Email is required" }, 400)
+        if (normalizedEmail && !isValidEmail(normalizedEmail)) return json({ error: "Email is invalid" }, 400)
 
-        // Extra fields for sheets only (not in DB leads table)
-        const instagram_id = body?.instagram_id ? String(body.instagram_id).trim() : null;
-        const reason = body?.reason ? String(body.reason).trim() : null;
-
-        const payload = {
-            ...(leadId ? { id: leadId } : {}),
-            email,
-            name: body?.name ? String(body.name).trim() : null,
-            phone: body?.phone ? String(body.phone).trim() : null,
-            source: body?.source ? String(body.source).trim() : "waitlist_popup",
-            page_url: body?.page_url ? String(body.page_url).trim() : null,
-            trip_id: body?.trip_id ? String(body.trip_id).trim() : null,
-            trip_slug: body?.trip_slug ? String(body.trip_slug).trim() : null,
-            utm_source: body?.utm_source ? String(body.utm_source).trim() : null,
-            utm_medium: body?.utm_medium ? String(body.utm_medium).trim() : null,
-            utm_campaign: body?.utm_campaign
-                ? String(body.utm_campaign).trim()
-                : null,
+        const source = normalizeSource(body?.source)
+        const now = new Date().toISOString()
+        const submissionPayload = {
+            submission_id: submissionId,
+            lead_id: compact(body?.lead_id) || null,
+            normalized_email: normalizedEmail || null,
+            source,
             status,
-        };
+            name: compact(body?.name),
+            email: normalizedEmail,
+            phone: compact(body?.phone),
+            instagram_id: compact(body?.instagram_id),
+            page_url: compact(body?.page_url),
+            trip_id: compact(body?.trip_id),
+            trip_slug: compact(body?.trip_slug),
+            utm_source: compact(body?.utm_source),
+            utm_medium: compact(body?.utm_medium),
+            utm_campaign: compact(body?.utm_campaign),
+            utm_term: compact(body?.utm_term),
+            utm_content: compact(body?.utm_content),
+            reason: compact(body?.reason || (partialFill ? "partial_fill" : "")),
+        }
+        const hash = await payloadHash(submissionPayload)
 
-        const supabaseUrl = Deno.env.get("SUPABASE_URL");
-        const supabaseServiceRole = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
-        if (!supabaseUrl || !supabaseServiceRole) {
-            return json({ error: "Supabase environment not configured" }, 500);
+        const supabaseUrl = compact(Deno.env.get("SUPABASE_URL"))
+        const serviceRoleKey = compact(Deno.env.get("SUPABASE_SERVICE_ROLE_KEY"))
+        if (!supabaseUrl || !serviceRoleKey) return json({ error: "Supabase environment not configured" }, 500)
+        const supabase = createClient(supabaseUrl, serviceRoleKey)
+
+        const existingSubmission = await supabase
+            .from("lead_submissions")
+            .select("*")
+            .eq("submission_id", submissionId)
+            .maybeSingle()
+        if (existingSubmission.error) throw existingSubmission.error
+        if (existingSubmission.data && existingSubmission.data.payload_hash !== hash) {
+            return json({ error: "submission_id was already used with different lead data", code: "IDEMPOTENCY_CONFLICT" }, 409)
         }
 
-        const supabase = createClient(supabaseUrl, supabaseServiceRole);
-        const { data: insertedLead, error } = await supabase
-            .from("leads")
-            .upsert(payload, { onConflict: "id" })
-            .select()
-            .single();
+        let lead: any | null = null
+        let leadId = compact(existingSubmission.data?.lead_id || body?.lead_id)
+        if (leadId && !isUuid(leadId)) return json({ error: "lead_id must be a UUID" }, 400)
+        if (!partialFill || normalizedEmail) {
+            const identity = await resolveLeadIdentity({
+                supabase,
+                normalizedEmail,
+                suppliedLeadId: leadId,
+            })
+            leadId = identity.leadId
+        }
 
-        let lead = insertedLead;
-        if (error || !lead) {
-            const message = String(error?.message || "");
-            const missingLeadsTable = message.includes("table 'public.leads'") ||
-                message.includes('relation "leads" does not exist');
-            if (!missingLeadsTable) {
-                console.error("[record-lead] upsert error", error);
-                return json({ error: error?.message || "Could not upsert lead" }, 500);
+        if (!existingSubmission.data) {
+            const inserted = await supabase
+                .from("lead_submissions")
+                .insert({
+                    submission_id: submissionId,
+                    lead_id: leadId || null,
+                    normalized_email: normalizedEmail || null,
+                    source,
+                    status,
+                    payload_hash: hash,
+                    payload: submissionPayload,
+                    sheet_sync_status: "pending",
+                })
+                .select("*")
+                .single()
+            if (inserted.error && String(inserted.error.code || "") === "23505") {
+                return json({ error: "Submission is being processed; retry with the same submission_id" }, 409)
             }
-
-            console.warn(
-                "[record-lead] leads table missing; falling back to Sheets-only logging",
-            );
-            lead = {
-                id: payload.id || crypto.randomUUID(),
-                created_at: new Date().toISOString(),
-                ...payload,
-            } as typeof insertedLead;
+            if (inserted.error) throw inserted.error
         }
 
-        let sheetLogged = false;
-        let sheetId = "";
-        let sheetTab = "Leads";
-
-        // ── Sheet routing ─────────────────────────────────
-        const NTC_SHEET_ID = String(Deno.env.get("GOOGLE_SHEET_ID_NTC") || "");
-        const ORIGINAL_SHEET_ID = String(Deno.env.get("GOOGLE_SHEET_ID") || "");
-        const TRIPS_SHEET_ID = String(Deno.env.get("GOOGLE_SHEET_ID_TRIPS") || "");
-        const GENERAL_SHEET_ID = String(Deno.env.get("GOOGLE_SHEET_ID_GENERAL") || "");
-
-        if (payload.source === "booking_invite") {
-            sheetId = NTC_SHEET_ID;
-            sheetTab = status === "partial_fill" ? "Abandoned Leads" : "NTC - Invites";
-        } else if (payload.source === "trip_page_lead") {
-            sheetId = TRIPS_SHEET_ID;
-            sheetTab = status === "partial_fill" ? "Abandoned Leads" : "Leads";
-        } else {
-            // General leads (waitlist_popup, general_lead, etc)
-            sheetId = GENERAL_SHEET_ID;
-            sheetTab = status === "partial_fill" ? "Abandoned Leads" : "Leads";
+        if (!partialFill || normalizedEmail) {
+            if (existingSubmission.data) {
+                const existing = await supabase.from("leads").select("*").eq("id", leadId).maybeSingle()
+                if (existing.error) throw existing.error
+                lead = existing.data
+                if (!lead && leadId) {
+                    const storedPayload = existingSubmission.data.payload || submissionPayload
+                    lead = await updateCurrentLead({
+                        supabase,
+                        leadId,
+                        existingLead: null,
+                        body: storedPayload,
+                        normalizedEmail: normalizeEmail(existingSubmission.data.normalized_email || storedPayload.email),
+                        source: compact(existingSubmission.data.source || storedPayload.source) || source,
+                        status: compact(existingSubmission.data.status || storedPayload.status) || status,
+                        submissionId,
+                        now,
+                    })
+                }
+            } else {
+                const identity = await resolveLeadIdentity({
+                    supabase,
+                    normalizedEmail,
+                    suppliedLeadId: leadId,
+                })
+                lead = await updateCurrentLead({
+                    supabase,
+                    leadId,
+                    existingLead: identity.existingLead,
+                    body,
+                    normalizedEmail,
+                    source,
+                    status,
+                    submissionId,
+                    now,
+                })
+            }
         }
 
-        if (sheetsEnabled() && sheetId) {
-            const values = [
-                lead.id,
-                formatTimestamp(String(lead.created_at || "")),
-                lead.name || "",
-                lead.email,
-                lead.phone || "",
-                instagram_id || "",
-                reason || "",
-                lead.source || "",
-                lead.page_url || "",
-                lead.trip_id || "",
-                lead.trip_slug || "",
-                lead.utm_source || "",
-                lead.utm_medium || "",
-                lead.utm_campaign || "",
+        const routeNotes = ""
+        try {
+            const projection = await projectLead({
+                lead,
+                submission: submissionPayload,
+                submissionId,
+                source,
                 status,
-            ];
-            try {
-                await appendRow(sheetId, sheetTab, values, LEAD_HEADERS);
-                sheetLogged = true;
-            } catch (sheetErr) {
-                console.error("[record-lead] sheets append failed", sheetErr);
-            }
+                notes: routeNotes,
+            })
+            await supabase.from("lead_submissions").update({
+                sheet_sync_status: projection.sheetStatus,
+                sheet_synced_at: projection.sheetStatus === "synced" ? new Date().toISOString() : null,
+                error_message: null,
+                updated_at: new Date().toISOString(),
+            }).eq("submission_id", submissionId)
+            return json({
+                ok: true,
+                lead_id: leadId || null,
+                submission_id: submissionId,
+                sheet_logged: projection.sheetLogged,
+                replayed: Boolean(existingSubmission.data),
+            })
+        } catch (sheetError: any) {
+            await supabase.from("lead_submissions").update({
+                sheet_sync_status: "failed",
+                error_message: compact(sheetError?.message || sheetError).slice(0, 500),
+                updated_at: new Date().toISOString(),
+            }).eq("submission_id", submissionId)
+            return json({
+                ok: false,
+                error: "Lead saved; Sheet projection failed and can be retried",
+                code: "SHEET_SYNC_FAILED",
+                lead_id: leadId || null,
+                submission_id: submissionId,
+            }, 503)
         }
-
-        return json({
-            ok: true,
-            lead_id: lead.id,
-            sheet_logged: sheetLogged,
-        });
-    } catch (err) {
-        console.error("[record-lead] error", err);
-        return json({ error: "Internal Server Error" }, 500);
+    } catch (err: any) {
+        console.error("[record-lead] error", err)
+        const message = compact(err?.message || err)
+        const conflict = /conflict|duplicate|different normalized email|repair required/i.test(message)
+        return json({ error: message || "Internal Server Error" }, conflict ? 409 : 500)
     }
-});
+})
