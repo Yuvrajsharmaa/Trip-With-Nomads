@@ -9,7 +9,6 @@ const pendingBooking = {
   booking_ref: "TWN-2026-00123",
   name: "Guest User",
   email: "guest@example.com",
-  trip_type: "GTI",
   departure_date: "2026-05-09",
   travellers: [
     { id: 1, name: "Guest User", sharing: "Double", transport: "SUV" },
@@ -83,8 +82,8 @@ const failed = buildPaymentEmail(
     payment_gateway_txn_id: "pay_failed",
   },
   "Summer Spiti",
-  "https://staging.tripwithnomads.com",
-  "https://staging.tripwithnomads.com/payment-failed?booking_id=booking-123&status_token=abc",
+  "https://maroon-aside-814100.framer.app",
+  "https://maroon-aside-814100.framer.app/payment-failed?booking_id=booking-123&status_token=abc",
 )!;
 
 const variants = {

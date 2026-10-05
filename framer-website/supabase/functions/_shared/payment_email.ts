@@ -53,8 +53,14 @@ const SUPPORT_EMAIL = "support@tripwithnomads.com";
 const WHATSAPP_PHONE = "919318405401";
 const BRAND_BLUE = "#08b1ff";
 const BRAND_NAVY = "#0b3550";
+const REGISTERED_OFFICE_MAP_URL = "https://maps.app.goo.gl/TS9umsDXBHxs6K2d6";
 const REGISTERED_OFFICE =
   "Near Old Capital Bus Stand Holi Gate, 2nd Floor, Shop No-07, Ballabgargh, Faridabad, Haryana, 121004";
+const BANK_ACCOUNT_NAME = "TRIP WITH NOMADS";
+const BANK_ACCOUNT_NUMBER = "8447333965";
+const BANK_IFSC = "KKBK0004369";
+const BANK_NAME = "KOTAK MAHINDRA BANK";
+const BANK_UPI_ID = "9318405401@kotak";
 
 function text(value: unknown): string {
   return String(value || "").trim();
@@ -481,12 +487,13 @@ export function buildPaymentEmail(
         "Important payment information:",
         "Pending amount: " + formatAmount(dueAmount),
         "The pending amount must be cleared at least 14 days prior to your travel date.",
-        "Make any further payment only to the official Nomads Travel Club bank account. Trip With Nomads is not responsible for payments made to personal accounts or third parties.",
+        "Make any further payment only to the official Trip With Nomads bank account. Trip With Nomads is not responsible for payments made to personal accounts or third parties.",
         "Bank details:",
-        "Account name: Nomads Travel Club",
-        "Account number: 50200112404512",
-        "IFSC code: HDFC0011600",
-        "Bank: HDFC Bank",
+        "Account name: " + BANK_ACCOUNT_NAME,
+        "Account number: " + BANK_ACCOUNT_NUMBER,
+        "IFSC code: " + BANK_IFSC,
+        "Bank: " + BANK_NAME,
+        "UPI ID: " + BANK_UPI_ID,
       ]
       : []),
     "",
@@ -504,6 +511,7 @@ export function buildPaymentEmail(
     "",
     "Trip With Nomads",
     "Registered office: " + REGISTERED_OFFICE,
+    "Map: " + REGISTERED_OFFICE_MAP_URL,
     "Booking and payment messages may still be sent when needed to manage your reservation.",
   ].join("\n");
 
@@ -527,8 +535,12 @@ export function buildPaymentEmail(
       '<p style="margin:0 0 10px;color:#355d73;font-size:13px;line-height:1.55;">Pending amount: ' +
       escapeHtml(formatAmount(dueAmount)) +
       ". Please clear it at least 14 days before your travel date.</p>",
-      '<p style="margin:0 0 10px;color:#355d73;font-size:13px;line-height:1.55;">Please make any further payment only to the official Nomads Travel Club bank account. Trip With Nomads is not responsible for payments made to personal accounts or third parties.</p>',
-      '<p style="margin:0;color:#355d73;font-size:13px;line-height:1.65;"><strong>Bank details</strong><br>Account name: Nomads Travel Club<br>Account number: 50200112404512<br>IFSC code: HDFC0011600<br>Bank: HDFC Bank</p>',
+      '<p style="margin:0 0 10px;color:#355d73;font-size:13px;line-height:1.55;">Please make any further payment only to the official Trip With Nomads bank account. Trip With Nomads is not responsible for payments made to personal accounts or third parties.</p>',
+      '<p style="margin:0;color:#355d73;font-size:13px;line-height:1.65;"><strong>Bank details</strong><br>Account name: ' +
+      escapeHtml(BANK_ACCOUNT_NAME) + "<br>Account number: " +
+      escapeHtml(BANK_ACCOUNT_NUMBER) + "<br>IFSC code: " +
+      escapeHtml(BANK_IFSC) + "<br>Bank: " + escapeHtml(BANK_NAME) +
+      "<br>UPI ID: " + escapeHtml(BANK_UPI_ID) + "</p>",
       "</div>",
     ].join("\n")
     : "";
@@ -666,8 +678,10 @@ export function buildPaymentEmail(
     SUPPORT_EMAIL + '" style="color:' + BRAND_NAVY +
     ';text-decoration:underline;">' +
     SUPPORT_EMAIL + "</a>.</p>",
-    '                <p style="margin:16px 0 0;color:#174e6a;font-size:11px;line-height:1.6;">Trip With Nomads<br>Registered office: ' +
-    escapeHtml(REGISTERED_OFFICE) + "</p>",
+    '                <p style="margin:16px 0 0;color:#174e6a;font-size:11px;line-height:1.6;">Trip With Nomads<br>Registered office: <a href="' +
+    escapeHtml(REGISTERED_OFFICE_MAP_URL) + '" style="color:' + BRAND_NAVY +
+    ';text-decoration:underline;">' + escapeHtml(REGISTERED_OFFICE) +
+    "</a></p>",
     '                <p style="margin:16px 0 0;color:' + BRAND_NAVY +
     ';font-size:11px;line-height:1.7;">' +
     legalLinks + "</p>",

@@ -10,7 +10,6 @@ const pendingBooking = {
   booking_ref: "TWN-2026-00123",
   name: "Guest User",
   email: "guest@example.com",
-  trip_type: "GTI",
   departure_date: "2026-05-09",
   travellers: [
     { id: 1, name: "Guest User", sharing: "Double", transport: "SUV" },
@@ -70,11 +69,11 @@ Deno.test("builds a designed paid email with booking details", () => {
   assertStringIncludes(email.html, "A &lt;Guest&gt;");
   assertStringIncludes(email.html, "9 May 2026");
   assertStringIncludes(email.html, "3 pax");
-  assertStringIncludes(email.html, "Trip Type: GTI");
   assertStringIncludes(
     email.html,
-    "We are delighted to inform you that your booking for Summer Spiti (Trip Type: GTI) has been successfully confirmed.",
+    "We are delighted to inform you that your booking for Summer Spiti has been successfully confirmed.",
   );
+  assertEquals(email.html.includes("Trip Type:"), false);
   assertStringIncludes(
     email.html,
     "Please review the booking summary below, including your traveller details, selected variant, and payment information.",
@@ -93,9 +92,23 @@ Deno.test("builds a designed paid email with booking details", () => {
   assertEquals(email.html.includes("Nice one, nomad."), false);
   assertStringIncludes(email.html, "FR1lBzx4w9xp2fecFXEMUGGul4.png");
   assertStringIncludes(email.html, "Chat on WhatsApp");
-  assertStringIncludes(email.html, "/privacy-policy");
-  assertStringIncludes(email.html, "/terms-and-conditions");
-  assertStringIncludes(email.html, "/cancellation-refund-policy");
+  assertStringIncludes(
+    email.html,
+    'href="https://wa.me/919318405401?text=Hi%20Trip%20With%20Nomads%2C%20I%20need%20help%20with%20booking%20TWN-2026-00123."',
+  );
+  assertStringIncludes(
+    email.html,
+    'href="https://tripwithnomads.com/privacy-policy"',
+  );
+  assertStringIncludes(
+    email.html,
+    'href="https://tripwithnomads.com/terms-and-conditions"',
+  );
+  assertStringIncludes(
+    email.html,
+    'href="https://tripwithnomads.com/cancellation-refund-policy"',
+  );
+  assertStringIncludes(email.html, 'href="https://tripwithnomads.com"');
   assertStringIncludes(email.html, "Unsubscribe");
   assertEquals(
     email.headers?.["List-Unsubscribe"],
@@ -129,17 +142,35 @@ Deno.test("builds a partial-payment email with the balance due", () => {
   assertStringIncludes(email.html, "25% advance payment");
   assertStringIncludes(email.html, "Balance due");
   assertStringIncludes(email.html, "Important payment information");
-  assertStringIncludes(email.html, "HDFC0011600");
+  assertStringIncludes(email.html, "TRIP WITH NOMADS");
+  assertStringIncludes(email.html, "8447333965");
+  assertStringIncludes(email.html, "KKBK0004369");
+  assertStringIncludes(email.html, "KOTAK MAHINDRA BANK");
+  assertStringIncludes(email.html, "9318405401@kotak");
+  assertStringIncludes(
+    email.html,
+    'href="https://maps.app.goo.gl/TS9umsDXBHxs6K2d6"',
+  );
+  assertStringIncludes(email.html, "Ballabgargh, Faridabad, Haryana, 121004");
   assertStringIncludes(
     email.text,
     "The pending amount must be cleared at least 14 days prior to your travel date.",
   );
   assertStringIncludes(email.text, "Balance due: ₹18,585.00");
+  assertStringIncludes(email.text, "Account name: TRIP WITH NOMADS");
+  assertStringIncludes(email.text, "Account number: 8447333965");
+  assertStringIncludes(email.text, "IFSC code: KKBK0004369");
+  assertStringIncludes(email.text, "Bank: KOTAK MAHINDRA BANK");
+  assertStringIncludes(email.text, "UPI ID: 9318405401@kotak");
+  assertStringIncludes(
+    email.text,
+    "Map: https://maps.app.goo.gl/TS9umsDXBHxs6K2d6",
+  );
 });
 
 Deno.test("builds a failed email with the signed retry destination", () => {
   const retryUrl =
-    "https://staging.tripwithnomads.com/payment-failed?booking_id=booking-123&status_token=abc";
+    "https://maroon-aside-814100.framer.app/payment-failed?booking_id=booking-123&status_token=abc";
   const email = buildPaymentEmail(
     pendingBooking,
     {
@@ -150,7 +181,7 @@ Deno.test("builds a failed email with the signed retry destination", () => {
       payment_gateway_txn_id: "pay_failed",
     },
     "Summer Spiti",
-    "https://staging.tripwithnomads.com",
+    "https://maroon-aside-814100.framer.app",
     retryUrl,
   );
 
@@ -177,11 +208,11 @@ Deno.test("uses the configured site URL for environment-safe email links", () =>
       payment_gateway_txn_id: "pay_staging",
     },
     "Summer Spiti",
-    "https://staging.tripwithnomads.com/",
+    "https://maroon-aside-814100.framer.app/",
   );
 
   assert(email);
-  assertStringIncludes(email.html, "https://staging.tripwithnomads.com");
+  assertStringIncludes(email.html, "https://maroon-aside-814100.framer.app");
   assertEquals(email.html.includes('https://tripwithnomads.com"'), false);
 });
 
