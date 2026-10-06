@@ -31,6 +31,10 @@ function firstNonEmpty(...values: unknown[]): string {
     return ""
 }
 
+function isProvisionalPaymentTransactionId(value: unknown): boolean {
+    return firstNonEmpty(value).toLowerCase().startsWith("txn_")
+}
+
 function isTruthy(value: string | undefined): boolean {
     const raw = String(value || "").trim().toLowerCase()
     return raw === "1" || raw === "true" || raw === "yes"
@@ -314,7 +318,8 @@ async function claimPaymentReconciliation(params: {
     expectedStatus: "paid" | "failed"
 }): Promise<PaymentReconciliationClaim> {
     const storedPaymentId = firstNonEmpty(params.booking.payment_gateway_txn_id)
-    if (storedPaymentId && storedPaymentId !== params.paymentId) {
+    const storedIdIsProvisional = isProvisionalPaymentTransactionId(storedPaymentId)
+    if (storedPaymentId && storedPaymentId !== params.paymentId && !storedIdIsProvisional) {
         throw new Error("Webhook payment does not match the booking")
     }
 
@@ -327,20 +332,24 @@ async function claimPaymentReconciliation(params: {
         throw new Error("Webhook payment id is missing")
     }
 
-    const claimed = await params.supabase
-        .from("bookings")
-        .update({
-            payment_gateway_txn_id: params.paymentId,
-            payment_gateway_order_or_ref_id: params.orderId || null,
-        })
-        .eq("id", params.bookingId)
-        .eq("payment_status", "pending")
-        .is("payment_gateway_txn_id", null)
-        .select("id")
-        .maybeSingle()
+    if (!storedPaymentId || storedIdIsProvisional) {
+        let claimQuery = params.supabase
+            .from("bookings")
+            .update({
+                payment_gateway_txn_id: params.paymentId,
+                payment_gateway_order_or_ref_id: params.orderId || null,
+            })
+            .eq("id", params.bookingId)
+            .eq("payment_status", "pending")
 
-    if (claimed.error) throw claimed.error
-    if (claimed.data?.id) return "claimed"
+        claimQuery = storedPaymentId
+            ? claimQuery.eq("payment_gateway_txn_id", storedPaymentId)
+            : claimQuery.is("payment_gateway_txn_id", null)
+
+        const claimed = await claimQuery.select("id").maybeSingle()
+        if (claimed.error) throw claimed.error
+        if (claimed.data?.id) return "claimed"
+    }
 
     const latest = await loadBooking(params.supabase, params.bookingId, params.orderId)
     if (latest.error) throw latest.error

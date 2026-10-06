@@ -6,6 +6,8 @@ Deno.test("webhook claims a pending booking before writing callback sheets", asy
     )
 
     assertStringIncludes(source, 'eq("payment_status", "pending")')
+    assertStringIncludes(source, "isProvisionalPaymentTransactionId")
+    assertStringIncludes(source, 'eq("payment_gateway_txn_id", storedPaymentId)')
     assertStringIncludes(source, 'is("payment_gateway_txn_id", null)')
     assertStringIncludes(source, 'reason: "booking_already_reconciled"')
     assertStringIncludes(source, "releasePaymentReconciliationClaim")
