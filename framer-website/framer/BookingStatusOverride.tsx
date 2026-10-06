@@ -87,6 +87,8 @@ function resolveRuntimeEnv(): RuntimeEnv {
     if (host === "tripwithnomads.com" || host === "www.tripwithnomads.com") return "production"
     if (
         host === "maroon-aside-814100.framer.app" ||
+        host.endsWith(".framer.app") ||
+        host.endsWith(".framer.website") ||
         host === "localhost" ||
         host === "127.0.0.1"
     ) {
@@ -109,11 +111,6 @@ function resolveRuntimeConfig(): RuntimeConfig {
         apiBaseUrl: normalizeBaseUrl(runtimeOverride.apiBaseUrl || selected.apiBaseUrl),
     }
 }
-
-const CURRENT_RUNTIME = resolveRuntimeConfig()
-const SUPABASE_URL = CURRENT_RUNTIME.supabaseUrl
-const SUPABASE_KEY = CURRENT_RUNTIME.supabaseAnonKey
-const DOMESTIC_TRIPS_BASE_URL = `${CURRENT_RUNTIME.siteBaseUrl}/domestic-trips`
 
 function createUuid(): string {
     const randomUuid = (globalThis as any)?.crypto?.randomUUID
@@ -140,16 +137,18 @@ function getRetryRequestId(bookingId: string, attempt: any): string {
 }
 
 function retryApiUrl(): string {
-    return CURRENT_RUNTIME.apiBaseUrl
-        ? `${CURRENT_RUNTIME.apiBaseUrl}/retry-payment`
-        : `${SUPABASE_URL}/functions/v1/retry-payment`
+    const runtime = resolveRuntimeConfig()
+    return runtime.apiBaseUrl
+        ? `${runtime.apiBaseUrl}/retry-payment`
+        : `${runtime.supabaseUrl}/functions/v1/retry-payment`
 }
 
 function retryApiHeaders(): Record<string, string> {
+    const runtime = resolveRuntimeConfig()
     const headers: Record<string, string> = { "Content-Type": "application/json" }
-    if (!CURRENT_RUNTIME.apiBaseUrl) {
-        headers.apikey = SUPABASE_KEY
-        headers.Authorization = `Bearer ${SUPABASE_KEY}`
+    if (!runtime.apiBaseUrl) {
+        headers.apikey = runtime.supabaseAnonKey
+        headers.Authorization = `Bearer ${runtime.supabaseAnonKey}`
     }
     return headers
 }
@@ -184,6 +183,7 @@ async function openRetryRazorpay(
     await loadRazorpayScript()
     const Razorpay = (window as any).Razorpay
     if (typeof Razorpay !== "function") throw new Error("Payment gateway is unavailable")
+    const runtime = resolveRuntimeConfig()
     const instance = new Razorpay({
         key: String(razorpay.key_id),
         amount: Number(razorpay.amount || 0),
@@ -197,7 +197,7 @@ async function openRetryRazorpay(
             contact: String(data.phone || ""),
         },
         notes: razorpay.notes || {},
-        callback_url: razorpay.callback_url || `${CURRENT_RUNTIME.siteBaseUrl}/payment-success`,
+        callback_url: razorpay.callback_url || `${runtime.siteBaseUrl}/payment-success`,
         redirect: true,
         modal: { ondismiss: onDismiss },
     })
@@ -249,6 +249,7 @@ let _data: BookingData | null = null
 let _state: LoadState = "loading"
 let _subs: Array<() => void> = []
 let _pendingCountdown = 0
+let _errorMessage = ""
 
 function notify() { _subs.forEach((fn) => fn()) }
 
@@ -396,7 +397,8 @@ function buildStatusUrl(
     statusToken?: string,
     extraParams?: Record<string, string>
 ) {
-    const base = CURRENT_RUNTIME.siteBaseUrl || (typeof window !== "undefined" ? window.location.origin : "")
+    const runtime = resolveRuntimeConfig()
+    const base = runtime.siteBaseUrl || (typeof window !== "undefined" ? window.location.origin : "")
     const url = new URL(pathname, base.endsWith("/") ? base : `${base}/`)
     if (bookingId) url.searchParams.set("booking_id", bookingId)
     const token = String(statusToken || "").trim()
@@ -415,9 +417,12 @@ function buildStatusUrl(
 export function withBookingStatus(Component): ComponentType {
     return (props: any) => {
         useEffect(() => {
+            let cancelled = false
+            const controllers = new Set<AbortController>()
             _data = null
             _state = "loading"
             _pendingCountdown = 0
+            _errorMessage = ""
 
             const fetchBooking = async () => {
                 const params = new URLSearchParams(window.location.search)
@@ -425,14 +430,20 @@ export function withBookingStatus(Component): ComponentType {
                 const statusToken = String(params.get("status_token") || "").trim()
                 if (!bookingId) return { error: "No booking_id" }
 
+                const runtime = resolveRuntimeConfig()
+                const controller = new AbortController()
+                controllers.add(controller)
+                const timeout = window.setTimeout(() => controller.abort(), 8000)
                 try {
-                    const statusRes = await fetch(`${SUPABASE_URL}/functions/v1/get-booking-status`, {
+                    const statusRes = await fetch(`${runtime.supabaseUrl}/functions/v1/get-booking-status`, {
                         method: "POST",
                         headers: {
                             "Content-Type": "application/json",
-                            apikey: SUPABASE_KEY,
-                            Authorization: `Bearer ${SUPABASE_KEY}`,
+                            apikey: runtime.supabaseAnonKey,
+                            Authorization: `Bearer ${runtime.supabaseAnonKey}`,
+                            "Cache-Control": "no-store",
                         },
+                        signal: controller.signal,
                         body: JSON.stringify({
                             booking_id: bookingId,
                             status_token: statusToken,
@@ -442,9 +453,15 @@ export function withBookingStatus(Component): ComponentType {
                         const payload = await statusRes.json()
                         if (payload?.booking) return { data: payload.booking }
                     }
-                    return { error: "Not found" }
+                    return { error: `Status request failed (${statusRes.status})` }
                 } catch (err) {
+                    if (String((err as any)?.name || "") === "AbortError") {
+                        return { error: "Status request timed out. Please try again." }
+                    }
                     return { error: String(err) }
+                } finally {
+                    window.clearTimeout(timeout)
+                    controllers.delete(controller)
                 }
             }
 
@@ -472,9 +489,11 @@ export function withBookingStatus(Component): ComponentType {
 
                 // 1. Initial fetch
                 let result = await fetchBooking()
+                if (cancelled) return
 
                 if (result.error) {
                     console.warn("[BookingStatus]", result.error)
+                    _errorMessage = result.error
                     _state = "error"
                     notify()
                     return
@@ -490,9 +509,11 @@ export function withBookingStatus(Component): ComponentType {
                     let attempts = 0
                     while (attempts < 15) {
                         await new Promise((r) => setTimeout(r, 2000))
+                        if (cancelled) return
                         attempts++
 
                         result = await fetchBooking()
+                        if (cancelled) return
                         if (!result.data) continue
 
                         // Update data
@@ -517,8 +538,10 @@ export function withBookingStatus(Component): ComponentType {
                             _pendingCountdown = remaining
                             notify()
                             await new Promise((r) => setTimeout(r, 1000))
+                            if (cancelled) return
 
                             const recheck = await fetchBooking()
+                            if (cancelled) return
                             if (!recheck?.data) continue
 
                             const latest = recheck.data
@@ -546,6 +569,10 @@ export function withBookingStatus(Component): ComponentType {
             }
 
             go()
+            return () => {
+                cancelled = true
+                controllers.forEach((controller) => controller.abort())
+            }
         }, [])
 
         return <Component {...props} />
@@ -576,7 +603,9 @@ function textOverride(getter: (d: BookingData) => string, fallback = "—") {
 
                 ; (el as HTMLElement).style.opacity = "1"
 
-                if (state === "ready" && data) {
+                if (state === "error") {
+                    ; (el as HTMLElement).textContent = _errorMessage || "We couldn't load your booking status. Please try again."
+                } else if (state === "ready" && data) {
                     ; (el as HTMLElement).textContent = getter(data)
                 } else {
                     ; (el as HTMLElement).textContent = fallback
@@ -997,6 +1026,33 @@ export function withRetryButton(Component): ComponentType {
         const [isRetrying, setIsRetrying] = useState(false)
         const retryLockRef = useRef(false)
 
+        if (state === "error") {
+            return (
+                <div
+                    onClick={() => window.location.reload()}
+                    role="button"
+                    tabIndex={0}
+                    onKeyDown={(event) => {
+                        if (event.key === "Enter" || event.key === " ") window.location.reload()
+                    }}
+                    style={{
+                        cursor: "pointer",
+                        display: "inline-block",
+                        padding: "14px 32px",
+                        borderRadius: "12px",
+                        background: "linear-gradient(135deg, #1b91c9, #0085c1)",
+                        color: "#fff",
+                        fontSize: "16px",
+                        fontWeight: 600,
+                        textAlign: "center" as const,
+                        marginTop: "16px",
+                    }}
+                >
+                    Retry status
+                </div>
+            )
+        }
+
         if (state !== "ready" || !data) {
             return <Component {...props} style={{ ...props.style, display: "none" }} />
         }
@@ -1062,10 +1118,12 @@ export function withRetryButton(Component): ComponentType {
                 console.error("[RetryPayment] Error:", err)
                 retryLockRef.current = false
                 setIsRetrying(false)
+                const runtime = resolveRuntimeConfig()
+                const domesticTripsBaseUrl = `${runtime.siteBaseUrl}/domestic-trips`
                 if (data.trip_id) {
-                    window.location.href = `${DOMESTIC_TRIPS_BASE_URL}/${data.trip_id}`
+                    window.location.href = `${domesticTripsBaseUrl}/${data.trip_id}`
                 } else {
-                    window.location.href = DOMESTIC_TRIPS_BASE_URL
+                    window.location.href = domesticTripsBaseUrl
                 }
             } finally {
                 // Keep the retry locked while the gateway modal is open or the browser is redirecting.

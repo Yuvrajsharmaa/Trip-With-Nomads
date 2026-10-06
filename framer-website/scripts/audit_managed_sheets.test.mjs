@@ -30,3 +30,17 @@ test("lead identity matching is case-insensitive", () => {
   ])
   assert.deepEqual(audit.duplicateKeys, [{ key: "guest@example.com", rows: [2, 3] }])
 })
+
+test("custom-trip current rows use the same normalized contact contract", () => {
+  const audit = analyzeTab("Custom Trip Leads", [
+    [
+      "Lead ID", "First Seen At", "Last Seen At", "Name", "Email", "Phone", "Instagram ID",
+      "Latest Source", "Latest Page URL", "Latest Trip ID", "Latest Trip Slug", "Latest UTM Source",
+      "Latest UTM Medium", "Latest UTM Campaign", "Latest UTM Term", "Latest UTM Content",
+      "Submission Count", "Current Status", "Latest Submission ID", "Notes",
+    ],
+    ["lead-1", "2026-10-06T10:00:00+05:30", "2026-10-06T10:00:00+05:30", "Guest", " Guest@Example.com "]
+  ])
+  assert.equal(audit.headerDrift, false)
+  assert.deepEqual(audit.duplicateKeys, [])
+})

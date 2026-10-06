@@ -13,6 +13,7 @@ export type ResendEmailResult = {
     sent: boolean
     skipped: boolean
     reason?: string
+    providerId?: string
     data?: Record<string, unknown>
 }
 
@@ -71,5 +72,10 @@ export async function sendResendEmail(
         throw new Error(`Resend API ${response.status}: ${reason}`)
     }
 
-    return { sent: true, skipped: false, data }
+    return {
+        sent: true,
+        skipped: false,
+        providerId: firstNonEmpty(data.id),
+        data,
+    }
 }

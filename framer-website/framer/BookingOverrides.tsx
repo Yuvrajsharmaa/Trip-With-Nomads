@@ -14,7 +14,8 @@ const TAX_RATE = 0.05
 function getSiteBaseUrl(): string {
     if (typeof window === "undefined") return "https://tripwithnomads.com"
     const host = String(window.location.hostname || "").toLowerCase()
-    return host === "maroon-aside-814100.framer.app" || host === "localhost" || host === "127.0.0.1"
+    const isFramerPreview = host.endsWith(".framer.app") || host.endsWith(".framer.website")
+    return isFramerPreview || host === "localhost" || host === "127.0.0.1"
         ? "https://maroon-aside-814100.framer.app"
         : "https://tripwithnomads.com"
 }
@@ -287,7 +288,9 @@ export function withTravellerSharingKey(Component): ComponentType {
         const options = useMemo(() => {
             if (!store.date) return []
             const pd = store.pricingData || []
-            return [...new Set(pd.filter((d: any) => d.start_date === store.date).map((d: any) => d.variant_name))].sort()
+            return Array.from(
+                new Set<string>(pd.filter((d: any) => d.start_date === store.date).map((d: any) => String(d.variant_name || "")))
+            ).filter(Boolean).sort()
         }, [store.date, store.pricingData])
 
         if (index === null) return <Component {...props} />

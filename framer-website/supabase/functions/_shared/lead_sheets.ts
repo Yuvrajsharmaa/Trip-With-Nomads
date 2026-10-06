@@ -32,6 +32,7 @@ export const NTC_INVITE_HEADERS = [
     "Name",
     "Email",
     "Phone",
+    "Country Code",
     "Instagram ID",
     "Reason",
     "Source",
@@ -42,6 +43,23 @@ export const NTC_INVITE_HEADERS = [
     "UTM Medium",
     "UTM Campaign",
     "Status",
+]
+
+// Existing cross-route destination retained from the historical lead flow.
+// Routed current tabs use LEAD_HEADERS; Master Leads keeps its established
+// human-readable contract and is updated idempotently when configured.
+export const MASTER_LEAD_HEADERS = [
+    "Lead ID",
+    "Created At",
+    "Name",
+    "Email",
+    "Phone",
+    "Country Code",
+    "Source",
+    "Status",
+    "Page URL",
+    "Trip ID",
+    "Trip Slug",
 ]
 
 export const ABANDONED_LEAD_HEADERS = [
@@ -144,6 +162,7 @@ export function buildInviteLeadSheetRow(params: {
         compact(lead.name),
         compact(lead.email).toLowerCase(),
         compact(lead.phone),
+        compact(lead.country_code || submission.country_code),
         compact(lead.instagram_id || submission.instagram_id),
         compact(submission.reason || params.notes),
         compact(lead.latest_source || lead.source || submission.source),
@@ -154,5 +173,25 @@ export function buildInviteLeadSheetRow(params: {
         compact(lead.latest_utm_medium || lead.utm_medium || submission.utm_medium),
         compact(lead.latest_utm_campaign || lead.utm_campaign || submission.utm_campaign),
         compact(lead.current_status || lead.status || submission.status || "submitted"),
+    ]
+}
+
+export function buildMasterLeadSheetRow(params: {
+    lead: Record<string, any>
+    status?: string
+}) {
+    const lead = params.lead || {}
+    return [
+        compact(lead.id),
+        formatTimestampIST(lead.first_seen_at || lead.created_at),
+        compact(lead.name),
+        compact(lead.email).toLowerCase(),
+        compact(lead.phone),
+        compact(lead.country_code),
+        compact(lead.latest_source || lead.source),
+        compact(params.status || lead.current_status || lead.status || "submitted"),
+        compact(lead.latest_page_url || lead.page_url),
+        compact(lead.latest_trip_id || lead.trip_id),
+        compact(lead.latest_trip_slug || lead.trip_slug),
     ]
 }

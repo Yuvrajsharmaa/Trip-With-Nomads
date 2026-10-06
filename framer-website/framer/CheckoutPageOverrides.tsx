@@ -78,6 +78,8 @@ function resolveRuntimeEnv(): RuntimeEnv {
     if (host === "tripwithnomads.com" || host === "www.tripwithnomads.com") return "production"
     if (
         host === "maroon-aside-814100.framer.app" ||
+        host.endsWith(".framer.app") ||
+        host.endsWith(".framer.website") ||
         host === "localhost" ||
         host === "127.0.0.1"
     ) {
@@ -169,6 +171,10 @@ type PaymentMode = "full" | "partial_25"
 
 const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
 const PHONE_REGEX = /^\+?[\d\s\-()]{10,15}$/
+const BOOKING_ABANDON_LEAD_SOURCE = "booking_abandoned"
+const BOOKING_ABANDON_LEAD_STATUS = "abandoned_booking"
+const BOOKING_ABANDON_LEAD_PREFIX = "__twn_booking_abandon_lead_v1"
+const bookingAbandonLeadInFlight = new Set<string>()
 const tripDisplayCache = new Map<string, { ts: number; data: any }>()
 const tripDisplayInFlight = new Map<string, Promise<any | null>>()
 let forcedTripId = ""
@@ -1033,6 +1039,119 @@ function readInputValue(selectors: string[]): string {
         if (value) return value
     }
     return ""
+}
+
+function bookingAbandonIdentity(tripId: string, email: string): string {
+    const path = typeof window !== "undefined" ? window.location.pathname : ""
+    return [tripId, email, path].join("|")
+}
+
+function bookingAbandonStorageKey(kind: string, identity: string): string {
+    return `${BOOKING_ABANDON_LEAD_PREFIX}:${kind}:${identity}`
+}
+
+function getStableBookingAbandonId(kind: string, identity: string): string {
+    return getOrCreateStableRequestId(
+        `booking-abandon-${kind}`,
+        requestFingerprint(identity),
+    )
+}
+
+function hasBookingAbandonBeenSent(identity: string): boolean {
+    try {
+        return window.sessionStorage.getItem(bookingAbandonStorageKey("sent", identity)) === "1"
+    } catch (_) {
+        return false
+    }
+}
+
+function markBookingAbandonSent(identity: string): void {
+    try {
+        window.sessionStorage.setItem(bookingAbandonStorageKey("sent", identity), "1")
+    } catch (_) {
+        // Server-side submission idempotency remains authoritative.
+    }
+}
+
+async function postBookingAbandonLead(store: any): Promise<boolean> {
+    const params = new URLSearchParams(
+        typeof window !== "undefined" ? window.location.search : "",
+    )
+    const tripId = firstNonEmpty(
+        store?.tripId,
+        params.get("tripId"),
+        params.get("trip_id"),
+    )
+    const email = firstNonEmpty(
+        store?.contactEmail,
+        readInputValue([
+            'input[name="contact_email"]',
+            'input[name="email"]',
+            'input[type="email"]',
+            'input[placeholder*="email" i]',
+        ]),
+    ).toLowerCase()
+    if (!tripId || !EMAIL_REGEX.test(email)) return false
+
+    const identity = bookingAbandonIdentity(tripId, email)
+    if (hasBookingAbandonBeenSent(identity) || bookingAbandonLeadInFlight.has(identity)) {
+        return true
+    }
+    bookingAbandonLeadInFlight.add(identity)
+
+    const submissionId = getStableBookingAbandonId("submission", identity)
+    const leadId = getStableBookingAbandonId("lead", identity)
+    const payload = {
+        submission_id: submissionId,
+        lead_id: leadId,
+        email,
+        name: firstNonEmpty(
+            store?.contactName,
+            readInputValue([
+                'input[name="contact_name"]',
+                'input[name="name"]',
+                'input[placeholder*="name" i]',
+            ]),
+        ) || null,
+        phone: firstNonEmpty(
+            store?.contactPhone,
+            readInputValue([
+                'input[name="contact_phone"]',
+                'input[name="phone"]',
+                'input[type="tel"]',
+                'input[placeholder*="phone" i]',
+                'input[placeholder*="number" i]',
+            ]),
+        ) || null,
+        source: BOOKING_ABANDON_LEAD_SOURCE,
+        status: BOOKING_ABANDON_LEAD_STATUS,
+        reason: "checkout_abandoned_before_payment",
+        page_url: typeof window !== "undefined" ? window.location.href : null,
+        trip_id: tripId,
+        trip_slug: params.get("slug") || params.get("trip_slug"),
+        utm_source: params.get("utm_source"),
+        utm_medium: params.get("utm_medium"),
+        utm_campaign: params.get("utm_campaign"),
+        utm_term: params.get("utm_term"),
+        utm_content: params.get("utm_content"),
+    }
+
+    try {
+        const response = await fetch(checkoutApiUrl("record-lead"), {
+            method: "POST",
+            headers: checkoutApiHeaders(),
+            body: JSON.stringify(payload),
+            keepalive: true,
+        })
+        const result = await response.json().catch(() => ({}))
+        if (!response.ok || result?.ok !== true) return false
+        markBookingAbandonSent(identity)
+        return true
+    } catch (_) {
+        return false
+    } finally {
+        bookingAbandonLeadInFlight.delete(identity)
+    }
 }
 
 function populateDropdown(select: HTMLSelectElement, options: string[]) {
@@ -2521,9 +2640,25 @@ export function withCheckoutPayButton(Component): ComponentType {
     return (props: any) => {
         const [store, setStore] = useStore()
         const submitLockRef = useRef(false)
+        const latestStoreRef = useRef(store)
+        const paymentStartedRef = useRef(false)
         const totals = computeTotals(store)
         const errors = getValidationErrors(store)
         const isValid = errors.length === 0
+
+        useEffect(() => {
+            latestStoreRef.current = store
+        }, [store])
+
+        useEffect(() => {
+            if (typeof window === "undefined") return
+            const handlePageHide = () => {
+                if (paymentStartedRef.current) return
+                void postBookingAbandonLead(latestStoreRef.current)
+            }
+            window.addEventListener("pagehide", handlePageHide)
+            return () => window.removeEventListener("pagehide", handlePageHide)
+        }, [])
 
         const submit = async () => {
             if (!isValid || store.submitting || submitLockRef.current) return
@@ -2534,6 +2669,7 @@ export function withCheckoutPayButton(Component): ComponentType {
             }
 
             submitLockRef.current = true
+            paymentStartedRef.current = true
             setStore({ submitting: true })
             console.log("[Checkout] Pay initiated", {
                 tripId: store.tripId,
@@ -2680,6 +2816,7 @@ export function withCheckoutPayButton(Component): ComponentType {
                 }
 
                 if (!res.ok) {
+                    paymentStartedRef.current = false
                     console.error("[Checkout] create-booking failed", {
                         status: res.status,
                         payload,
@@ -2704,6 +2841,7 @@ export function withCheckoutPayButton(Component): ComponentType {
                         data,
                         { name: contactName, email: contactEmail, phone: contactPhone },
                         () => {
+                            paymentStartedRef.current = false
                             submitLockRef.current = false
                             setStore({ submitting: false })
                         }
@@ -2713,6 +2851,7 @@ export function withCheckoutPayButton(Component): ComponentType {
 
                 const payu = data?.payu
                 if (!payu?.action) {
+                    paymentStartedRef.current = false
                     showInlineError("Payment gateway payload missing")
                     submitLockRef.current = false
                     setStore({ submitting: false })
@@ -2735,6 +2874,7 @@ export function withCheckoutPayButton(Component): ComponentType {
                 document.body.appendChild(form)
                 form.submit()
             } catch (err) {
+                paymentStartedRef.current = false
                 console.error("[Checkout] pay error", err)
                 showInlineError("Could not start payment")
                 submitLockRef.current = false
