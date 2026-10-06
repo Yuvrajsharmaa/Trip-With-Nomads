@@ -88,7 +88,16 @@ Deno.test("builds a designed paid email with booking details", () => {
     "background:linear-gradient(180deg,#ffffff 0%,#08b1ff 100%)",
   );
   assertEquals(email.html.includes("linear-gradient(135deg"), false);
-  assertStringIncludes(email.html, 'data-payment-animation="status"');
+  assertStringIncludes(
+    email.html,
+    'data-payment-animation="gif"',
+  );
+  assertStringIncludes(
+    email.html,
+    'src="https://framerusercontent.com/assets/iF1Zm5lDZ2Wpg9hNFHHZ5YMUxJM.gif" alt="Payment received"',
+  );
+  assertEquals(email.html.includes("lottie"), false);
+  assertEquals(email.html.includes("payment-animation-fallback"), false);
   assertEquals(email.html.includes("Nice one, nomad."), false);
   assertStringIncludes(email.html, "FR1lBzx4w9xp2fecFXEMUGGul4.png");
   assertStringIncludes(email.html, "Chat on WhatsApp");
@@ -190,7 +199,10 @@ Deno.test("builds a failed email with the signed retry destination", () => {
     email.subject,
     "Action needed: complete payment | TWN-2026-00123",
   );
-  assertStringIncludes(email.html, 'data-animation-loop="true"');
+  assertStringIncludes(
+    email.html,
+    'src="https://framerusercontent.com/assets/jtbxonFosA8D3IAyIFdpHJMXUPI.gif" alt="Payment not completed"',
+  );
   assertStringIncludes(email.html, "not confirmed yet");
   assertStringIncludes(email.html, "Try payment again");
   assertStringIncludes(email.html, "status_token=abc");

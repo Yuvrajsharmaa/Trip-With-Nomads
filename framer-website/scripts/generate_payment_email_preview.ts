@@ -1,8 +1,7 @@
 import { buildPaymentEmail } from "../supabase/functions/_shared/payment_email.ts";
 
-// The supplied .lottie files stay beside their extracted JSON counterparts.
-// The browser preview uses the JSON with lottie-web; the sent email keeps its
-// inline static fallback because email clients do not execute Lottie players.
+// The supplied .lottie files stay beside the email-safe GIF exports. The
+// preview intentionally renders the same GIF markup sent through Resend.
 
 const pendingBooking = {
   id: "booking-123",
@@ -91,38 +90,16 @@ const variants = {
     label: "Payment received",
     subject: success.subject,
     html: success.html,
-    animation: {
-      src: "./assets/success-confetti.json",
-      label: "Success confetti animation",
-      fallback: "✓",
-      description: "A small confetti moment for a fully paid booking.",
-      loop: false,
-    },
   },
   partial: {
     label: "Advance payment received",
     subject: partial.subject,
     html: partial.html,
-    animation: {
-      src: "./assets/success-confetti.json",
-      label: "Advance payment success animation",
-      fallback: "✓",
-      description:
-        "The same success cue, with the email showing the balance still due.",
-      loop: false,
-    },
   },
   failed: {
     label: "Payment not completed",
     subject: failed.subject,
     html: failed.html,
-    animation: {
-      src: "./assets/payment-failed-cross.json",
-      label: "Payment failed animation",
-      fallback: "×",
-      description: "A restrained cross loop for an incomplete payment attempt.",
-      loop: true,
-    },
   },
 };
 
@@ -218,7 +195,7 @@ const preview = `<!doctype html>
   <body>
     <header class="preview-bar">
       <h1>Trip With Nomads email preview</h1>
-      <p>Minimal transactional email treatment with the supplied Lottie status moment, sample Summer Spiti booking data, and the white-to-blue footer gradient.</p>
+      <p>Minimal transactional email treatment with email-safe GIF status cues, sample Summer Spiti booking data, and the white-to-blue footer gradient.</p>
       <div class="controls">
         <label for="email-state">State</label>
         <select id="email-state">
@@ -232,50 +209,14 @@ const preview = `<!doctype html>
     <main class="stage">
       <iframe id="email-frame" title="Email preview"></iframe>
     </main>
-    <script type="module">
-      import lottie from "https://cdn.jsdelivr.net/npm/lottie-web@5.13.0/+esm";
+    <script>
       const variants = ${serializedVariants};
       const stateSelect = document.getElementById("email-state");
       const subject = document.getElementById("email-subject");
       const frame = document.getElementById("email-frame");
-      let frameAnimation = null;
-      function enhanceEmailFrame(variant) {
-        if (frameAnimation) {
-          frameAnimation.destroy();
-          frameAnimation = null;
-        }
-        const emailDocument = frame.contentDocument;
-        const slot = emailDocument &&
-          emailDocument.querySelector("[data-payment-animation]");
-        if (!slot) return;
-        const mount = emailDocument.createElement("div");
-        mount.style.width = "120px";
-        mount.style.height = "112px";
-        mount.setAttribute("role", "img");
-        mount.setAttribute("aria-label", variant.animation.label);
-        const fallback = slot.querySelector(".payment-animation-fallback");
-        slot.insertBefore(mount, fallback);
-        const reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-        frameAnimation = lottie.loadAnimation({
-          container: mount,
-          renderer: "svg",
-          loop: reduceMotion ? false : variant.animation.loop,
-          autoplay: !reduceMotion,
-          path: new URL(variant.animation.src, document.baseURI).href,
-        });
-        frameAnimation.addEventListener("DOMLoaded", function () {
-          if (fallback) fallback.style.display = "none";
-        });
-        frameAnimation.addEventListener("data_failed", function () {
-          mount.remove();
-        });
-      }
       function renderState(state) {
         const variant = variants[state] || variants.success;
         subject.textContent = "Subject: " + variant.subject;
-        frame.onload = function () {
-          enhanceEmailFrame(variant);
-        };
         frame.srcdoc = variant.html;
       }
       stateSelect.addEventListener("change", function (event) {

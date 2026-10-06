@@ -49,6 +49,12 @@ type SelectionDetail = {
 
 const EMAIL_LOGO_URL =
   "https://framerusercontent.com/images/FR1lBzx4w9xp2fecFXEMUGGul4.png?width=364&height=229";
+const PAYMENT_ANIMATION_URLS = {
+  success:
+    "https://framerusercontent.com/assets/iF1Zm5lDZ2Wpg9hNFHHZ5YMUxJM.gif",
+  failed:
+    "https://framerusercontent.com/assets/jtbxonFosA8D3IAyIFdpHJMXUPI.gif",
+};
 const SUPPORT_EMAIL = "support@tripwithnomads.com";
 const WHATSAPP_PHONE = "919318405401";
 const BRAND_BLUE = "#08b1ff";
@@ -340,7 +346,10 @@ export function buildPaymentEmail(
   const closingCopy = isPaid
     ? "Thank you for choosing Trip With Nomads. We look forward to welcoming you on your trip."
     : "";
-  const animationFallback = isPaid ? "✓" : "×";
+  const animationUrl = isPaid
+    ? PAYMENT_ANIMATION_URLS.success
+    : PAYMENT_ANIMATION_URLS.failed;
+  const animationAlt = isPaid ? "Payment received" : "Payment not completed";
   const nextStep = isPaid
     ? isPartial && dueAmount > 0
       ? "Balance due before departure: " + formatAmount(dueAmount) + "."
@@ -353,7 +362,6 @@ export function buildPaymentEmail(
   const normalizedRetryUrl = normalizeHttpUrl(retryUrl, normalizedWebsiteUrl);
   const actionUrl = isPaid ? normalizedWebsiteUrl : normalizedRetryUrl;
   const actionLabel = isPaid ? "Visit Trip With Nomads" : "Try payment again";
-  const statusColor = isPaid ? BRAND_NAVY : "#9b473f";
   const preheader = isPaid
     ? label + " for " + trip + ". Booking " + bookingRef + "."
     : "Payment action needed for booking " + bookingRef + ".";
@@ -574,13 +582,10 @@ export function buildPaymentEmail(
     "            </tr>",
     "            <tr>",
     '              <td style="padding:24px 24px 8px;">',
-    '                <div data-payment-animation="status" data-animation-loop="' +
-    (isPaid ? "false" : "true") +
-    '" style="width:120px;height:112px;margin:0 auto 14px;text-align:center;">',
-    '                  <span class="payment-animation-fallback" style="display:inline-block;width:72px;height:72px;margin-top:14px;border:2px solid ' +
-    statusColor + ";border-radius:50%;color:" + statusColor +
-    ';font-size:40px;font-weight:700;line-height:72px;">' +
-    escapeHtml(animationFallback) + "</span>",
+    '                <div data-payment-animation="gif" style="width:120px;height:112px;margin:0 auto 14px;text-align:center;">',
+    '                  <img src="' + escapeHtml(animationUrl) +
+    '" alt="' + escapeHtml(animationAlt) +
+    '" width="120" height="112" style="display:block;width:120px;height:112px;margin:0 auto;border:0;object-fit:contain;">',
     "                </div>",
     '                <h2 style="margin:0 0 4px;color:' + BRAND_NAVY +
     ';font-size:22px;line-height:1.3;">Hi ' +
