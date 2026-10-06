@@ -42,6 +42,15 @@ All values recorded here must be staging-only. Never record API keys, service-ac
 | Lead route projection | Submissions `a1f1a111…`, `b2f2b222…`, `c3f3c333…`, `d4f4d444…`, `e5f5e555…` | Waitlist → general `Leads`; booking invite → `NTC - Invites`; trip page → general/TWN `Leads`; custom → `Custom Trip Leads`; partial fill → general `Abandoned Leads`. All five Supabase records report `sheet_sync_status = synced`. |
 | Idempotency and identity conflicts | Waitlist replay `a1f1a111…`; changed-payload replay; conflicting `lead_id` `f6f6f666…` | Same payload returned `replayed: true`; changed payload returned HTTP 409 `IDEMPOTENCY_CONFLICT`; conflicting lead identity returns HTTP 409 `LEAD_ID_CONFLICT`. |
 
+## Production rollout evidence
+
+- PR #37 was squash-merged into `main` at `16e2321730c6150d3ecf7a3279cfe46346d9b080`; post-merge CI passed.
+- Production Supabase migration `payment_email_delivery` applied successfully to add durable email delivery state.
+- Production function versions active after rollout: `get-booking-status` 27, `record-lead` 67, `razorpay-webhook` 23. Existing `create-booking`, `retry-payment`, and redirect-only `handle-payment` deployments were already on the reviewed source hashes.
+- Framer staging version `c3e9a07f1` previewed with zero changes and zero warnings, then was promoted to `https://tripwithnomads.com`.
+- Read-only live checks passed for `/`, `/checkout?slug=vietnam-twn&date=2026-10-24`, and `/payment-success?booking_id=…`.
+- The production status page returned an actionable HTTP 401 state without a signed token and stopped loading within the verification window; no live payment, webhook replay, or production Sheet row was generated during release verification.
+
 ## Evidence template
 
 For each controlled case record only IDs and timestamps:
@@ -135,4 +144,4 @@ For every case, read back Supabase event/identity rows and the exact existing Sh
 - [x] `payment_events`, Sheets, and email delivery state agree for every verified success event.
 - [x] No duplicate current rows or duplicate history/event/email projections were created by the controlled cases.
 - [x] Local and staging verification evidence is recorded in this branch without secrets.
-- [ ] Production remains read-only until the reviewed PR is merged and production configuration/schema readiness is explicitly confirmed.
+- [x] Production rollout was performed only after staging verification, PR merge, additive schema readiness, and live read-only route checks; no live payment or production Sheet write was used for verification.
