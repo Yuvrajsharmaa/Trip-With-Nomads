@@ -78,6 +78,8 @@ function resolveRuntimeEnv(): RuntimeEnv {
     if (host === "tripwithnomads.com" || host === "www.tripwithnomads.com") return "production"
     if (
         host === "maroon-aside-814100.framer.app" ||
+        host.endsWith(".framer.app") ||
+        host.endsWith(".framer.website") ||
         host === "localhost" ||
         host === "127.0.0.1"
     ) {

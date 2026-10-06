@@ -14,7 +14,8 @@ const TAX_RATE = 0.05
 function getSiteBaseUrl(): string {
     if (typeof window === "undefined") return "https://tripwithnomads.com"
     const host = String(window.location.hostname || "").toLowerCase()
-    return host === "maroon-aside-814100.framer.app" || host === "localhost" || host === "127.0.0.1"
+    const isFramerPreview = host.endsWith(".framer.app") || host.endsWith(".framer.website")
+    return isFramerPreview || host === "localhost" || host === "127.0.0.1"
         ? "https://maroon-aside-814100.framer.app"
         : "https://tripwithnomads.com"
 }
