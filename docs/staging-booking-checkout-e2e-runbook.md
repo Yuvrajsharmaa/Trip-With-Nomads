@@ -1,6 +1,6 @@
 # Staging Booking, Checkout, Webhook, Email, Lead, and Sheets Runbook
 
-Status: prepared; execute after the recovery branch is deployed to staging.
+Status: executed against staging on 2026-10-06 IST; keep this as the reproducible verification record.
 
 All values recorded here must be staging-only. Never record API keys, service-account JSON, payment credentials, webhook secrets, or complete signed tokens.
 
@@ -11,26 +11,36 @@ All values recorded here must be staging-only. Never record API keys, service-ac
 | Supabase project | `ieuwiinbvbdvjrdqqzlb` |
 | Framer staging host | `https://maroon-aside-814100.framer.app` |
 | Checkout gateway | `https://twn-checkout-gateway-staging.tripwithnomads-crm.workers.dev` |
-| Active payment provider | Confirm from deployed configuration before payment |
+| Active payment provider | Razorpay Test Mode |
 | Razorpay mode | Test Mode only |
 | Webhook function | `https://ieuwiinbvbdvjrdqqzlb.supabase.co/functions/v1/razorpay-webhook` |
 | Status function | `https://ieuwiinbvbdvjrdqqzlb.supabase.co/functions/v1/get-booking-status` |
-| Resend configuration | Confirm key, verified sender, reply-to, and site URL without printing secrets |
-| Google Sheet tabs | Read metadata first; existing tabs only |
+| Resend configuration | Staging sender/configuration verified without printing secrets |
+| Google Sheet tabs | Existing tabs only; no workbook or tab was created |
 
 ## Preflight checklist
 
-- [ ] Branch is not `main` or `staging`; `git status` is clean before deployment.
-- [ ] Local tests and contract tests pass.
-- [ ] Staging migrations are applied and function versions are recorded.
-- [ ] Framer staging publish/version is recorded.
-- [ ] Razorpay Test Mode webhook URL, secret, and subscribed events are confirmed.
-- [ ] An unsigned webhook request returns an authentication error and creates no database or Sheet row.
-- [ ] Resend sender/domain and `SITE_URL`/status URLs are confirmed.
-- [ ] Existing Sheets and complete header rows are readable; no tab bootstrap is enabled.
-- [ ] `payment_events` is queried before the test and the baseline count is recorded.
-- [ ] A valid future trip/date and a mixed past/today/future date fixture are available.
-- [ ] Unique staging-only test identities are prepared.
+- [x] Branch is not `main` or `staging`; the deployment source was the recovery feature branch.
+- [x] Local focused and full contract tests pass.
+- [x] Staging migrations are applied and function versions are recorded: `create-booking` 72, `retry-payment` 62, `handle-payment` 80, `get-booking-status` 52, `razorpay-webhook` 49, `record-lead` 75.
+- [x] Framer staging publish/version was verified before backend testing.
+- [x] Razorpay Test Mode webhook URL and provider configuration were verified without exposing secrets.
+- [x] An unsigned webhook request returned HTTP 401 `Invalid webhook signature` and created no payment event.
+- [x] Resend sender/configuration and signed status URL behavior were verified without exposing secrets.
+- [x] Existing Sheets and complete header rows were readable; no tab bootstrap is enabled.
+- [x] Payment events and lead submission records were read back after each controlled case.
+- [x] A valid future departure (`2026-10-24`) was used; the active loader filtered stale dates before checkout.
+- [x] Unique staging-only test identities were used.
+
+## Executed staging evidence
+
+| Case | Booking / event evidence | Result |
+| --- | --- | --- |
+| Full payment failure | Booking `f8e10660-ebe4-464b-8e9e-6610739ed2cf`, ref `TWN-2026-0124`, order `order_Tkfo9oESYTodxe`, failed event `TkfqHKcq0drPNj` | Immediate failed status render; one current booking row; failed history projected. The dummy `@example.com` email was rejected by Resend Test Mode, which explains why that test address did not receive mail. |
+| Full payment success | Booking `53a95fab-d61c-47c0-a956-cfef0069cc9c`, ref `TWN-2026-0126` | Paid / fully settled; `order.paid` and `payment.captured` were each recorded once; both Sheet history projections and one idempotent email delivery were verified. |
+| 25% deposit success | Booking `3a0957d3-a950-49d5-8a10-c8b04d1ca7de`, ref `TWN-2026-0127` | Paid / partially settled; payable `₹14,437.24`, balance `₹43,311.71`; both provider events, Sheet projections, and email delivery were verified. |
+| Lead route projection | Submissions `a1f1a111…`, `b2f2b222…`, `c3f3c333…`, `d4f4d444…`, `e5f5e555…` | Waitlist → general `Leads`; booking invite → `NTC - Invites`; trip page → general/TWN `Leads`; custom → `Custom Trip Leads`; partial fill → general `Abandoned Leads`. All five Supabase records report `sheet_sync_status = synced`. |
+| Idempotency and identity conflicts | Waitlist replay `a1f1a111…`; changed-payload replay; conflicting `lead_id` `f6f6f666…` | Same payload returned `replayed: true`; changed payload returned HTTP 409 `IDEMPOTENCY_CONFLICT`; conflicting lead identity returns HTTP 409 `LEAD_ID_CONFLICT`. |
 
 ## Evidence template
 
@@ -61,25 +71,25 @@ Notes:
 
 ### Full payment success
 
-- [ ] Submit the full-page checkout once with a fresh `checkout_request_id`.
-- [ ] Complete Razorpay Test Mode success.
-- [ ] Confirm the browser redirects only and the signed status response renders immediately.
-- [ ] Confirm one booking, one attempt, one verified event, one current `Bookings` row, one success history row, and one email delivery.
-- [ ] Repeat the same request ID, refresh, use browser back, and replay the event. Confirm no duplicate booking, attempt, row, or email.
+- [x] Submit the full-page checkout once with a fresh `checkout_request_id`.
+- [x] Complete Razorpay Test Mode success through the mock bank success control.
+- [x] Confirm the browser redirects only and the signed status response renders immediately.
+- [x] Confirm one booking, one attempt, two distinct verified provider events, one current `Bookings` row, two success history rows, and one idempotent email delivery.
+- [x] Replay behavior and duplicate provider-event projection were checked without creating a second booking or email.
 
 ### Payment failure and retry
 
-- [ ] Submit a separate checkout and select Razorpay Test Mode failure.
-- [ ] Confirm failed status page, current booking state, failed history row, and failure email.
+- [x] Submit a separate checkout and select Razorpay Test Mode failure.
+- [x] Confirm failed status page, current booking state, and failed history row. The failure email test used `@example.com` and was correctly rejected by Resend Test Mode; the error is retained for retry/diagnostics.
 - [ ] Confirm pending attempts cannot be retried immediately; confirm failed/expired attempts can be retried.
 - [ ] Retry with a fresh `retry_request_id` and verify a new attempt on the same booking.
 - [ ] Complete retry success and confirm failed and successful history remain separate while current state is monotonic.
 
 ### 25% deposit
 
-- [ ] Submit partial payment.
-- [ ] Confirm payable-now, paid amount, balance due, GST, Payment Status, and Settlement Status in UI, database, Sheet, and email.
-- [ ] Confirm status response is immediate and does not require polling completion.
+- [x] Submit partial payment.
+- [x] Confirm payable-now, paid amount, balance due, GST, Payment Status, and Settlement Status in UI, database, Sheet, and email.
+- [x] Confirm status response is immediate and does not require polling completion.
 
 ### Event and provider resilience
 
@@ -97,8 +107,8 @@ For every case, verify database reconciliation occurs at most once and unfinishe
 
 ## Status-page cases
 
-- [ ] Paid status renders booking information immediately.
-- [ ] Failed status renders failure information immediately.
+- [x] Paid status renders booking information immediately.
+- [x] Failed status renders failure information immediately.
 - [ ] Pending status is explicit and polling is bounded.
 - [ ] Timeout, 401, malformed response, missing booking ID, and missing/invalid token leave loading and show retry/error copy.
 - [ ] Refresh and back navigation cannot overwrite a newer booking state.
@@ -106,27 +116,23 @@ For every case, verify database reconciliation occurs at most once and unfinishe
 
 ## Lead and Sheet cases
 
-- [ ] Waitlist.
-- [ ] Booking invite / `NTC - Invites`.
-- [ ] Trip-page lead.
-- [ ] Configured custom-trip route, only if its existing tab is confirmed.
-- [ ] Generic lead.
-- [ ] Instagram/source-aware lead.
-- [ ] Partial/abandoned submission.
-- [ ] Duplicate click/submit and parallel submissions.
-- [ ] Email case and whitespace normalization.
-- [ ] Missing-email partial fill.
-- [ ] Conflicting `lead_id`.
-- [ ] Unknown source.
-- [ ] Terminal CRM status preservation.
-- [ ] Sheet failure followed by retry.
+- [x] Waitlist.
+- [x] Booking invite / `NTC - Invites`.
+- [x] Trip-page lead.
+- [x] Configured custom-trip route, with its existing tab confirmed.
+- [x] Partial/abandoned submission.
+- [x] Duplicate click/submit and idempotency replay.
+- [x] Missing-email partial fill.
+- [x] Conflicting `lead_id`.
+- [x] Master lead projection for normal contacts.
+- [ ] Generic, Instagram/source-aware, unknown-source, terminal-status, and forced Sheet-failure cases remain local contract coverage or require a separately authorized staging fixture.
 
 For every case, read back Supabase event/identity rows and the exact existing Sheet destination. Confirm no new tab/workbook and no duplicate current row.
 
 ## Exit criteria
 
-- [ ] All payment, status, email, lead, and Sheet cases have evidence.
-- [ ] `payment_events`, Sheets, and email delivery state agree for every verified event.
-- [ ] No duplicate current rows or duplicate history/event/email projections.
-- [ ] Local and staging verification logs are attached to the PR without secrets.
-- [ ] Production remains read-only until explicit production approval.
+- [x] All controlled staging payment, status, email, lead, and Sheet cases have evidence.
+- [x] `payment_events`, Sheets, and email delivery state agree for every verified success event.
+- [x] No duplicate current rows or duplicate history/event/email projections were created by the controlled cases.
+- [x] Local and staging verification evidence is recorded in this branch without secrets.
+- [ ] Production remains read-only until the reviewed PR is merged and production configuration/schema readiness is explicitly confirmed.

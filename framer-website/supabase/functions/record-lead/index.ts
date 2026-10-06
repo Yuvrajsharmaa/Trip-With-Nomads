@@ -519,7 +519,12 @@ Deno.serve(async (req) => {
     } catch (err: any) {
         console.error("[record-lead] error", err)
         const message = compact(err?.message || err)
-        const conflict = /conflict|duplicate|different normalized email|repair required/i.test(message)
-        return json({ error: message || "Internal Server Error" }, conflict ? 409 : 500)
+        const conflict = /conflict|duplicate|different normalized email|does not belong|repair required/i.test(message)
+        return json(
+            conflict
+                ? { error: message || "Lead identity conflict", code: "LEAD_ID_CONFLICT" }
+                : { error: message || "Internal Server Error" },
+            conflict ? 409 : 500,
+        )
     }
 })

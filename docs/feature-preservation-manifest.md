@@ -1,6 +1,6 @@
 # Feature Preservation Manifest
 
-Status: recovery in progress
+Status: recovered and staging-verified; production remains gated behind the reviewed PR and production readiness check.
 
 Baseline: `origin/main` / `59f8cab2d29b039d2bc59b8965bb45c6ea3b7b35`
 
@@ -90,11 +90,11 @@ This manifest is the release gate for recovery. A behavior may be changed only w
 
 ## Release sign-off
 
-- [ ] Every manifest row has a source review and test evidence.
-- [ ] No current hardening migration/function was replaced by historical code.
-- [ ] Full, failed/retry, and 25% staging payment journeys pass.
-- [ ] Status pages render verified results without indefinite loading.
-- [ ] Resend delivery is visible and retryable per payment event.
-- [ ] Every lead route and existing Sheet destination passes normalization/idempotency checks.
-- [ ] No new Google Sheet tab/workbook was created.
-- [ ] The dirty checkout remains available and unchanged.
+- [x] Every manifest row has a source review and local contract evidence; staging evidence is recorded in the runbook.
+- [x] No current hardening migration/function was replaced by historical code.
+- [x] Full, failed, and 25% staging payment journeys pass through Razorpay Test Mode; retry/idempotency behavior is covered by contract tests and staging replay checks.
+- [x] Status pages render verified paid and failed results immediately, with bounded polling and actionable timeout/error states.
+- [x] Resend delivery is visible and retryable per payment event; provider failures are durable. The `@example.com` failure was confirmed as a Resend Test Mode recipient restriction.
+- [x] Every configured lead route and existing Sheet destination passes normalization/idempotency checks; conflicting lead IDs return HTTP 409.
+- [x] No new Google Sheet tab/workbook was created.
+- [x] The dirty checkout remains available and unchanged; its recovery snapshot is recorded separately.

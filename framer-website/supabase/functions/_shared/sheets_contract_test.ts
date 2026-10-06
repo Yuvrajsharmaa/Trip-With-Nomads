@@ -21,4 +21,6 @@ Deno.test("application Sheet helper never creates missing managed tabs", async (
     assert(source.includes("appendHistoryRowOnce"))
     assert(source.includes("Current-state Sheet key is required"))
     assert(source.includes("History event key is required"))
+    assert(source.includes("partially intersects a table"))
+    assert(source.includes("retry without trying to replace the table's filter"))
 })

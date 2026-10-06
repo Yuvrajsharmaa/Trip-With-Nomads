@@ -273,13 +273,29 @@ export async function formatManagedTab(
         }
     });
 
-    const res = await sheetsFetch(":batchUpdate", sheetId, {
+    const sendFormatting = (batchRequests: any[]) => sheetsFetch(":batchUpdate", sheetId, {
         method: "POST",
-        body: JSON.stringify({ requests }),
+        body: JSON.stringify({ requests: batchRequests }),
     });
+
+    let res = await sendFormatting(requests);
     if (!res.ok) {
         const text = await res.text();
-        throw new Error(`Managed Sheet formatting failed: ${res.status} ${text}`);
+        const tableOwnsFilter = text.includes("setBasicFilter") &&
+            text.includes("partially intersects a table");
+        if (!tableOwnsFilter) {
+            throw new Error(`Managed Sheet formatting failed: ${res.status} ${text}`);
+        }
+
+        // Some existing managed tabs already contain a Google Sheets table.
+        // Google rejects a basic filter that intersects that table; the table
+        // already supplies filtering, so preserve the other formatting and
+        // retry without trying to replace the table's filter.
+        res = await sendFormatting(requests.filter((request) => !request.setBasicFilter));
+        if (!res.ok) {
+            const retryText = await res.text();
+            throw new Error(`Managed Sheet formatting failed: ${res.status} ${retryText}`);
+        }
     }
     ensuredFormatting.get(sheetId)!.add(tab);
 }

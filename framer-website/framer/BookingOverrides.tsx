@@ -288,7 +288,9 @@ export function withTravellerSharingKey(Component): ComponentType {
         const options = useMemo(() => {
             if (!store.date) return []
             const pd = store.pricingData || []
-            return [...new Set(pd.filter((d: any) => d.start_date === store.date).map((d: any) => d.variant_name))].sort()
+            return Array.from(
+                new Set<string>(pd.filter((d: any) => d.start_date === store.date).map((d: any) => String(d.variant_name || "")))
+            ).filter(Boolean).sort()
         }, [store.date, store.pricingData])
 
         if (index === null) return <Component {...props} />

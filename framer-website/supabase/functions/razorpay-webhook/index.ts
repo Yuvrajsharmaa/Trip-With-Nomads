@@ -226,6 +226,11 @@ async function verifyRazorpayState(params: {
         : {}
     const orderStatus = String(order.status || "").trim().toLowerCase()
     const paymentStatus = String(payment.status || "").trim().toLowerCase()
+    const paymentOrderId = firstNonEmpty(payment.order_id)
+
+    if (params.paymentId && paymentOrderId && paymentOrderId !== params.orderId) {
+        throw new InvalidWebhookError("Razorpay payment does not belong to the webhook order")
+    }
 
     if (SUCCESS_EVENTS.has(params.eventName)) {
         if (orderStatus !== "paid") {
@@ -570,12 +575,11 @@ function validateOwnership(params: { booking: any; attempt: any; orderId: string
     if (params.attempt.provider_order_id && params.attempt.provider_order_id !== params.orderId) {
         throw new InvalidWebhookError("Webhook order does not match the payment attempt")
     }
-    if (params.attempt.provider_payment_id && params.paymentId && params.attempt.provider_payment_id !== params.paymentId) {
-        throw new InvalidWebhookError("Webhook payment does not match the payment attempt")
-    }
-    if (params.booking.payment_gateway_payment_id && params.paymentId && params.booking.payment_gateway_payment_id !== params.paymentId) {
-        throw new InvalidWebhookError("Webhook payment does not match the booking")
-    }
+    // Razorpay can issue more than one payment ID for the same order when a
+    // customer retries inside the hosted checkout. The server-side payment
+    // lookup below verifies that the new ID belongs to this order before
+    // reconciliation; rejecting it here would strand a valid retry after an
+    // earlier failed payment.
 }
 
 async function reconcilePayment(params: {

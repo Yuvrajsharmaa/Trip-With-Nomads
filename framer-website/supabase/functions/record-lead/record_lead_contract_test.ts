@@ -19,6 +19,8 @@ Deno.test("record-lead requires durable submission identity and retries Sheet pr
     assertStringIncludes(source, "booking_abandoned")
     assertStringIncludes(source, "GOOGLE_SHEET_ID_MASTER")
     assertStringIncludes(source, "Master Leads")
+    assertStringIncludes(source, "LEAD_ID_CONFLICT")
+    assertStringIncludes(source, "does not belong")
 })
 
 Deno.test("lead routing is explicit and custom tabs remain configuration-gated", () => {
