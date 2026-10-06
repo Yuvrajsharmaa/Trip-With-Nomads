@@ -16,5 +16,6 @@ Deno.test("payment idempotency migration creates booking, attempt, and event con
     assertStringIncludes(source, "sheet_sync_status")
     assertStringIncludes(source, "reconciliation_result")
     assertStringIncludes(source, "payment_attempts_one_open_per_booking_uidx")
+    assertStringIncludes(source, "alter column txnid drop not null")
     assertStringIncludes(source, "enable row level security")
 })
