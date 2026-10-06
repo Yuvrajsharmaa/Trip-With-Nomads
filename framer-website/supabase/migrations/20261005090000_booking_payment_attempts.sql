@@ -42,6 +42,7 @@ create table if not exists public.payment_attempts (
 );
 
 alter table public.payment_attempts
+    add column if not exists attempt_no integer,
     add column if not exists idempotency_key text,
     add column if not exists provider text not null default 'unknown',
     add column if not exists provider_order_id text,
@@ -57,6 +58,97 @@ alter table public.payment_attempts
     add column if not exists failed_at timestamptz,
     add column if not exists created_at timestamptz not null default timezone('utc', now()),
     add column if not exists updated_at timestamptz not null default timezone('utc', now());
+
+-- Older staging/production databases may already have a small PayU-era
+-- payment_attempts table (id, booking_id, txnid, status, amount, payment_link,
+-- created_at). Upgrade those rows in place instead of assuming the table was
+-- created by this migration. The optional legacy columns are handled through
+-- dynamic SQL so a fresh database does not need to carry them.
+do $$
+begin
+    if exists (
+        select 1
+          from information_schema.columns
+         where table_schema = 'public'
+           and table_name = 'payment_attempts'
+           and column_name = 'txnid'
+    ) then
+        execute $sql$
+            with ranked as (
+                select id,
+                       row_number() over (
+                           partition by booking_id
+                           order by created_at nulls first, id
+                       )::integer as derived_attempt_no
+                  from public.payment_attempts
+            )
+            update public.payment_attempts as attempt
+               set attempt_no = ranked.derived_attempt_no
+              from ranked
+             where attempt.id = ranked.id
+        $sql$;
+
+        execute $sql$
+            update public.payment_attempts
+               set provider = case
+                   when coalesce(nullif(trim(provider), ''), 'unknown') = 'unknown'
+                        and nullif(trim(txnid), '') is not null then 'payu'
+                   else coalesce(nullif(trim(provider), ''), 'unknown')
+               end,
+                   provider_transaction_id = coalesce(
+                       nullif(trim(provider_transaction_id), ''),
+                       nullif(trim(txnid), '')
+                   ),
+                   amount_minor = case
+                       when amount_minor = 0 and amount is not null
+                           then round(amount * 100)::bigint
+                       else amount_minor
+                   end,
+                   status = case lower(trim(coalesce(status, '')))
+                       when 'success' then 'paid'
+                       when 'succeeded' then 'paid'
+                       when 'captured' then 'paid'
+                       when 'cancelled' then 'cancelled'
+                       when 'canceled' then 'cancelled'
+                       when 'failed' then 'failed'
+                       when 'expired' then 'expired'
+                       when 'pending' then 'pending'
+                       when 'creating' then 'creating'
+                       when 'paid' then 'paid'
+                       else 'pending'
+                   end
+        $sql$;
+    end if;
+end
+$$;
+
+update public.payment_attempts
+   set attempt_no = 1
+ where attempt_no is null or attempt_no < 1;
+
+alter table public.payment_attempts
+    alter column attempt_no set default 1,
+    alter column attempt_no set not null;
+
+-- Preserve history while ensuring only the newest in-flight attempt remains
+-- retryable for a booking. This makes the unique open-attempt index safe for
+-- legacy rows that were inserted before idempotency existed.
+with ranked_open_attempts as (
+    select id,
+           row_number() over (
+               partition by booking_id
+               order by coalesce(created_at, timezone('utc', now())) desc, id desc
+           ) as position
+      from public.payment_attempts
+     where booking_id is not null
+       and status in ('creating', 'pending')
+)
+update public.payment_attempts as attempt
+   set status = 'superseded',
+       updated_at = timezone('utc', now())
+  from ranked_open_attempts
+ where attempt.id = ranked_open_attempts.id
+   and ranked_open_attempts.position > 1;
 
 create unique index if not exists payment_attempts_idempotency_key_uidx
     on public.payment_attempts (idempotency_key)

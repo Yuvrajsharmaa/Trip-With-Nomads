@@ -8,6 +8,8 @@ Deno.test("payment idempotency migration creates booking, attempt, and event con
     assertStringIncludes(source, "checkout_request_id")
     assertStringIncludes(source, "bookings_checkout_request_id_uidx")
     assertStringIncludes(source, "create table if not exists public.payment_attempts")
+    assertStringIncludes(source, "add column if not exists attempt_no integer")
+    assertStringIncludes(source, "Older staging/production databases")
     assertStringIncludes(source, "create table if not exists public.payment_events")
     assertStringIncludes(source, "provider_event_id")
     assertStringIncludes(source, "processing")
