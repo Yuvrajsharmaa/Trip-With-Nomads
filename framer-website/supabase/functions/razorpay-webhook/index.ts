@@ -17,6 +17,12 @@ import {
     isPaidStatus,
     transitionPaymentStatus,
 } from "../_shared/payment_reconciliation.ts"
+import { buildPaymentEmail } from "../_shared/payment_email.ts"
+import { sendResendEmail } from "../_shared/resend.ts"
+import {
+    issueBookingStatusToken,
+    resolveBookingStatusSecret,
+} from "../_shared/booking_status_token.ts"
 
 const corsHeaders = {
     "Access-Control-Allow-Origin": "*",
@@ -56,6 +62,26 @@ function toNumber(value: unknown): number {
 
 function round2(value: number): number {
     return Math.round((Number(value) + Number.EPSILON) * 100) / 100
+}
+
+function siteBaseUrl(): string {
+    const configured = firstNonEmpty(
+        Deno.env.get("SITE_URL"),
+        Deno.env.get("PAYMENT_REDIRECT_BASE_URL"),
+        "https://tripwithnomads.com",
+    ).replace(/\/$/, "")
+    return /^https?:\/\//i.test(configured) ? configured : `https://${configured}`
+}
+
+function statusTokenSecret(): string {
+    return resolveBookingStatusSecret(firstNonEmpty(
+        Deno.env.get("PAYU_LIVE_SALT"),
+        Deno.env.get("PAYU_TEST_SALT"),
+        Deno.env.get("PAYU_SALT"),
+        Deno.env.get("RAZORPAY_LIVE_KEY_SECRET"),
+        Deno.env.get("RAZORPAY_TEST_KEY_SECRET"),
+        Deno.env.get("RAZORPAY_KEY_SECRET"),
+    ))
 }
 
 function duplicateError(error: any): boolean {
@@ -333,6 +359,77 @@ async function loadBooking(supabase: any, bookingId: string, orderId: string): P
         }
     }
     return null
+}
+
+async function loadTripDetails(
+    supabase: any,
+    booking: Record<string, any>,
+): Promise<{ title: string; slug: string }> {
+    let title = firstNonEmpty(booking.trip_name, booking.trip_title)
+    let slug = firstNonEmpty(booking.trip_slug, booking.slug)
+    const tripId = firstNonEmpty(booking.trip_id)
+    if (!tripId) return { title, slug }
+
+    const trip = await supabase
+        .from("trips")
+        .select("title, slug")
+        .eq("id", tripId)
+        .maybeSingle()
+    if (!trip.error && trip.data) {
+        title = firstNonEmpty(trip.data.title, title)
+        slug = firstNonEmpty(trip.data.slug, slug)
+    }
+    return { title, slug }
+}
+
+async function sendPaymentUpdateEmail(params: {
+    supabase: any
+    previousBooking: Record<string, any>
+    booking: Record<string, any>
+}): Promise<void> {
+    const paymentStatus = firstNonEmpty(params.booking.payment_status).toLowerCase()
+    if (paymentStatus !== "paid" && paymentStatus !== "failed") return
+
+    try {
+        const trip = await loadTripDetails(params.supabase, params.booking)
+        const statusPath = paymentStatus === "failed"
+            ? "/payment-failed"
+            : "/payment-success"
+        const statusUrl = new URL(statusPath, `${siteBaseUrl()}/`)
+        statusUrl.searchParams.set("booking_id", String(params.booking.id || ""))
+        const secret = statusTokenSecret()
+        if (secret && params.booking.id) {
+            const token = await issueBookingStatusToken(String(params.booking.id), secret)
+            statusUrl.searchParams.set("status_token", token.token)
+        }
+
+        const email = buildPaymentEmail(
+            params.previousBooking,
+            params.booking,
+            trip.title,
+            siteBaseUrl(),
+            statusUrl.toString(),
+        )
+        if (!email) return
+
+        const result = await sendResendEmail(email)
+        if (result.sent) {
+            console.log("[razorpay-webhook] payment email sent", {
+                bookingId: params.booking.id,
+                paymentStatus,
+                settlementStatus: params.booking.settlement_status,
+                tripSlug: trip.slug,
+            })
+        }
+    } catch (error) {
+        // Payment and Sheet reconciliation remain successful if email delivery
+        // is unavailable. Resend's idempotency key makes a later event retry safe.
+        console.error("[razorpay-webhook] payment email failed", {
+            bookingId: params.booking.id,
+            paymentStatus,
+            error,
+        })
+    }
 }
 
 async function loadPaymentAttempt(
@@ -793,6 +890,12 @@ serve(async (req) => {
             })
             return jsonResponse({ error: "Payment applied; Sheet projection failed" }, 500)
         }
+
+        await sendPaymentUpdateEmail({
+            supabase,
+            previousBooking: booking,
+            booking: reconciliation.booking,
+        })
 
         return jsonResponse({
             ok: true,
