@@ -9,7 +9,9 @@ import {
     buildAbandonedLeadSheetRow,
     buildInviteLeadSheetRow,
     buildLeadSheetRow,
+    buildMasterLeadSheetRow,
     LEAD_HEADERS,
+    MASTER_LEAD_HEADERS,
     NTC_INVITE_HEADERS,
 } from "../_shared/lead_sheets.ts"
 import { targetForLead } from "../_shared/lead_routing.ts"
@@ -333,7 +335,21 @@ async function projectLead(params: {
             isInviteRoute ? NTC_INVITE_HEADERS : LEAD_HEADERS,
         )
     }
-    return { sheetLogged: true, sheetStatus: "synced" }
+    const masterSheetId = compact(Deno.env.get("GOOGLE_SHEET_ID_MASTER"))
+    let masterLogged = false
+    if (masterSheetId && params.lead) {
+        await upsertCurrentRow(
+            masterSheetId,
+            "Master Leads",
+            "Lead ID",
+            compact(params.lead.id),
+            buildMasterLeadSheetRow({ lead: params.lead, status: params.status }),
+            MASTER_LEAD_HEADERS,
+        )
+        masterLogged = true
+    }
+
+    return { sheetLogged: true, masterLogged, sheetStatus: "synced" }
 }
 
 Deno.serve(async (req) => {
@@ -359,9 +375,10 @@ Deno.serve(async (req) => {
             normalized_email: normalizedEmail || null,
             source,
             status,
-            name: compact(body?.name),
-            email: normalizedEmail,
-            phone: compact(body?.phone),
+        name: compact(body?.name),
+        email: normalizedEmail,
+        phone: compact(body?.phone),
+        country_code: compact(body?.country_code),
             instagram_id: compact(body?.instagram_id),
             page_url: compact(body?.page_url),
             trip_id: compact(body?.trip_id),

@@ -3,7 +3,9 @@ import {
     ABANDONED_LEAD_HEADERS,
     buildAbandonedLeadSheetRow,
     buildLeadSheetRow,
+    buildMasterLeadSheetRow,
     LEAD_HEADERS,
+    MASTER_LEAD_HEADERS,
     NTC_INVITE_HEADERS,
     buildInviteLeadSheetRow,
 } from "./lead_sheets.ts"
@@ -26,7 +28,12 @@ Deno.test("lead current and abandoned contracts are stable", () => {
         "Reason",
     ])
     assertEquals(NTC_INVITE_HEADERS[1], "Created At")
+    assertEquals(NTC_INVITE_HEADERS[5], "Country Code")
     assertEquals(NTC_INVITE_HEADERS.at(-1), "Status")
+    assertEquals(MASTER_LEAD_HEADERS, [
+        "Lead ID", "Created At", "Name", "Email", "Phone", "Country Code",
+        "Source", "Status", "Page URL", "Trip ID", "Trip Slug",
+    ])
 })
 
 Deno.test("lead builders preserve latest identity and submission fields", () => {
@@ -63,8 +70,16 @@ Deno.test("lead builders preserve latest identity and submission fields", () => 
 
     const inviteRow = buildInviteLeadSheetRow({
         lead: { id: "lead-1", first_seen_at: "2026-03-01T00:00:00.000Z", email: "GUEST@example.com" },
-        submission: { source: "booking_invite", status: "submitted", reason: "friend" },
+        submission: { source: "booking_invite", status: "submitted", reason: "friend", country_code: "+91" },
     })
     assertEquals(inviteRow.length, NTC_INVITE_HEADERS.length)
     assertEquals(inviteRow[3], "guest@example.com")
+    assertEquals(inviteRow[5], "+91")
+
+    const masterRow = buildMasterLeadSheetRow({
+        lead: { id: "lead-1", first_seen_at: "2026-03-01T00:00:00.000Z", email: "GUEST@example.com" },
+        status: "submitted",
+    })
+    assertEquals(masterRow.length, MASTER_LEAD_HEADERS.length)
+    assertEquals(masterRow[3], "guest@example.com")
 })

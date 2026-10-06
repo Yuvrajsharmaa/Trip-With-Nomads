@@ -46,8 +46,12 @@ export const MANAGED_TABS = {
     "Trip ID", "Trip Slug", "Status", "Reason",
   ] },
   "NTC - Invites": { key: "Email", headers: [
-    "Lead ID", "Created At", "Name", "Email", "Phone", "Instagram ID", "Reason", "Source",
+    "Lead ID", "Created At", "Name", "Email", "Phone", "Country Code", "Instagram ID", "Reason", "Source",
     "Page URL", "Trip ID", "Trip Slug", "UTM Source", "UTM Medium", "UTM Campaign", "Status",
+  ] },
+  "Master Leads": { key: "Lead ID", headers: [
+    "Lead ID", "Created At", "Name", "Email", "Phone", "Country Code", "Source", "Status",
+    "Page URL", "Trip ID", "Trip Slug",
   ] },
 }
 
