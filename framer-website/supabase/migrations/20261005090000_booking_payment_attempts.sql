@@ -130,6 +130,24 @@ alter table public.payment_attempts
     alter column attempt_no set default 1,
     alter column attempt_no set not null;
 
+-- The legacy PayU table required txnid, but Razorpay attempts identify the
+-- provider order/payment separately. Keep the legacy column for history while
+-- allowing new provider-neutral attempts to omit it.
+do $$
+begin
+    if exists (
+        select 1
+          from information_schema.columns
+         where table_schema = 'public'
+           and table_name = 'payment_attempts'
+           and column_name = 'txnid'
+           and is_nullable = 'NO'
+    ) then
+        execute 'alter table public.payment_attempts alter column txnid drop not null';
+    end if;
+end
+$$;
+
 -- Preserve history while ensuring only the newest in-flight attempt remains
 -- retryable for a booking. This makes the unique open-attempt index safe for
 -- legacy rows that were inserted before idempotency existed.
