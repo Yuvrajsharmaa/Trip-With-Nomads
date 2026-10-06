@@ -1086,7 +1086,7 @@ serve(async (req) => {
         }
 
         const bookingsSheetId = firstNonEmpty(
-            Deno.env.get("GOOGLE_SHEET_ID_TRIPS"),
+            Deno.env.get("BOOKING_CALLBACK_SHEET_ID"),
             Deno.env.get("GOOGLE_SHEET_ID")
         )
         const bookingsSheetTab = firstNonEmpty(Deno.env.get("BOOKINGS_SHEET_TAB"), "Bookings")

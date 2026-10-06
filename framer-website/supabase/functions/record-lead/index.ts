@@ -92,7 +92,7 @@ function routeForLead(source: string, status: string): { sheetId: string; tab: s
     const route = targetForLead(source, status, {
         original: Deno.env.get("GOOGLE_SHEET_ID"),
         ntc: Deno.env.get("GOOGLE_SHEET_ID_NTC"),
-        trips: Deno.env.get("GOOGLE_SHEET_ID_TRIPS"),
+        tripLeads: Deno.env.get("GOOGLE_SHEET_ID_TRIP_LEADS"),
         custom: Deno.env.get("GOOGLE_SHEET_ID_CUSTOM_TRIPS") || Deno.env.get("CUSTOM_TRIPS_SHEET_ID"),
         general: Deno.env.get("GOOGLE_SHEET_ID_GENERAL"),
     })
@@ -341,8 +341,11 @@ async function projectLead(params: {
         await upsertCurrentRow(
             masterSheetId,
             "Master Leads",
-            "Lead ID",
-            compact(params.lead.id),
+            // Master Leads is a current-contact overview. Match it by the
+            // normalized email identity rather than the internal lead UUID so
+            // legacy identity repairs cannot create another visible row.
+            "Email",
+            normalizeEmail(params.lead.email),
             buildMasterLeadSheetRow({ lead: params.lead, status: params.status }),
             MASTER_LEAD_HEADERS,
         )

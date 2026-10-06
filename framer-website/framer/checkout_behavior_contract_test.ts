@@ -1,4 +1,4 @@
-import { assert, assertStringIncludes } from "https://deno.land/std@0.224.0/assert/mod.ts"
+import { assert, assertEquals, assertStringIncludes } from "https://deno.land/std@0.224.0/assert/mod.ts"
 
 async function read(name: string): Promise<string> {
     return await Deno.readTextFile(new URL(`./${name}`, import.meta.url))
@@ -28,15 +28,15 @@ Deno.test("canonical checkout uses stable request ids, the active Razorpay gatew
     assertStringIncludes(source, "pagehide")
 })
 
-Deno.test("legacy booking modal is a checkout compatibility adapter", async () => {
-    const source = await read("BookingOverrides.tsx")
-
-    assert(!source.includes("const TAX_RATE = 0.02"))
-    assert(!source.includes("/functions/v1/create-booking"))
-    assertStringIncludes(source, "/checkout")
-    assertStringIncludes(source, "sessionStorage")
-    assertStringIncludes(source, "__twn_checkout_draft_v1")
-    assertStringIncludes(source, "Opening checkout")
+Deno.test("obsolete booking modal is absent and the full-page checkout is the only buying flow", async () => {
+    let modalExists = true
+    try {
+        await Deno.stat(new URL("./BookingOverrides.tsx", import.meta.url))
+    } catch (error) {
+        if (error instanceof Deno.errors.NotFound) modalExists = false
+        else throw error
+    }
+    assertEquals(modalExists, false)
 })
 
 Deno.test("status UI renders payment and settlement state from the signed response", async () => {

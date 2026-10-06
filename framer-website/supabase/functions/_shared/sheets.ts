@@ -359,11 +359,23 @@ export async function appendRow(
     await ensureTab(tab, sheetId);
     if (headers?.length) await ensureHeaders(tab, headers, sheetId);
 
+    // Some existing managed tabs contain a legacy table/range whose append
+    // anchor is offset from column A. Use an explicit next-row update instead
+    // of values.append so every new record starts at the contract's first
+    // column and cannot shift the visible fields.
+    const existingRows = await readTabValues(sheetId, tab, "A1:ZZ10000");
+    let lastPopulatedRow = 0;
+    for (let index = 0; index < existingRows.length; index++) {
+        const row = Array.isArray(existingRows[index]) ? existingRows[index] : [];
+        if (row.some((cell) => String(cell ?? "").trim() !== "")) lastPopulatedRow = index + 1;
+    }
+    const rowNumber = Math.max(2, lastPopulatedRow + 1);
+    const endColumn = columnNumberToName(Math.max(1, values.length));
     const res = await sheetsFetch(
-        `/values/${encodeURIComponent(tab)}!A:ZZ:append?valueInputOption=RAW`,
+        `/values/${encodeURIComponent(tab)}!A${rowNumber}:${endColumn}${rowNumber}?valueInputOption=RAW`,
         sheetId,
         {
-            method: "POST",
+            method: "PUT",
             body: JSON.stringify({ values: [values] }),
         }
     );
@@ -374,7 +386,7 @@ export async function appendRow(
     }
 
     const data = await res.json();
-    return parseRowIndex(data?.updates?.updatedRange || null);
+    return parseRowIndex(data?.updates?.updatedRange || null) || rowNumber;
 }
 
 export async function updateRow(
@@ -453,7 +465,10 @@ export async function findRowsByColumnValue(
     await ensureTab(tab, sheetId);
     if (headers?.length) await ensureHeaders(tab, headers, sheetId);
 
-    const rows = await readTabValues(sheetId, tab, "A1:ZZ");
+    // `A1:ZZ` is interpreted by Sheets as a one-row range because the end
+    // coordinate has no row number. Use an explicit bounded range so all
+    // current rows are considered before deciding whether to append.
+    const rows = await readTabValues(sheetId, tab, "A1:ZZ10000");
     if (rows.length === 0) return [];
 
     const header = Array.isArray(rows[0]) ? rows[0].map((cell) => String(cell || "").trim()) : [];
@@ -492,7 +507,20 @@ export async function upsertCurrentRow(
         return { row: matches[0], created: false };
     }
     const row = await appendRow(sheetId, tab, values, headers);
-    if (!row) throw new Error(`Current-state Sheet row append returned no row for ${tab}`);
+    if (!row) {
+        // Google can commit the append while omitting updates.updatedRange from
+        // the values.append response. Re-read the idempotency key before
+        // reporting a projection failure; this avoids turning a successful
+        // append into a false retry/error response.
+        const rechecked = await findRowsByColumnValue(sheetId, tab, keyColumn, keyValue, headers);
+        if (currentRowAction(rechecked.length) === "fail") {
+            throw new Error(
+                `Multiple current-state Sheet rows match ${keyColumn}=${String(keyValue || "").trim()} in ${tab}`,
+            );
+        }
+        if (rechecked.length === 1) return { row: rechecked[0], created: true };
+        throw new Error(`Current-state Sheet row append returned no row for ${tab}`);
+    }
     return { row, created: true };
 }
 
@@ -509,7 +537,19 @@ export async function appendHistoryRowOnce(
     }
     const matches = await findRowsByColumnValue(sheetId, tab, eventIdColumn, eventId, headers);
     if (matches.length > 0) return { row: matches[0], appended: false };
-    return { row: await appendRow(sheetId, tab, values, headers), appended: true };
+    const row = await appendRow(sheetId, tab, values, headers);
+    if (row) return { row, appended: true };
+
+    // Treat a committed append with a missing updatedRange as successful only
+    // after the event key is visible. Otherwise leave the caller retryable.
+    const rechecked = await findRowsByColumnValue(sheetId, tab, eventIdColumn, eventId, headers);
+    if (rechecked.length > 1) {
+        throw new Error(
+            `Multiple history Sheet rows match ${eventIdColumn}=${String(eventId || "").trim()} in ${tab}`,
+        );
+    }
+    if (rechecked.length === 1) return { row: rechecked[0], appended: true };
+    throw new Error(`History Sheet row append returned no row for ${tab}`);
 }
 
 export async function safeUpdateRow(

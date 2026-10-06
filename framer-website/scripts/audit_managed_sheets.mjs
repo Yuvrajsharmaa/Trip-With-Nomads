@@ -49,7 +49,7 @@ export const MANAGED_TABS = {
     "Lead ID", "Created At", "Name", "Email", "Phone", "Country Code", "Instagram ID", "Reason", "Source",
     "Page URL", "Trip ID", "Trip Slug", "UTM Source", "UTM Medium", "UTM Campaign", "Status",
   ] },
-  "Master Leads": { key: "Lead ID", headers: [
+  "Master Leads": { key: "Email", headers: [
     "Lead ID", "Created At", "Name", "Email", "Phone", "Country Code", "Source", "Status",
     "Page URL", "Trip ID", "Trip Slug",
   ] },
@@ -150,7 +150,7 @@ export function buildDryRunRepairPlan(audit) {
     }
     const duplicates = tab.history ? (tab.exactHistoryDuplicates || []) : (tab.duplicateKeys || [])
     for (const duplicate of duplicates) {
-      if (tab.tab === "Bookings" || tab.tab === "Leads" || tab.tab === "NTC - Invites") {
+      if (tab.tab === "Bookings" || tab.tab === "Leads" || tab.tab === "NTC - Invites" || tab.tab === "Master Leads") {
         actions.push({
           action: "merge_current_rows_dry_run",
           tab: tab.tab,
