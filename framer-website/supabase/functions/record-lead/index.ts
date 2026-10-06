@@ -12,6 +12,7 @@ import {
     LEAD_HEADERS,
     NTC_INVITE_HEADERS,
 } from "../_shared/lead_sheets.ts"
+import { targetForLead } from "../_shared/lead_routing.ts"
 
 const corsHeaders = {
     "Access-Control-Allow-Origin": "*",
@@ -43,7 +44,10 @@ function isValidEmail(value: string): boolean {
 }
 
 function normalizeSource(value: unknown): string {
-    return compact(value) || "unknown"
+    const source = compact(value).toLowerCase()
+    if (source === "waitlist") return "waitlist_popup"
+    if (source === "generic_form") return "general_lead"
+    return source || "unknown"
 }
 
 function isTerminalStatus(value: unknown): boolean {
@@ -83,31 +87,25 @@ async function payloadHash(value: any): Promise<string> {
 }
 
 function routeForLead(source: string, status: string): { sheetId: string; tab: string; note: string } {
-    const ntcSheetId = compact(Deno.env.get("GOOGLE_SHEET_ID_NTC"))
-    const tripsSheetId = compact(Deno.env.get("GOOGLE_SHEET_ID_TRIPS"))
-    const generalSheetId = compact(Deno.env.get("GOOGLE_SHEET_ID_GENERAL") || Deno.env.get("GOOGLE_SHEET_ID"))
-    const isPartial = status === "partial_fill"
-    const knownSource = new Set(["waitlist_popup", "booking_invite", "trip_page_lead", "general_lead"])
-    const sourceNote = knownSource.has(source) ? "" : `unknown_source:${source}`
-
-    if (source === "booking_invite") {
-        return {
-            sheetId: ntcSheetId,
-            tab: isPartial ? "Abandoned Leads" : "NTC - Invites",
-            note: sourceNote,
-        }
-    }
-    if (source === "trip_page_lead") {
-        return {
-            sheetId: tripsSheetId,
-            tab: isPartial ? "Abandoned Leads" : "Leads",
-            note: sourceNote,
-        }
-    }
+    const route = targetForLead(source, status, {
+        original: Deno.env.get("GOOGLE_SHEET_ID"),
+        ntc: Deno.env.get("GOOGLE_SHEET_ID_NTC"),
+        trips: Deno.env.get("GOOGLE_SHEET_ID_TRIPS"),
+        custom: Deno.env.get("GOOGLE_SHEET_ID_CUSTOM_TRIPS") || Deno.env.get("CUSTOM_TRIPS_SHEET_ID"),
+        general: Deno.env.get("GOOGLE_SHEET_ID_GENERAL"),
+    })
+    const knownSource = new Set([
+        "waitlist_popup",
+        "booking_invite",
+        "trip_page_lead",
+        "general_lead",
+        "custom_trip_lead",
+        "booking_abandoned",
+    ])
     return {
-        sheetId: generalSheetId,
-        tab: isPartial ? "Abandoned Leads" : "Leads",
-        note: sourceNote,
+        sheetId: route?.sheetId || "",
+        tab: route?.tab || "",
+        note: knownSource.has(source) ? "" : `unknown_source:${source}`,
     }
 }
 

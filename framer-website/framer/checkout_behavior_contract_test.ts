@@ -22,6 +22,10 @@ Deno.test("canonical checkout uses stable request ids, the active Razorpay gatew
     assertStringIncludes(source, "due_amount")
     assertStringIncludes(source, "tax_amount")
     assertStringIncludes(source, "coupon_code")
+    assertStringIncludes(source, "BOOKING_ABANDON_LEAD_SOURCE")
+    assertStringIncludes(source, "checkout_abandoned_before_payment")
+    assertStringIncludes(source, "getStableBookingAbandonId")
+    assertStringIncludes(source, "pagehide")
 })
 
 Deno.test("legacy booking modal is a checkout compatibility adapter", async () => {

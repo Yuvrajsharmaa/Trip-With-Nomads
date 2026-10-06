@@ -3,6 +3,7 @@ import { assert, assertStringIncludes } from "https://deno.land/std@0.224.0/asse
 const source = await Deno.readTextFile(new URL("./index.ts", import.meta.url))
 const wrapper = await Deno.readTextFile(new URL("../../../framer/EmailPopupOverride.tsx", import.meta.url))
 const migration = await Deno.readTextFile(new URL("../../migrations/20261006100000_lead_submission_idempotency.sql", import.meta.url))
+const routing = await Deno.readTextFile(new URL("../_shared/lead_routing.ts", import.meta.url))
 
 Deno.test("record-lead requires durable submission identity and retries Sheet projection", () => {
     assertStringIncludes(source, "submission_id")
@@ -14,6 +15,14 @@ Deno.test("record-lead requires durable submission identity and retries Sheet pr
     assertStringIncludes(source, "appendHistoryRowOnce")
     assertStringIncludes(source, ".range(offset, offset + pageSize - 1)")
     assertStringIncludes(source, "utm_term")
+    assertStringIncludes(source, "GOOGLE_SHEET_ID_CUSTOM_TRIPS")
+    assertStringIncludes(source, "booking_abandoned")
+})
+
+Deno.test("lead routing is explicit and custom tabs remain configuration-gated", () => {
+    assertStringIncludes(routing, "Custom Trip Leads")
+    assertStringIncludes(routing, "env.custom")
+    assertStringIncludes(routing, "never creates them")
 })
 
 Deno.test("lead wrappers use one guarded event path", () => {
