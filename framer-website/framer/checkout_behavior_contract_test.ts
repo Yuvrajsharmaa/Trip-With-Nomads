@@ -31,6 +31,8 @@ Deno.test("status UI renders payment and settlement state from the signed respon
 
     assertStringIncludes(source, "payment_status")
     assertStringIncludes(source, "settlement_status")
+    assertStringIncludes(source, "Payment Status: Paid")
+    assertStringIncludes(source, "Settlement Status: Fully settled")
     assert(!source.includes('params.get("payment_status")'))
     assert(!source.includes('searchParams.get("payment_status")'))
 })

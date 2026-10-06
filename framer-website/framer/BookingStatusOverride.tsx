@@ -650,6 +650,28 @@ export function withTaxAmount(Component): ComponentType {
     return textOverride((d) => fmt(d.tax_amount))(Component)
 }
 
+// Legacy summary bindings retained for existing success/failure page instances.
+// They read the same provider-neutral booking fields as the current bindings.
+export function withTaxLabel(Component): ComponentType {
+    return textOverride(() => "GST (5%)")(Component)
+}
+
+export function withTotalAmount(Component): ComponentType {
+    return textOverride((d) => fmt(subtotalBeforeDiscount(d)))(Component)
+}
+
+export function withTotalTripCostLabel(Component): ComponentType {
+    return textOverride(() => "Total trip cost")(Component)
+}
+
+export function withPaymentAmountLabel(Component): ComponentType {
+    return textOverride((d) => {
+        if (d.payment_status === "paid") return "Payment Status: Paid"
+        if (d.payment_status === "failed") return "Payment Status: Failed"
+        return "Payment Status: Awaiting confirmation"
+    })(Component)
+}
+
 export function withTotalPaid(Component): ComponentType {
     return textOverride((d) => {
         const paid = paidAmount(d)
@@ -708,6 +730,25 @@ export function withPaymentBadge(Component): ComponentType {
         },
         "…"
     )(Component)
+}
+
+export function withDueLabel(Component): ComponentType {
+    return textOverride((d) => {
+        const status = settlementStatus(d)
+        if (status === "fully_paid") return "Settlement Status: Fully settled"
+        if (status === "partially_paid") return "Settlement Status: Balance due"
+        if (status === "failed") return "Settlement Status: Not settled"
+        return "Settlement Status: Pending"
+    })(Component)
+}
+
+export function withPaymentOutcomeTag(Component): ComponentType {
+    return textOverride((d) => {
+        const status = settlementStatus(d)
+        if (status === "fully_paid" || status === "partially_paid") return "Booking confirmed"
+        if (d.payment_status === "failed") return "Payment failed"
+        return "Payment processing"
+    })(Component)
 }
 
 // Use these as separate labels in the status page so gateway confirmation and

@@ -1,7 +1,35 @@
 import React from "react"
 import type { ComponentType } from "react"
 import { createStore } from "https://framer.com/m/framer/store.js@^1.0.0"
-import { isBookableDepartureDate, normalizeDateKey } from "./checkout_date_rules.ts"
+
+const CHECKOUT_TIMEZONE = "Asia/Kolkata"
+
+function formatCheckoutDateKey(value: Date): string {
+    const parts = new Intl.DateTimeFormat("en-GB", {
+        timeZone: CHECKOUT_TIMEZONE,
+        year: "numeric",
+        month: "2-digit",
+        day: "2-digit",
+    }).formatToParts(value)
+    const year = parts.find((part) => part.type === "year")?.value || ""
+    const month = parts.find((part) => part.type === "month")?.value || ""
+    const day = parts.find((part) => part.type === "day")?.value || ""
+    return year && month && day ? `${year}-${month}-${day}` : ""
+}
+
+function normalizeDateKey(value: any): string {
+    const raw = String(value || "").trim()
+    if (!raw) return ""
+    const direct = raw.match(/^(\d{4}-\d{2}-\d{2})/)
+    if (direct?.[1] && raw.length === 10) return direct[1]
+    const parsed = new Date(raw)
+    return Number.isNaN(parsed.getTime()) ? "" : formatCheckoutDateKey(parsed)
+}
+
+function isBookableDepartureDate(value: any, now = new Date()): boolean {
+    const dateKey = normalizeDateKey(value)
+    return Boolean(dateKey) && dateKey >= formatCheckoutDateKey(now)
+}
 
 const {
     createContext,
@@ -1212,6 +1240,73 @@ function withTextFromState(getText: (store: any) => string, fallback = "—") {
     }
 }
 
+function withFieldErrorText(getError: (store: any) => string) {
+    return function (Component: ComponentType): ComponentType {
+        return (props: any) => {
+            const [store] = useStore()
+            const text = String(getError(store) || "")
+            if (!text) {
+                return (
+                    <Component
+                        {...props}
+                        text=""
+                        style={{ ...(props.style || {}), display: "none" }}
+                    />
+                )
+            }
+            return <Component {...props} text={text} />
+        }
+    }
+}
+
+function checkoutFieldError(store: any, field: "date" | "name" | "phone" | "email"): string {
+    if (field === "date") {
+        if (!store?.date) return "Departure date is required"
+        if (!isBookableDepartureDate(store.date)) return "Select an upcoming departure date"
+        return ""
+    }
+    if (field === "name") return store?.contactName?.trim() ? "" : "Name is required"
+    if (field === "phone") {
+        if (!store?.contactPhone?.trim()) return "Phone number is required"
+        return PHONE_REGEX.test(store.contactPhone.trim()) ? "" : "Phone number is invalid"
+    }
+    if (!store?.contactEmail?.trim()) return "Email is required"
+    return EMAIL_REGEX.test(store.contactEmail.trim()) ? "" : "Email is invalid"
+}
+
+function travellerFieldError(
+    store: any,
+    context: TravellerContextValue | null,
+    field: "name" | "sharing" | "vehicle",
+): string {
+    const traveller = getTravellerByContext(store, context)
+    if (!traveller) return ""
+    if (field === "name") return traveller.name.trim() ? "" : "Traveller name is required"
+    if (field === "sharing") return traveller.sharing ? "" : "Sharing option is required"
+    const requiresVehicle = hasVehicleOptions(store?.pricingData || [], store?.date || "")
+    return !requiresVehicle || traveller.transport ? "" : "Vehicle is required"
+}
+
+function withTravellerFieldError(field: "name" | "sharing" | "vehicle") {
+    return function (Component: ComponentType): ComponentType {
+        return (props: any) => {
+            const [store] = useStore()
+            const context = useContext(TravellerContext)
+            const text = travellerFieldError(store, context, field)
+            if (!text) {
+                return (
+                    <Component
+                        {...props}
+                        text=""
+                        style={{ ...(props.style || {}), display: "none" }}
+                    />
+                )
+            }
+            return <Component {...props} text={text} />
+        }
+    }
+}
+
 function readNodeText(value: any): string {
     if (value == null) return ""
     if (typeof value === "string" || typeof value === "number") return String(value)
@@ -2191,6 +2286,54 @@ export function withCheckoutTaxValue(Component): ComponentType {
 export function withCheckoutTotal(Component): ComponentType {
     // Checkout summary total should reflect amount payable now.
     return withTextFromState((store) => fmtINR(computeTotals(store).payableNow))(Component)
+}
+
+// Legacy Framer bindings kept as compatibility adapters. The canonical
+// checkout state and pricing calculation remain shared with the current UI.
+export function withCheckoutGrandTotalLabel(Component): ComponentType {
+    return withTextFromState(() => "Total trip cost")(Component)
+}
+
+export function withCheckoutGrandTotal(Component): ComponentType {
+    return withTextFromState((store) => fmtINR(computeTotals(store).total))(Component)
+}
+
+export function withCheckoutPayableNowLabel(Component): ComponentType {
+    return withTextFromState(() => "Payable now")(Component)
+}
+
+export function withCheckoutDueLabel(Component): ComponentType {
+    return withTextFromState((store) =>
+        computeTotals(store).paymentMode === "partial_25" ? "Remaining due" : "Balance due"
+    )(Component)
+}
+
+export function withCheckoutNameError(Component): ComponentType {
+    return withFieldErrorText((store) => checkoutFieldError(store, "name"))(Component)
+}
+
+export function withCheckoutPhoneError(Component): ComponentType {
+    return withFieldErrorText((store) => checkoutFieldError(store, "phone"))(Component)
+}
+
+export function withCheckoutEmailError(Component): ComponentType {
+    return withFieldErrorText((store) => checkoutFieldError(store, "email"))(Component)
+}
+
+export function withCheckoutDepartureDateError(Component): ComponentType {
+    return withFieldErrorText((store) => checkoutFieldError(store, "date"))(Component)
+}
+
+export function withTravellerNameError(Component): ComponentType {
+    return withTravellerFieldError("name")(Component)
+}
+
+export function withTravellerSharingError(Component): ComponentType {
+    return withTravellerFieldError("sharing")(Component)
+}
+
+export function withTravellerVehicleError(Component): ComponentType {
+    return withTravellerFieldError("vehicle")(Component)
 }
 
 export function withCheckoutValidationHint(Component): ComponentType {

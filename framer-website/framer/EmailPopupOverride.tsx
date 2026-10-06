@@ -569,6 +569,61 @@ async function postLeadWithSource(
     }
 }
 
+function createLeadTrackingOverride(source: string, statusOverride?: string) {
+    return function (Component: ComponentType): ComponentType {
+        return function LeadTrackingCompatibilityAdapter(props: any) {
+            return (
+                <Component
+                    {...props}
+                    onClick={async (event: any) => {
+                        event?.preventDefault?.();
+                        event?.stopPropagation?.();
+                        const w = window as any;
+                        if (w[SUBMIT_LOCK_KEY]) return;
+                        w[SUBMIT_LOCK_KEY] = true;
+                        const form = event?.currentTarget?.closest?.("form") || null;
+                        try {
+                            const ok = await postLeadWithSource(form, source, statusOverride);
+                            if (ok) props.onClick?.(event);
+                        } finally {
+                            window.setTimeout(() => {
+                                w[SUBMIT_LOCK_KEY] = false;
+                            }, 700);
+                        }
+                    }}
+                    onSubmit={undefined}
+                />
+            );
+        };
+    };
+}
+
+// Compatibility exports for existing Framer instances. All routes share the
+// same submission-id, server-first lead capture implementation.
+export function withCustomTripTracking(Component: ComponentType): ComponentType {
+    return createLeadTrackingOverride("custom_trip_lead")(Component);
+}
+
+export function withWaitlistTracking(Component: ComponentType): ComponentType {
+    return createLeadTrackingOverride("waitlist_popup")(Component);
+}
+
+export function withWaitlistAbandonTracking(Component: ComponentType): ComponentType {
+    return createLeadTrackingOverride("waitlist_popup", "partial_fill")(Component);
+}
+
+export function withLeadAbandonTrackingGeneric(Component: ComponentType): ComponentType {
+    return createLeadTrackingOverride("generic_form", "partial_fill")(Component);
+}
+
+export function withLeadTracking(Component: ComponentType): ComponentType {
+    return createLeadTrackingOverride("general_lead")(Component);
+}
+
+export function withFormTracking(Component: ComponentType): ComponentType {
+    return createLeadTrackingOverride("general_lead", "partial_fill")(Component);
+}
+
 /**
  * withBookingInviteTracking — Apply to the NTC Invite form submit button.
  * Scrapes name, email, phone, Instagram ID, and reason from the form
