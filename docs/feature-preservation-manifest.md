@@ -1,6 +1,6 @@
 # Feature Preservation Manifest
 
-Status: recovered and staging-verified; production remains gated behind the reviewed PR and production readiness check.
+Status: recovered, staging-verified, merged to `main`, and deployed to production.
 
 Baseline: `origin/main` / `59f8cab2d29b039d2bc59b8965bb45c6ea3b7b35`
 
