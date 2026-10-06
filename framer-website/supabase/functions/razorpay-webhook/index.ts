@@ -20,6 +20,14 @@ import {
 import { buildPaymentEmail } from "../_shared/payment_email.ts"
 import { sendResendEmail } from "../_shared/resend.ts"
 import {
+    classifyEmailDeliveryResult,
+    emailProjectionNeedsRetry,
+    parseStoredPaymentEmailPayload,
+    safeEmailProjectionError,
+    serializePaymentEmailPayload,
+    type StoredPaymentEmailPayload,
+} from "../_shared/payment_email_delivery.ts"
+import {
     issueBookingStatusToken,
     resolveBookingStatusSecret,
 } from "../_shared/booking_status_token.ts"
@@ -263,6 +271,11 @@ async function reservePaymentEvent(params: {
         verification_status: "received",
         processing_status: "received",
         sheet_sync_status: "pending",
+        email_sync_status: "pending",
+        email_attempts: 0,
+        email_payload: null,
+        email_previous_state: null,
+        email_error: null,
         error_message: null,
     }
     const inserted = await params.supabase
@@ -285,11 +298,14 @@ async function reservePaymentEvent(params: {
     return { row: existing.data, inserted: false }
 }
 
-async function claimPaymentEvent(supabase: any, row: any): Promise<"process" | "sheet" | "done"> {
+async function claimPaymentEvent(supabase: any, row: any): Promise<"process" | "sheet" | "email" | "done"> {
     const processing = String(row?.processing_status || "").toLowerCase()
     const sheet = String(row?.sheet_sync_status || "").toLowerCase()
     if (processing === "ignored") return "done"
-    if (processing === "applied") return sheet === "synced" || sheet === "not_required" ? "done" : "sheet"
+    if (processing === "applied") {
+        if (sheet !== "synced" && sheet !== "not_required") return "sheet"
+        return emailProjectionNeedsRetry(row) ? "email" : "done"
+    }
     // A worker can terminate after marking an event as processing. Reclaim it
     // on the provider retry; reconciliation is monotonic and Sheet history is
     // deduplicated by provider event ID, so replay is safe.
@@ -309,7 +325,10 @@ async function claimPaymentEvent(supabase: any, row: any): Promise<"process" | "
     if (latest.error) throw latest.error
     const latestProcessing = String(latest.data?.processing_status || "").toLowerCase()
     const latestSheet = String(latest.data?.sheet_sync_status || "").toLowerCase()
-    if (latestProcessing === "applied") return latestSheet === "synced" || latestSheet === "not_required" ? "done" : "sheet"
+    if (latestProcessing === "applied") {
+        if (latestSheet !== "synced" && latestSheet !== "not_required") return "sheet"
+        return emailProjectionNeedsRetry(latest.data) ? "email" : "done"
+    }
     if (latestProcessing === "ignored") return "done"
     return "done"
 }
@@ -382,53 +401,119 @@ async function loadTripDetails(
     return { title, slug }
 }
 
-async function sendPaymentUpdateEmail(params: {
+function previousPaymentState(booking: Record<string, any>): Record<string, string> {
+    return {
+        payment_status: firstNonEmpty(booking.payment_status),
+        settlement_status: firstNonEmpty(booking.settlement_status),
+        payment_gateway_txn_id: firstNonEmpty(booking.payment_gateway_txn_id),
+    }
+}
+
+async function buildPaymentEmailPayload(params: {
     supabase: any
     previousBooking: Record<string, any>
     booking: Record<string, any>
-}): Promise<void> {
+}): Promise<StoredPaymentEmailPayload | null> {
     const paymentStatus = firstNonEmpty(params.booking.payment_status).toLowerCase()
-    if (paymentStatus !== "paid" && paymentStatus !== "failed") return
+    if (paymentStatus !== "paid" && paymentStatus !== "failed") return null
+
+    const trip = await loadTripDetails(params.supabase, params.booking)
+    const statusPath = paymentStatus === "failed"
+        ? "/payment-failed"
+        : "/payment-success"
+    const statusUrl = new URL(statusPath, `${siteBaseUrl()}/`)
+    statusUrl.searchParams.set("booking_id", String(params.booking.id || ""))
+    const secret = statusTokenSecret()
+    if (secret && params.booking.id) {
+        const token = await issueBookingStatusToken(String(params.booking.id), secret)
+        statusUrl.searchParams.set("status_token", token.token)
+    }
+
+    return buildPaymentEmail(
+        params.previousBooking,
+        params.booking,
+        trip.title,
+        siteBaseUrl(),
+        statusUrl.toString(),
+    )
+}
+
+async function sendPaymentEmailProjection(params: {
+    supabase: any
+    eventRow: any
+    booking: Record<string, any>
+}): Promise<boolean> {
+    const eventRow = params.eventRow
+    const status = String(eventRow?.email_sync_status || "").trim().toLowerCase()
+    if (status === "sent" || status === "not_required") return true
+    if (!emailProjectionNeedsRetry(eventRow)) return true
+
+    const attemptNumber = Math.max(0, Number(eventRow?.email_attempts || 0)) + 1
+    let currentEvent = await updatePaymentEvent(params.supabase, eventRow.id, {
+        email_attempts: attemptNumber,
+        email_last_attempt_at: new Date().toISOString(),
+        email_error: null,
+    })
 
     try {
-        const trip = await loadTripDetails(params.supabase, params.booking)
-        const statusPath = paymentStatus === "failed"
-            ? "/payment-failed"
-            : "/payment-success"
-        const statusUrl = new URL(statusPath, `${siteBaseUrl()}/`)
-        statusUrl.searchParams.set("booking_id", String(params.booking.id || ""))
-        const secret = statusTokenSecret()
-        if (secret && params.booking.id) {
-            const token = await issueBookingStatusToken(String(params.booking.id), secret)
-            statusUrl.searchParams.set("status_token", token.token)
-        }
-
-        const email = buildPaymentEmail(
-            params.previousBooking,
-            params.booking,
-            trip.title,
-            siteBaseUrl(),
-            statusUrl.toString(),
-        )
-        if (!email) return
-
-        const result = await sendResendEmail(email)
-        if (result.sent) {
-            console.log("[razorpay-webhook] payment email sent", {
-                bookingId: params.booking.id,
-                paymentStatus,
-                settlementStatus: params.booking.settlement_status,
-                tripSlug: trip.slug,
+        let payload = parseStoredPaymentEmailPayload(currentEvent.email_payload)
+        if (!payload) {
+            const previousState = currentEvent.email_previous_state && typeof currentEvent.email_previous_state === "object"
+                ? currentEvent.email_previous_state
+                : {}
+            const previousBooking = { ...params.booking, ...previousState }
+            payload = await buildPaymentEmailPayload({
+                supabase: params.supabase,
+                previousBooking,
+                booking: params.booking,
+            })
+            if (!payload) {
+                await updatePaymentEvent(params.supabase, eventRow.id, {
+                    email_sync_status: "not_required",
+                    email_payload: null,
+                    email_error: null,
+                })
+                return true
+            }
+            currentEvent = await updatePaymentEvent(params.supabase, eventRow.id, {
+                email_sync_status: "pending",
+                email_recipient: payload.to,
+                email_idempotency_key: payload.idempotencyKey,
+                email_payload: serializePaymentEmailPayload(payload),
+                email_error: null,
             })
         }
+
+        const result = await sendResendEmail(payload)
+        const classified = classifyEmailDeliveryResult(result, true)
+        await updatePaymentEvent(params.supabase, eventRow.id, {
+            email_sync_status: classified.status,
+            email_provider_id: classified.providerId,
+            email_sent_at: classified.status === "sent" ? new Date().toISOString() : null,
+            email_error: classified.error,
+        })
+        if (classified.status === "sent") {
+            console.log("[razorpay-webhook] payment email sent", {
+                bookingId: params.booking.id,
+                paymentStatus: params.booking.payment_status,
+                settlementStatus: params.booking.settlement_status,
+                eventId: eventRow.provider_event_id,
+            })
+            return true
+        }
+        return false
     } catch (error) {
-        // Payment and Sheet reconciliation remain successful if email delivery
-        // is unavailable. Resend's idempotency key makes a later event retry safe.
+        const message = safeEmailProjectionError(error)
+        await updatePaymentEvent(params.supabase, eventRow.id, {
+            email_sync_status: "failed",
+            email_error: message,
+        })
         console.error("[razorpay-webhook] payment email failed", {
             bookingId: params.booking.id,
-            paymentStatus,
-            error,
+            eventId: eventRow.provider_event_id,
+            error: message,
         })
+        return false
     }
 }
 
@@ -744,8 +829,9 @@ serve(async (req) => {
                 if (attemptLookup.error) throw attemptLookup.error
                 attempt = attemptLookup.data
             }
+            let synced = false
             try {
-                const synced = await syncPaymentSheets({
+                synced = await syncPaymentSheets({
                     booking,
                     attempt,
                     eventId: eventRow.provider_event_id,
@@ -764,7 +850,6 @@ serve(async (req) => {
                     sheet_synced_at: synced ? new Date().toISOString() : null,
                     error_message: null,
                 })
-                return jsonResponse({ ok: true, duplicate: true, sheet_retried: true })
             } catch (sheetError: any) {
                 await updatePaymentEvent(supabase, eventRow.id, {
                     sheet_sync_status: "failed",
@@ -772,6 +857,28 @@ serve(async (req) => {
                 })
                 return jsonResponse({ error: "Payment applied; Sheet projection failed" }, 500)
             }
+            const emailDelivered = await sendPaymentEmailProjection({
+                supabase,
+                eventRow,
+                booking,
+            })
+            if (!emailDelivered) {
+                return jsonResponse({ error: "Payment applied; email delivery failed" }, 500)
+            }
+            return jsonResponse({ ok: true, duplicate: true, sheet_retried: true, email_retried: true })
+        }
+
+        if (claim === "email") {
+            if (!eventRow.booking_id) throw new Error("Applied event has no booking reference")
+            const booking = await loadBooking(supabase, eventRow.booking_id, eventRow.provider_order_id || "")
+            if (!booking) throw new Error("Booking for email retry was not found")
+            const emailDelivered = await sendPaymentEmailProjection({
+                supabase,
+                eventRow,
+                booking,
+            })
+            if (!emailDelivered) return jsonResponse({ error: "Payment applied; email delivery failed" }, 500)
+            return jsonResponse({ ok: true, duplicate: true, email_retried: true })
         }
 
         if (!SUCCESS_EVENTS.has(eventName) && !FAILURE_EVENTS.has(eventName)) {
@@ -857,6 +964,12 @@ serve(async (req) => {
             verification_status: "verified",
             processing_status: "applied",
             sheet_sync_status: "pending",
+            email_sync_status: "pending",
+            email_previous_state: previousPaymentState(booking),
+            email_payload: null,
+            email_recipient: null,
+            email_idempotency_key: null,
+            email_error: null,
             reconciliation_result: reconciliation.reconciliationResult,
             notes: reconciliation.notes,
             processed_at: new Date().toISOString(),
@@ -891,11 +1004,12 @@ serve(async (req) => {
             return jsonResponse({ error: "Payment applied; Sheet projection failed" }, 500)
         }
 
-        await sendPaymentUpdateEmail({
+        const emailDelivered = await sendPaymentEmailProjection({
             supabase,
-            previousBooking: booking,
+            eventRow,
             booking: reconciliation.booking,
         })
+        if (!emailDelivered) return jsonResponse({ error: "Payment applied; email delivery failed" }, 500)
 
         return jsonResponse({
             ok: true,
