@@ -20,6 +20,10 @@ Deno.test("Razorpay webhook verifies raw payloads and persists generic payment e
     assertStringIncludes(source, "buildPaymentEmail")
     assertStringIncludes(source, "sendResendEmail")
     assertStringIncludes(source, "sendPaymentEmailProjection")
+    assertStringIncludes(source, "BOOKING_CALLBACK_SHEET_ID")
+    if (source.includes('Deno.env.get("GOOGLE_SHEET_ID_TRIPS")')) {
+        throw new Error("razorpay-webhook must never use the trip-lead workbook as a booking Sheet fallback")
+    }
     assert(!source.includes("callback_orphan"))
     assertNotEquals(source.indexOf("await req.text()"), -1)
 })

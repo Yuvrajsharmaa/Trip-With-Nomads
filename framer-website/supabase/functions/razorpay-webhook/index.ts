@@ -696,7 +696,6 @@ async function reconcilePayment(params: {
 function bookingSheetId(): string {
     return firstNonEmpty(
         Deno.env.get("BOOKING_CALLBACK_SHEET_ID"),
-        Deno.env.get("GOOGLE_SHEET_ID_TRIPS"),
         Deno.env.get("GOOGLE_SHEET_ID"),
     )
 }

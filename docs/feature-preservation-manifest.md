@@ -23,7 +23,7 @@ This manifest is the release gate for recovery. A behavior may be changed only w
 | Behavior | Current main | Recovery source/reference | Action | Required evidence |
 | --- | --- | --- | --- | --- |
 | Full-page checkout | `CheckoutPageOverrides.tsx`; canonical flow with `checkout_request_id`, server pricing, Razorpay `key_id`, signed status redirect | Historical checkout edits and `6afce69` | present; regression-test | Full-payment Test Mode success and duplicate-submit test |
-| Legacy booking modal | `BookingOverrides.tsx` | Dirty checkout modifications | recover selectively as an adapter only | Modal and full-page produce one booking with the same contract |
+| Legacy booking modal | Retired `BookingOverrides.tsx` | Dirty checkout modifications | keep retired; full-page checkout is the only buying flow | No live Framer component references the modal; full-page checkout contract tests pass |
 | Full payment | `create-booking`, `razorpay-webhook`, checkout UI | `6afce69`, `709630a` | present; verify email and Sheet projections | Paid event, current row, success row, email, replay |
 | 25% deposit | `payment_mode=partial_25`, amount/reconciliation helpers, status UI | `6afce69` | present; verify all projections | Payable-now, paid amount, balance, Payment Status, Settlement Status |
 | GST-inclusive totals | shared pricing and checkout totals | `6afce69` pricing changes | present; regression-test | Coupons, rounding, GST, full/partial amount assertions |

@@ -6,6 +6,9 @@ export type LeadLocation = {
 export type LeadSheetEnvironment = {
     original?: string | null
     ntc?: string | null
+    tripLeads?: string | null
+    // Backward-compatible alias for older callers. New callers should use
+    // tripLeads so the booking workbook can never be mistaken for this route.
     trips?: string | null
     custom?: string | null
     general?: string | null
@@ -41,7 +44,7 @@ export function targetForLead(
 
     if (normalizedSource === "trip_page_lead") {
         return location(
-            env.trips || env.original,
+            env.tripLeads || env.trips || env.general || env.original,
             isPartial ? "Abandoned Leads" : "Leads",
         )
     }
@@ -73,8 +76,8 @@ export function configuredLeadLocations(env: LeadSheetEnvironment): LeadLocation
     const candidates = [
         location(env.ntc, "NTC - Invites"),
         location(env.ntc, "Abandoned Leads"),
-        location(env.trips, "Leads"),
-        location(env.trips, "Abandoned Leads"),
+        location(env.tripLeads || env.trips, "Leads"),
+        location(env.tripLeads || env.trips, "Abandoned Leads"),
         location(env.custom, "Custom Trip Leads"),
         location(env.custom, "Abandoned Leads"),
         location(env.general, "Leads"),

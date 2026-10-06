@@ -5,11 +5,11 @@ This project contains all the code and assets related to the **Trip with Nomads*
 ## 📂 Structure
 
 - **`framer/`**: The core TypeScript/React components added as Code Overrides in the Framer editor.
-  - `BookingOverrides.tsx`: The main 3-step booking flow.
+  - `CheckoutPageOverrides.tsx`: The only supported booking and payment flow at `/checkout`.
   - `BookingStatusOverride.tsx`: Handles payment success/failure display.
+  - `EmailPopupOverride.tsx`: Lead-only wrappers for waitlist, trip-page, booking-invite, and custom-trip forms. It is not a buying flow.
 - **`scripts/`**: Automation scripts for syncing data between the local environment, Supabase, and Framer CMS.
   - `framer_cms_sync.mjs`: Syncs trip data to Framer.
-  - `push_booking_overrides.mjs`: Utility to manage overrides.
   - `upload_r2_video.mjs`: Uploads public marketing videos to Cloudflare R2.
 - **`supabase/`**: Shared backend infrastructure (migrations and Edge Functions).
 - **`app/` & `components/`**: A Next.js clone of the Framer site (used for prototyping and reference).
@@ -24,9 +24,9 @@ This project contains all the code and assets related to the **Trip with Nomads*
 This project relies heavily on the **Supabase** backend for:
 1. **Bookings**: Storing transaction details.
 2. **Pricing**: Fetching real-time trip pricing.
-3. **Edge Functions**: Handling PayU hash generation and payment callbacks.
+3. **Edge Functions**: Creating idempotent checkout attempts, reconciling verified Razorpay webhooks, and serving signed payment status.
 
-Check `IMPLEMENTATION_PLAN.md` for the full technical roadmap.
+`IMPLEMENTATION_PLAN.md` is a historical PayU/modal design note. The active implementation is documented by the Supabase migrations, shared contracts, and the staging E2E runbook.
 
 ---
 
