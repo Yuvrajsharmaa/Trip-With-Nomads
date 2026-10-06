@@ -91,7 +91,7 @@ serve(async (req) => {
         let { data: booking, error: bookingError } = await supabase
             .from("bookings")
             .select(
-                "id, booking_ref, trip_id, departure_date, transport, travellers, payment_breakdown, subtotal_amount, discount_amount, coupon_code, coupon_snapshot, tax_amount, total_amount, currency, payment_status, payment_mode, payable_now_amount, paid_amount, due_amount, settlement_status, balance_due_note, payu_txnid, name, email, phone, created_at"
+                "id, booking_ref, trip_id, departure_date, transport, travellers, payment_breakdown, subtotal_amount, discount_amount, coupon_code, coupon_snapshot, tax_amount, total_amount, currency, payment_status, payment_mode, payable_now_amount, paid_amount, due_amount, settlement_status, balance_due_note, payment_gateway_txn_id, payment_gateway_order_or_ref_id, name, email, phone, created_at"
             )
             .eq("id", bookingId)
             .single()
@@ -101,7 +101,7 @@ serve(async (req) => {
             const fallback = await supabase
                 .from("bookings")
                 .select(
-                    "id, booking_ref, trip_id, departure_date, transport, travellers, payment_breakdown, subtotal_amount, discount_amount, coupon_code, coupon_snapshot, tax_amount, total_amount, currency, payment_status, payment_mode, payable_now_amount, paid_amount, due_amount, settlement_status, payu_txnid, name, email, phone, created_at"
+                    "id, booking_ref, trip_id, departure_date, transport, travellers, payment_breakdown, subtotal_amount, discount_amount, coupon_code, coupon_snapshot, tax_amount, total_amount, currency, payment_status, payment_mode, payable_now_amount, paid_amount, due_amount, settlement_status, payment_gateway_txn_id, payment_gateway_order_or_ref_id, name, email, phone, created_at"
                 )
                 .eq("id", bookingId)
                 .single()
