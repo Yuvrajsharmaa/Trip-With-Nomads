@@ -8,7 +8,18 @@ const { createContext, useContext, useEffect, useMemo, useCallback, useRef, useS
 const SUPABASE_URL = "https://jxozzvwvprmnhvafmpsa.supabase.co"
 const SUPABASE_KEY =
     "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imp4b3p6dnd2cHJtbmh2YWZtcHNhIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjgwNTg2NjIsImV4cCI6MjA4MzYzNDY2Mn0.KpVa9dWlJEguL1TA00Tf4QDpziJ1mgA2I0f4_l-vlOk"
-const TAX_RATE = 0.02
+// Keep the compatibility modal's display aligned with the canonical server GST contract.
+const TAX_RATE = 0.05
+
+function getSiteBaseUrl(): string {
+    if (typeof window === "undefined") return "https://tripwithnomads.com"
+    const host = String(window.location.hostname || "").toLowerCase()
+    return host === "maroon-aside-814100.framer.app" || host === "localhost" || host === "127.0.0.1"
+        ? "https://maroon-aside-814100.framer.app"
+        : "https://tripwithnomads.com"
+}
+
+const SITE_BASE_URL = getSiteBaseUrl()
 
 // --- CONTEXT ---
 // TravellerContext provides the current index for components inside the withTravellerList repeater.
@@ -439,97 +450,52 @@ export function withButtonRow(Component): ComponentType {
 export function withPayButton(Component): ComponentType {
     return (props: any) => {
         const [store] = useStore()
-        const { total, breakdown, tax } = computeTotals(store)
+        const { total } = computeTotals(store)
         const [submitting, setSubmitting] = React.useState(false)
+        const submitLockRef = useRef(false)
 
         const travellers = store.travellers || []
-        const isValid =
-            store.date &&
-            store.contactName &&
-            store.contactEmail &&
-            total > 0 &&
-            travellers.every((t: any) => t.name && t.sharing)
+        const validationErrors = [...validateStep1(store), ...validateStep2(travellers)]
+        const isValid = validationErrors.length === 0 && total > 0
 
-        const handlePay = async () => {
-            if (!isValid || submitting) return
+        const handlePay = () => {
+            if (!isValid || submitting || submitLockRef.current) {
+                if (!isValid && !submitting) showInlineError(validationErrors)
+                return
+            }
+            submitLockRef.current = true
             setSubmitting(true)
 
-            const payload = {
+            const draft = {
                 trip_id: store.tripId,
-                departure_date: store.date,
+                tripId: store.tripId,
+                date: store.date,
+                transport: travellers[0]?.transport || "",
+                contactName: String(store.contactName || "").trim(),
+                contactPhone: String(store.contactPhone || "").trim(),
+                contactEmail: String(store.contactEmail || "").trim().toLowerCase(),
                 travellers: travellers.map((t: any) => ({
+                    id: t.id,
                     name: t.name,
                     sharing: t.sharing,
+                    transport: t.transport || "",
                 })),
-                payment_breakdown: breakdown,
-                tax_amount: tax,
-                total_amount: total,
-                currency: "INR",
-                name: store.contactName,
-                email: store.contactEmail,
-                phone: store.contactPhone,
-                created_at: new Date().toISOString(),
+                paymentMode: "full" as const,
             }
 
-            console.log("[Booking] Initiating payment setup...", payload)
-
             try {
-                const res = await fetch(`${SUPABASE_URL}/functions/v1/create-booking`, {
-                    method: "POST",
-                    headers: {
-                        "Content-Type": "application/json",
-                        apikey: SUPABASE_KEY,
-                        Authorization: `Bearer ${SUPABASE_KEY}`,
-                    },
-                    body: JSON.stringify(payload),
-                })
-
-                console.log("[Booking] Edge Function Status:", res.status)
-
-                if (!res.ok) {
-                    const errorText = await res.text()
-                    console.error("[Booking] Edge Function Error Response:", errorText)
-                    showInlineError(`Setup Failed (Status ${res.status}). Check console for details.`)
-                    setSubmitting(false)
-                    return
-                }
-
-                const data = await res.json()
-                console.log("[Booking] Edge Function Data Received:", data)
-
-                // The Edge Function returns the full PayU form data in the 'payu' property.
-                // The destination URL is specifically in 'payu.action'.
-                const payuData = data.payu
-                if (!payuData || !payuData.action) {
-                    console.error("[Booking] Missing 'payu' object or 'payu.action' in response.", data)
-                    showInlineError("Payment setup failed. Response structure missing 'payu.action'.")
-                    setSubmitting(false)
-                    return
-                }
-
-                const targetUrl = payuData.action
-                console.log("[Booking] Redirecting to PayU gateway:", targetUrl)
-
-                const form = document.createElement("form")
-                form.method = "POST"
-                form.action = targetUrl
-
-                // Add all PayU parameters as hidden inputs
-                Object.entries(payuData).forEach(([key, value]) => {
-                    if (key === "action") return // Skip the URL itself
-                    const input = document.createElement("input")
-                    input.type = "hidden"
-                    input.name = key
-                    input.value = String(value)
-                    form.appendChild(input)
-                })
-
-                document.body.appendChild(form)
-                form.submit()
+                window.sessionStorage.setItem("__twn_checkout_draft_v1", JSON.stringify(draft))
+                const checkoutUrl = new URL(`${SITE_BASE_URL}/checkout`)
+                checkoutUrl.searchParams.set("tripId", String(store.tripId || ""))
+                checkoutUrl.searchParams.set("date", String(store.date || ""))
+                const vehicle = String(draft.transport || "").trim()
+                if (vehicle) checkoutUrl.searchParams.set("vehicle", vehicle)
+                window.location.assign(checkoutUrl.toString())
             } catch (err) {
-                console.error("[Booking] Network/Execution Error:", err)
-                showInlineError("Network error. Please try again.")
+                console.error("[Booking] Could not open canonical checkout", err)
+                submitLockRef.current = false
                 setSubmitting(false)
+                showInlineError("Could not open checkout. Please try again.")
             }
         }
 
@@ -546,6 +512,7 @@ export function withPayButton(Component): ComponentType {
                 <Component
                     {...props}
                     onClick={handlePay}
+                    text={submitting ? "Opening checkout…" : props.text}
                     style={{
                         ...(props.style || {}),
                         width: "100%",

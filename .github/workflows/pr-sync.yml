@@ -20,7 +20,7 @@ jobs:
           script: |
             const owner = context.repo.owner;
             const repo = context.repo.repo;
-            const sha = context.payload.pull_request?.head?.sha || context.sha;
+            const sha = context.sha; // PR merge commit sha (strict checks) or pushed sha
 
             await github.rest.repos.createCommitStatus({
               owner,

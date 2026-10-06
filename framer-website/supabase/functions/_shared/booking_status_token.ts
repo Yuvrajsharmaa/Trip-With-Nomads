@@ -35,17 +35,15 @@ export function resolveBookingStatusSecret(preferredFallback?: string): string {
     return String(preferredFallback || "").trim()
 }
 
-type SecretSource = { get(name: string): string | undefined }
-
-export function listBookingStatusSecrets(env: SecretSource = Deno.env): string[] {
+export function listBookingStatusSecrets(): string[] {
     const candidates = [
-        env.get("BOOKING_STATUS_TOKEN_SECRET"),
-        env.get("RAZORPAY_LIVE_KEY_SECRET"),
-        env.get("RAZORPAY_TEST_KEY_SECRET"),
-        env.get("RAZORPAY_KEY_SECRET"),
-        env.get("PAYU_LIVE_SALT"),
-        env.get("PAYU_TEST_SALT"),
-        env.get("PAYU_SALT"),
+        Deno.env.get("BOOKING_STATUS_TOKEN_SECRET"),
+        Deno.env.get("PAYU_LIVE_SALT"),
+        Deno.env.get("PAYU_TEST_SALT"),
+        Deno.env.get("PAYU_SALT"),
+        Deno.env.get("RAZORPAY_LIVE_KEY_SECRET"),
+        Deno.env.get("RAZORPAY_TEST_KEY_SECRET"),
+        Deno.env.get("RAZORPAY_KEY_SECRET"),
     ]
     const out: string[] = []
     for (const candidate of candidates) {
