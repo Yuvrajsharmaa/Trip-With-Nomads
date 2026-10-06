@@ -25,7 +25,9 @@ jobs:
             }
 
             const requiredContext = "enforce-main-policy";
-            const statusSha = context.sha; // PR merge commit sha (strict checks)
+            // Branch protection evaluates the PR head. The merge ref is regenerated
+            // by GitHub and would leave this required status stranded on a stale SHA.
+            const statusSha = pr.head.sha;
 
             // Only enforce on PRs targeting main. For other bases, mark success so the check always exists.
             if (pr.base?.ref !== "main") {
@@ -65,4 +67,3 @@ jobs:
                 ? "No merge commits in PR branch"
                 : `Merge commits detected (${mergeCommits.length}) – rebase/squash required`,
             });
-
