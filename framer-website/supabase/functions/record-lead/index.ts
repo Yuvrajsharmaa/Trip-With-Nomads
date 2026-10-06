@@ -9,6 +9,40 @@ const corsHeaders = {
     "Access-Control-Allow-Methods": "POST, OPTIONS",
 };
 
+const PROD_PROJECT_REF = "jxozzvwvprmnhvafmpsa";
+
+function parseProjectRef(supabaseUrl: string): string {
+    try {
+        const host = new URL(supabaseUrl).hostname;
+        return host.split(".")[0] || "";
+    } catch {
+        return "";
+    }
+}
+
+function isTruthyEnv(value: string | null | undefined): boolean {
+    return ["1", "true", "yes", "on"].includes(String(value || "").trim().toLowerCase());
+}
+
+function normalizePhone(value: string | null | undefined): string | null {
+    const digits = String(value || "").replace(/[^0-9]/g, "").trim();
+    return digits || null;
+}
+
+function normalizeCountryCode(value: string | null | undefined): string {
+    const digits = String(value || "").replace(/[^0-9]/g, "").trim();
+    return digits ? `+${digits}` : "+91";
+}
+
+function buildNormalizedDialDigits(countryCode: string, phoneDigits: string | null): string | null {
+    if (!phoneDigits) return null;
+    const countryDigits = normalizePhone(countryCode) || "91";
+    if (phoneDigits.startsWith(countryDigits) && phoneDigits.length > countryDigits.length + 5) {
+        return phoneDigits;
+    }
+    return `${countryDigits}${phoneDigits}`;
+}
+
 function json(payload: Record<string, unknown>, status = 200) {
     return new Response(JSON.stringify(payload), {
         status,
@@ -22,6 +56,7 @@ const LEAD_HEADERS = [
     "Name",
     "Email",
     "Phone",
+    "Country Code",
     "Instagram ID",
     "Reason",
     "Source",
@@ -66,6 +101,9 @@ serve(async (req) => {
 
         const leadId = body?.lead_id ? String(body.lead_id).trim() : undefined;
         const status = body?.status ? String(body.status).trim() : "submitted";
+        const countryCode = normalizeCountryCode(body?.country_code ? String(body.country_code).trim() : null);
+        const phoneDigits = normalizePhone(body?.phone ? String(body.phone).trim() : null);
+        const normalizedDialDigits = buildNormalizedDialDigits(countryCode, phoneDigits);
 
         // Extra fields for sheets only (not in DB leads table)
         const instagram_id = body?.instagram_id ? String(body.instagram_id).trim() : null;
@@ -75,7 +113,8 @@ serve(async (req) => {
             ...(leadId ? { id: leadId } : {}),
             email,
             name: body?.name ? String(body.name).trim() : null,
-            phone: body?.phone ? String(body.phone).trim() : null,
+            phone: phoneDigits,
+            country_code: countryCode,
             source: body?.source ? String(body.source).trim() : "waitlist_popup",
             page_url: body?.page_url ? String(body.page_url).trim() : null,
             trip_id: body?.trip_id ? String(body.trip_id).trim() : null,
@@ -94,10 +133,48 @@ serve(async (req) => {
             return json({ error: "Supabase environment not configured" }, 500);
         }
 
+        const projectRef = parseProjectRef(supabaseUrl);
+        const ingestionFlag = Deno.env.get("CRM_WEBSITE_INGESTION_ENABLED");
+        const ingestionEnabled =
+            ingestionFlag === null
+                ? projectRef !== PROD_PROJECT_REF
+                : isTruthyEnv(ingestionFlag);
+
+        if (!ingestionEnabled) {
+            return json({
+                ok: true,
+                ingestion_disabled: true,
+                lead_id: payload.id || null,
+                sheet_logged: false,
+            }, 202);
+        }
+
         const supabase = createClient(supabaseUrl, supabaseServiceRole);
+        const identityFilters = [
+            `normalized_email.eq.${email}`,
+            ...(normalizedDialDigits ? [`normalized_phone.eq.${normalizedDialDigits}`, `normalized_phone.eq.${phoneDigits}`] : []),
+        ];
+
+        const { data: existingLeadRows } = await supabase
+            .from("leads")
+            .select("id, crm_status, created_at")
+            .not("crm_status", "eq", "archived")
+            .or(identityFilters.join(","))
+            .order("created_at", { ascending: false })
+            .limit(1);
+
+        const existingLead = existingLeadRows?.[0];
+        const effectiveLeadId = existingLead?.id || leadId;
+
         const { data: insertedLead, error } = await supabase
             .from("leads")
-            .upsert(payload, { onConflict: "id" })
+            .upsert(
+                {
+                    ...payload,
+                    ...(effectiveLeadId ? { id: effectiveLeadId } : {}),
+                },
+                { onConflict: "id" }
+            )
             .select()
             .single();
 
@@ -150,6 +227,7 @@ serve(async (req) => {
                 lead.name || "",
                 lead.email,
                 lead.phone || "",
+                lead.country_code || "",
                 instagram_id || "",
                 reason || "",
                 lead.source || "",
