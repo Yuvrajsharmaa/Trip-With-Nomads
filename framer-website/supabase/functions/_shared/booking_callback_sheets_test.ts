@@ -15,6 +15,8 @@ Deno.test("payment history is event-oriented and numeric", () => {
             email: "GUEST@example.com",
             payment_attempt_number: 2,
             payment_provider: "razorpay",
+            payment_gateway_order_or_ref_id: "order_from_booking",
+            payment_gateway_payment_id: "pay_from_booking",
             settlement_status: "fully_paid",
         },
         eventId: "evt_123",
@@ -22,8 +24,6 @@ Deno.test("payment history is event-oriented and numeric", () => {
         processedAt: "2026-03-11T13:00:00.000Z",
         eventType: "payment.captured",
         paymentResult: "paid",
-        providerOrderReference: "order_123",
-        providerPaymentReference: "pay_123",
         amountReceived: 17323.95,
         expectedAmount: 17323.95,
         reconciliationResult: "matched",
@@ -33,7 +33,8 @@ Deno.test("payment history is event-oriented and numeric", () => {
     assertEquals(row.length, BOOKING_CALLBACK_HEADERS.length)
     assertEquals(row[0], "evt_123")
     assertEquals(row[4], 2)
-    assertEquals(row[13], "order_123")
+    assertEquals(row[13], "order_from_booking")
+    assertEquals(row[14], "pay_from_booking")
     assertEquals(row[15], 17323.95)
     assertMatch(String(row[1]), /^2026-03-11T18:04:56\+05:30$/)
     assertMatch(String(row[17]), /^2026-03-11T18:30:00\+05:30$/)

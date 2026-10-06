@@ -908,12 +908,20 @@ serve(async (req) => {
             paymentBreakdown = buildGroupedPaymentBreakdown(pricingBreakdown.line_items)
         }
 
-        const generatedTxnid = "txn_" + Date.now().toString().slice(-10) + Math.floor(Math.random() * 10000)
         const paymentProvider = firstNonEmpty(
             data?.payment_provider,
             Deno.env.get("PAYMENT_PROVIDER"),
             "razorpay",
         ).toLowerCase()
+        if (paymentProvider !== "razorpay") {
+            return new Response(
+                JSON.stringify({
+                    error: `Unsupported payment provider: ${paymentProvider}`,
+                    code: "PAYMENT_PROVIDER_UNSUPPORTED",
+                }),
+                { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } },
+            )
+        }
 
         const initialPaidAmount = 0
         const settlementStatus = "pending"
@@ -948,7 +956,6 @@ serve(async (req) => {
             name,
             email,
             phone: phone || "",
-            ...(paymentProvider === "payu" ? { payu_txnid: generatedTxnid } : {}),
             checkout_request_id: checkoutRequestId,
             checkout_request_fingerprint: checkoutRequestFingerprint,
             payment_provider: paymentProvider,
@@ -1029,9 +1036,6 @@ serve(async (req) => {
                 provider: paymentProvider,
                 amount: payableNowAmount,
                 currency,
-                providerTransactionId: paymentProvider === "payu"
-                    ? firstNonEmpty(data.payu_txnid, generatedTxnid)
-                    : null,
                 status: "pending",
             })
             attemptPayload.expires_at = new Date(Date.now() + 30 * 60 * 1000).toISOString()
@@ -1113,23 +1117,25 @@ serve(async (req) => {
             )
         }
 
-        const effectiveName = firstNonEmpty(data.name, name)
-        const effectiveEmail = firstNonEmpty(data.email, email).toLowerCase()
-        const effectivePhone = firstNonEmpty(data.phone, phone)
-        const udf1 = data.id
         const effectivePayableNowAmount = round2(Math.max(0, toNumber(data.payable_now_amount || payableNowAmount)))
         const activeProvider = firstNonEmpty(paymentAttempt.provider, paymentProvider).toLowerCase()
+        if (activeProvider !== "razorpay") {
+            return new Response(
+                JSON.stringify({
+                    error: `Unsupported payment provider: ${activeProvider}`,
+                    code: "PAYMENT_PROVIDER_UNSUPPORTED",
+                }),
+                { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } },
+            )
+        }
         const bookingStatusSecret = resolveBookingStatusSecret(firstNonEmpty(
             Deno.env.get("PAYMENT_STATUS_SECRET"),
             Deno.env.get("RAZORPAY_LIVE_KEY_SECRET"),
             Deno.env.get("RAZORPAY_TEST_KEY_SECRET"),
             Deno.env.get("RAZORPAY_KEY_SECRET"),
-            Deno.env.get("PAYU_LIVE_SALT"),
-            Deno.env.get("PAYU_TEST_SALT"),
-            Deno.env.get("PAYU_SALT"),
         ))
         const bookingStatusToken = bookingStatusSecret
-            ? await issueBookingStatusToken(udf1, bookingStatusSecret)
+            ? await issueBookingStatusToken(data.id, bookingStatusSecret)
             : null
 
         const responsePayload: Record<string, any> = {
@@ -1218,47 +1224,6 @@ serve(async (req) => {
                     booking_id: String(data.id),
                     attempt_id: String(paymentAttempt.id),
                 },
-            }
-        } else if (activeProvider === "payu") {
-            const isTest = Deno.env.get("PAYU_TEST_MODE") === "true"
-            const payuKey = isTest
-                ? Deno.env.get("PAYU_TEST_KEY") || Deno.env.get("PAYU_KEY")
-                : Deno.env.get("PAYU_LIVE_KEY") || Deno.env.get("PAYU_KEY")
-            const payuSalt = isTest
-                ? Deno.env.get("PAYU_TEST_SALT") || Deno.env.get("PAYU_SALT")
-                : Deno.env.get("PAYU_LIVE_SALT") || Deno.env.get("PAYU_SALT")
-            if (!payuKey || !payuSalt) {
-                return new Response(
-                    JSON.stringify({ error: "PayU payment configuration missing" }),
-                    { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } },
-                )
-            }
-            const productinfo = "Trip Booking"
-            const firstname = effectiveName.split(" ")[0]
-            const gatewayAmount = effectivePayableNowAmount.toFixed(2)
-            const txnid = firstNonEmpty(paymentAttempt.provider_transaction_id, data.payu_txnid, generatedTxnid)
-            const hashString = `${payuKey}|${txnid}|${gatewayAmount}|${productinfo}|${firstname}|${effectiveEmail}|${udf1}||||||||||${payuSalt}`
-            const hashBuffer = await crypto.subtle.digest("SHA-512", new TextEncoder().encode(hashString))
-            const hash = Array.from(new Uint8Array(hashBuffer)).map((b) => b.toString(16).padStart(2, "0")).join("")
-            const actionUrl = isTest ? "https://test.payu.in/_payment" : "https://secure.payu.in/_payment"
-            const callbackUrl = paymentCallbackUrl({
-                bookingId: String(data.id),
-                statusToken: bookingStatusToken?.token,
-                supabaseUrl,
-            })
-            responsePayload.payu = {
-                key: payuKey,
-                txnid,
-                amount: gatewayAmount,
-                productinfo,
-                firstname,
-                email: effectiveEmail,
-                phone: effectivePhone,
-                surl: callbackUrl,
-                furl: callbackUrl,
-                hash,
-                udf1,
-                action: actionUrl,
             }
         } else {
             return new Response(

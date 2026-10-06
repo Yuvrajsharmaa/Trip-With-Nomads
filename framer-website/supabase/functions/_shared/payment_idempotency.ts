@@ -69,6 +69,18 @@ export function canStartPaymentRetry(
     return false
 }
 
+export function isStalePaymentAttempt(
+    state: RetryState,
+    now = new Date(),
+): boolean {
+    const status = String(state?.status || "").trim().toLowerCase()
+    if (status !== "pending" && status !== "creating") return false
+    const expiresAt = String(state?.expiresAt || "").trim()
+    if (!expiresAt) return false
+    const expiry = new Date(expiresAt)
+    return !Number.isNaN(expiry.getTime()) && expiry.getTime() <= now.getTime()
+}
+
 export function nextPaymentAttemptNumber(attempts: Array<{ attempt_no?: unknown }>): number {
     const highest = (Array.isArray(attempts) ? attempts : []).reduce((max, attempt) => {
         const value = Number(attempt?.attempt_no)

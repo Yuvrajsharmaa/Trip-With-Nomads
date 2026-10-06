@@ -52,6 +52,7 @@ function formatTimestampIST(value?: string): string {
 function providerOrderReference(booking: Record<string, any>, override?: any): string {
     return compact(
         override ||
+            booking.payment_gateway_order_or_ref_id ||
             booking.provider_order_id ||
             booking.provider_order_reference ||
             booking.razorpay_order_id ||
@@ -62,6 +63,8 @@ function providerOrderReference(booking: Record<string, any>, override?: any): s
 function providerPaymentReference(booking: Record<string, any>, override?: any): string {
     return compact(
         override ||
+            booking.payment_gateway_payment_id ||
+            booking.payment_gateway_txn_id ||
             booking.provider_payment_id ||
             booking.provider_transaction_id ||
             booking.razorpay_payment_id ||

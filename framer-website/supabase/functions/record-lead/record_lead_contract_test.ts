@@ -12,6 +12,8 @@ Deno.test("record-lead requires durable submission identity and retries Sheet pr
     assertStringIncludes(source, "SHEET_SYNC_FAILED")
     assertStringIncludes(source, "upsertCurrentRow")
     assertStringIncludes(source, "appendHistoryRowOnce")
+    assertStringIncludes(source, ".range(offset, offset + pageSize - 1)")
+    assertStringIncludes(source, "utm_term")
 })
 
 Deno.test("lead wrappers use one guarded event path", () => {

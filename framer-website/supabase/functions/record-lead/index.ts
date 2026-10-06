@@ -113,15 +113,33 @@ function routeForLead(source: string, status: string): { sheetId: string; tab: s
 
 async function findExistingLead(supabase: any, normalizedEmail: string): Promise<any | null> {
     if (!normalizedEmail) return null
-    const result = await supabase.from("leads").select("*").not("email", "is", null).limit(1000)
-    if (result.error) throw result.error
-    const matches = (Array.isArray(result.data) ? result.data : []).filter(
-        (lead: any) => normalizeEmail(lead?.email) === normalizedEmail,
-    )
-    if (matches.length > 1) {
-        throw new Error(`Multiple lead rows match normalized email ${normalizedEmail}; repair required`)
+    const pageSize = 1000
+    let offset = 0
+    let match: any | null = null
+
+    while (true) {
+        const result = await supabase
+            .from("leads")
+            .select("*")
+            .not("email", "is", null)
+            .order("id", { ascending: true })
+            .range(offset, offset + pageSize - 1)
+        if (result.error) throw result.error
+
+        const page = Array.isArray(result.data) ? result.data : []
+        for (const lead of page) {
+            if (normalizeEmail(lead?.email) !== normalizedEmail) continue
+            if (match) {
+                throw new Error(`Multiple lead rows match normalized email ${normalizedEmail}; repair required`)
+            }
+            match = lead
+        }
+
+        if (page.length < pageSize) break
+        offset += pageSize
     }
-    return matches[0] || null
+
+    return match
 }
 
 async function resolveLeadIdentity(params: {

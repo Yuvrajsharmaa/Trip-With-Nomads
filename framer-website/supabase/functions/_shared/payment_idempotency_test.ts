@@ -3,6 +3,7 @@ import {
     canStartPaymentRetry,
     fingerprintBookingRequest,
     isCompatibleIdempotentReplay,
+    isStalePaymentAttempt,
     nextPaymentAttemptNumber,
     normalizeIdempotencyKey,
 } from "./payment_idempotency.ts"
@@ -51,6 +52,19 @@ Deno.test("retry is blocked while pending or paid and allowed after failure or e
         false,
     )
     assertEquals(canStartPaymentRetry({ status: "expired" }), true)
+})
+
+Deno.test("stale pending attempts become explicitly retryable only after expiry", () => {
+    const now = new Date("2026-10-06T12:00:00.000Z")
+    assertEquals(
+        isStalePaymentAttempt({ status: "pending", expiresAt: "2026-10-06T11:59:59.000Z" }, now),
+        true,
+    )
+    assertEquals(
+        isStalePaymentAttempt({ status: "pending", expiresAt: "2026-10-06T12:00:01.000Z" }, now),
+        false,
+    )
+    assertEquals(isStalePaymentAttempt({ status: "failed", expiresAt: "2026-10-06T11:00:00.000Z" }, now), false)
 })
 
 Deno.test("next attempt number is monotonic", () => {
