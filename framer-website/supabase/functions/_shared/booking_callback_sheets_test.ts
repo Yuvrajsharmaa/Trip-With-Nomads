@@ -4,36 +4,38 @@ import {
     buildBookingCallbackRow,
 } from "./booking_callback_sheets.ts"
 
-Deno.test("callback sheet row keeps expected shape and IST timestamps", () => {
+Deno.test("payment history is event-oriented and numeric", () => {
     const row = buildBookingCallbackRow({
         booking: {
             id: "booking-123",
             booking_ref: "TWN-2026-00123",
-            payment_status: "paid",
-            settlement_status: "fully_paid",
-            payment_mode: "full",
+            trip_name: "Summer Spiti",
             departure_date: "2026-05-09",
-            created_at: "2026-03-11T12:34:56.000Z",
             name: "Guest User",
-            email: "guest@example.com",
-            phone: "9999999999",
-            total_amount: 17323.95,
-            payable_now_amount: 17323.95,
-            paid_amount: 17323.95,
-            due_amount: 0,
-            payment_gateway_txn_id: "txn_12345",
-            payment_gateway_order_or_ref_id: "order_12345",
+            email: "GUEST@example.com",
+            payment_attempt_number: 2,
+            payment_provider: "razorpay",
+            payment_gateway_order_or_ref_id: "order_from_booking",
+            payment_gateway_payment_id: "pay_from_booking",
+            settlement_status: "fully_paid",
         },
-        tripTitle: "Summer Spiti",
-        tripSlug: "summer-spiti",
-        notes: "callback synced",
-        updatedAt: "2026-03-11T13:00:00.000Z",
+        eventId: "evt_123",
+        eventReceivedAt: "2026-03-11T12:34:56.000Z",
+        processedAt: "2026-03-11T13:00:00.000Z",
+        eventType: "payment.captured",
+        paymentResult: "paid",
+        amountReceived: 17323.95,
+        expectedAmount: 17323.95,
+        reconciliationResult: "matched",
+        notes: "webhook synced",
     })
 
     assertEquals(row.length, BOOKING_CALLBACK_HEADERS.length)
-    assertEquals(row[0], "booking-123")
-    assertEquals(row[5], "Summer Spiti")
-    assertEquals(row[6], "summer-spiti")
-    assertMatch(String(row[8]), /IST$/)
-    assertMatch(String(row[18]), /IST$/)
+    assertEquals(row[0], "evt_123")
+    assertEquals(row[4], 2)
+    assertEquals(row[13], "order_from_booking")
+    assertEquals(row[14], "pay_from_booking")
+    assertEquals(row[15], 17323.95)
+    assertMatch(String(row[1]), /^2026-03-11T18:04:56\+05:30$/)
+    assertMatch(String(row[17]), /^2026-03-11T18:30:00\+05:30$/)
 })

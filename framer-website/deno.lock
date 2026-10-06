@@ -59,6 +59,7 @@
     "https://esm.sh/iceberg-js@0.8.1/denonext/iceberg-js.mjs": "d839d81a2e3966500ca2cdd0c1cb458e9608bacfc91f7bb67a69b2e878dcdb4f",
     "https://esm.sh/iceberg-js@0.8.1?target=denonext": "58c849d7fe2bf4eca4a84eb501e83c161a7d8c34ca1bec15a962b3bec3062633",
     "https://esm.sh/jose@4.15.4": "50152551c36bb97a1da7063d744a534669b49764561b71282b9b219c40495cbf",
+    "https://esm.sh/jose@4.15.4/denonext/jose.mjs": "65e1ecf8feed01b25bcaad9b29108dfbe095d8fcfa3169c0c361a800e4be0e6f",
     "https://esm.sh/tslib@2.8.1/denonext/tslib.mjs": "c38da5dd6da6281964435002ce204cd586634fe3bdfb24a0ee116f48cf3292e9"
   },
   "workspace": {

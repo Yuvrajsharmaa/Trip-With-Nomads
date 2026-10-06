@@ -68,6 +68,39 @@ function normalizeEmail(value: string): string {
     return String(value || "").trim().toLowerCase();
 }
 
+function createSubmissionId(): string {
+    if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
+        return crypto.randomUUID();
+    }
+    return "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, (character) => {
+        const random = (Math.random() * 16) | 0;
+        const value = character === "x" ? random : (random & 0x3) | 0x8;
+        return value.toString(16);
+    });
+}
+
+function getSubmissionId(source: string, form: HTMLFormElement | null): { id: string; key: string } {
+    const formIdentity = form?.id || form?.getAttribute("name") || "default";
+    const key = `__twn_lead_submission_v1:${source}:${window.location.pathname}:${formIdentity}`;
+    try {
+        const existing = sessionStorage.getItem(key);
+        if (existing && /^[0-9a-f-]{36}$/i.test(existing)) return { id: existing, key };
+        const id = createSubmissionId();
+        sessionStorage.setItem(key, id);
+        return { id, key };
+    } catch {
+        return { id: createSubmissionId(), key };
+    }
+}
+
+function clearSubmissionId(key: string) {
+    try {
+        sessionStorage.removeItem(key);
+    } catch {
+        // Storage is an enhancement; the server still owns idempotency.
+    }
+}
+
 function isValidEmail(value: string): boolean {
     return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value);
 }
@@ -94,7 +127,7 @@ function getProjectRefFromHost(): string {
     return PROD_PROJECT_REF;
 }
 
-async function postLead(form: HTMLFormElement | null): Promise<boolean> {
+async function postLead(form: HTMLFormElement | null, statusOverride?: string): Promise<boolean> {
     const root = form ?? document;
     const email = normalizeEmail(
         findInputValue(root, [
@@ -104,7 +137,8 @@ async function postLead(form: HTMLFormElement | null): Promise<boolean> {
             'input[placeholder*="email" i]',
         ])
     );
-    if (!email || !isValidEmail(email)) {
+    const isPartialFill = statusOverride === "partial_fill";
+    if ((!email && !isPartialFill) || (email && !isValidEmail(email))) {
         console.warn("[Popup] Submit blocked by validation; state not persisted");
         form?.reportValidity?.();
         return false;
@@ -125,16 +159,19 @@ async function postLead(form: HTMLFormElement | null): Promise<boolean> {
     const params = new URLSearchParams(window.location.search);
     const projectRef = getProjectRefFromHost();
     const endpoint = `https://${projectRef}.supabase.co/functions/v1/record-lead`;
+    const submission = getSubmissionId("waitlist_popup", form);
 
     try {
         const response = await fetch(endpoint, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
+                submission_id: submission.id,
                 email,
                 name: name || null,
                 phone: phone || null,
                 source: "waitlist_popup",
+                status: statusOverride || "submitted",
                 page_url: window.location.href,
                 trip_id: params.get("tripId"),
                 trip_slug: params.get("slug"),
@@ -151,6 +188,9 @@ async function postLead(form: HTMLFormElement | null): Promise<boolean> {
                 status: response.status,
                 payload,
             });
+            if (response.status === 409 && payload?.code === "IDEMPOTENCY_CONFLICT") {
+                clearSubmissionId(submission.key);
+            }
             return false;
         }
 
@@ -158,6 +198,7 @@ async function postLead(form: HTMLFormElement | null): Promise<boolean> {
             leadId: payload?.lead_id,
             sheetLogged: payload?.sheet_logged,
         });
+        clearSubmissionId(submission.key);
         return true;
     } catch (error) {
         console.error("[Popup] Lead capture request failed", error);
@@ -348,18 +389,23 @@ export function withPopupSubmitted(Component: ComponentType): ComponentType {
             <Component
                 {...props}
                 onClick={async (event: any) => {
+                    event?.preventDefault?.();
+                    event?.stopPropagation?.();
                     const w = window as any;
                     if (w[SUBMIT_LOCK_KEY]) return;
                     w[SUBMIT_LOCK_KEY] = true;
 
                     try {
-                        props.onClick?.(event);
                         const form = event?.currentTarget?.closest?.("form") || null;
-                        const ok = await postLead(form);
+                        const ok = await postLead(
+                            form,
+                            props?.status === "partial_fill" ? "partial_fill" : undefined,
+                        );
                         if (!ok) {
                             console.warn("[Popup] Lead capture failed; state not persisted");
                             return;
                         }
+                        props.onClick?.(event);
                         markSubmitted();
                         console.log("[Popup] Form submitted — state persisted");
                         emitClose();
@@ -380,23 +426,28 @@ export function withPopupFormSubmit(Component: ComponentType): ComponentType {
             <Component
                 {...props}
                 onSubmit={async (event: any) => {
+                    event?.preventDefault?.();
+                    event?.stopPropagation?.();
                     const w = window as any;
                     if (w[SUBMIT_LOCK_KEY]) return;
                     w[SUBMIT_LOCK_KEY] = true;
 
                     try {
-                        props.onSubmit?.(event);
                         const form =
                             event?.currentTarget?.tagName === "FORM"
                                 ? event.currentTarget
                                 : event?.currentTarget?.closest?.("form") || null;
-                        const ok = await postLead(form);
+                        const ok = await postLead(
+                            form,
+                            props?.status === "partial_fill" ? "partial_fill" : undefined,
+                        );
                         if (!ok) {
                             console.warn(
                                 "[Popup] Lead capture failed; state not persisted"
                             );
                             return;
                         }
+                        props.onSubmit?.(event);
                         markSubmitted();
                         console.log("[Popup] Form submitted — state persisted");
                         emitClose();
@@ -429,7 +480,8 @@ async function postLeadWithSource(
             'input[placeholder*="email" i]',
         ])
     );
-    if (!email || !isValidEmail(email)) {
+    const isPartialFill = statusOverride === "partial_fill";
+    if ((!email && !isPartialFill) || (email && !isValidEmail(email))) {
         console.warn(`[LeadTracking:${source}] Invalid email; skipping`);
         return false;
     }
@@ -467,12 +519,14 @@ async function postLeadWithSource(
     const params = new URLSearchParams(window.location.search);
     const projectRef = getProjectRefFromHost();
     const endpoint = `https://${projectRef}.supabase.co/functions/v1/record-lead`;
+    const submission = getSubmissionId(source, form);
 
     try {
         const response = await fetch(endpoint, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
+                submission_id: submission.id,
                 email,
                 name: name || null,
                 phone: phone || null,
@@ -496,6 +550,9 @@ async function postLeadWithSource(
                 status: response.status,
                 payload,
             });
+            if (response.status === 409 && payload?.code === "IDEMPOTENCY_CONFLICT") {
+                clearSubmissionId(submission.key);
+            }
             return false;
         }
 
@@ -504,11 +561,67 @@ async function postLeadWithSource(
             sheetLogged: payload?.sheet_logged,
             sheetTab: payload?.sheet_tab,
         });
+        clearSubmissionId(submission.key);
         return true;
     } catch (error) {
         console.error(`[LeadTracking:${source}] Request failed`, error);
         return false;
     }
+}
+
+function createLeadTrackingOverride(source: string, statusOverride?: string) {
+    return function (Component: ComponentType): ComponentType {
+        return function LeadTrackingCompatibilityAdapter(props: any) {
+            return (
+                <Component
+                    {...props}
+                    onClick={async (event: any) => {
+                        event?.preventDefault?.();
+                        event?.stopPropagation?.();
+                        const w = window as any;
+                        if (w[SUBMIT_LOCK_KEY]) return;
+                        w[SUBMIT_LOCK_KEY] = true;
+                        const form = event?.currentTarget?.closest?.("form") || null;
+                        try {
+                            const ok = await postLeadWithSource(form, source, statusOverride);
+                            if (ok) props.onClick?.(event);
+                        } finally {
+                            window.setTimeout(() => {
+                                w[SUBMIT_LOCK_KEY] = false;
+                            }, 700);
+                        }
+                    }}
+                    onSubmit={undefined}
+                />
+            );
+        };
+    };
+}
+
+// Compatibility exports for existing Framer instances. All routes share the
+// same submission-id, server-first lead capture implementation.
+export function withCustomTripTracking(Component: ComponentType): ComponentType {
+    return createLeadTrackingOverride("custom_trip_lead")(Component);
+}
+
+export function withWaitlistTracking(Component: ComponentType): ComponentType {
+    return createLeadTrackingOverride("waitlist_popup")(Component);
+}
+
+export function withWaitlistAbandonTracking(Component: ComponentType): ComponentType {
+    return createLeadTrackingOverride("waitlist_popup", "partial_fill")(Component);
+}
+
+export function withLeadAbandonTrackingGeneric(Component: ComponentType): ComponentType {
+    return createLeadTrackingOverride("generic_form", "partial_fill")(Component);
+}
+
+export function withLeadTracking(Component: ComponentType): ComponentType {
+    return createLeadTrackingOverride("general_lead")(Component);
+}
+
+export function withFormTracking(Component: ComponentType): ComponentType {
+    return createLeadTrackingOverride("general_lead", "partial_fill")(Component);
 }
 
 /**
@@ -522,18 +635,26 @@ export function withBookingInviteTracking(Component: ComponentType): ComponentTy
             <Component
                 {...props}
                 onClick={async (event: any) => {
-                    props.onClick?.(event);
+                    event?.preventDefault?.();
+                    event?.stopPropagation?.();
+                    const w = window as any;
+                    if (w[SUBMIT_LOCK_KEY]) return;
+                    w[SUBMIT_LOCK_KEY] = true;
                     const form = event?.currentTarget?.closest?.("form") || null;
-                    await postLeadWithSource(form, "booking_invite");
+                    try {
+                        const ok = await postLeadWithSource(
+                            form,
+                            "booking_invite",
+                            props?.status === "partial_fill" ? "partial_fill" : undefined,
+                        );
+                        if (ok) props.onClick?.(event);
+                    } finally {
+                        window.setTimeout(() => {
+                            w[SUBMIT_LOCK_KEY] = false;
+                        }, 700);
+                    }
                 }}
-                onSubmit={async (event: any) => {
-                    props.onSubmit?.(event);
-                    const form =
-                        event?.currentTarget?.tagName === "FORM"
-                            ? event.currentTarget
-                            : event?.currentTarget?.closest?.("form") || null;
-                    await postLeadWithSource(form, "booking_invite");
-                }}
+                onSubmit={undefined}
             />
         );
     };
@@ -550,18 +671,59 @@ export function withTripPageLeadTracking(Component: ComponentType): ComponentTyp
             <Component
                 {...props}
                 onClick={async (event: any) => {
-                    props.onClick?.(event);
+                    event?.preventDefault?.();
+                    event?.stopPropagation?.();
+                    const w = window as any;
+                    if (w[SUBMIT_LOCK_KEY]) return;
+                    w[SUBMIT_LOCK_KEY] = true;
                     const form = event?.currentTarget?.closest?.("form") || null;
-                    await postLeadWithSource(form, "trip_page_lead");
+                    try {
+                        const ok = await postLeadWithSource(
+                            form,
+                            "trip_page_lead",
+                            props?.status === "partial_fill" ? "partial_fill" : undefined,
+                        );
+                        if (ok) props.onClick?.(event);
+                    } finally {
+                        window.setTimeout(() => {
+                            w[SUBMIT_LOCK_KEY] = false;
+                        }, 700);
+                    }
                 }}
-                onSubmit={async (event: any) => {
-                    props.onSubmit?.(event);
-                    const form =
-                        event?.currentTarget?.tagName === "FORM"
-                            ? event.currentTarget
-                            : event?.currentTarget?.closest?.("form") || null;
-                    await postLeadWithSource(form, "trip_page_lead");
+                onSubmit={undefined}
+            />
+        );
+    };
+}
+
+/**
+ * Apply to an explicit partial-fill event. The source is supplied by the
+ * component as `leadSource`/`data-source`, and defaults to `general_lead`.
+ * Missing email is accepted only on this path.
+ */
+export function withPartialFillTracking(Component: ComponentType): ComponentType {
+    return function PartialFillTracking(props: any) {
+        return (
+            <Component
+                {...props}
+                onClick={async (event: any) => {
+                    event?.preventDefault?.();
+                    event?.stopPropagation?.();
+                    const w = window as any;
+                    if (w[SUBMIT_LOCK_KEY]) return;
+                    w[SUBMIT_LOCK_KEY] = true;
+                    const source = String(props?.leadSource || props?.["data-source"] || "general_lead").trim();
+                    const form = event?.currentTarget?.closest?.("form") || null;
+                    try {
+                        const ok = await postLeadWithSource(form, source, "partial_fill");
+                        if (ok) props.onClick?.(event);
+                    } finally {
+                        window.setTimeout(() => {
+                            w[SUBMIT_LOCK_KEY] = false;
+                        }, 700);
+                    }
                 }}
+                onSubmit={undefined}
             />
         );
     };
