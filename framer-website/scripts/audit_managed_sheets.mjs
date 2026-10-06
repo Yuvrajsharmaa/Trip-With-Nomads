@@ -35,6 +35,12 @@ export const MANAGED_TABS = {
     "Latest UTM Medium", "Latest UTM Campaign", "Latest UTM Term", "Latest UTM Content",
     "Submission Count", "Current Status", "Latest Submission ID", "Notes",
   ] },
+  "Custom Trip Leads": { key: "Email", headers: [
+    "Lead ID", "First Seen At", "Last Seen At", "Name", "Email", "Phone", "Instagram ID",
+    "Latest Source", "Latest Page URL", "Latest Trip ID", "Latest Trip Slug", "Latest UTM Source",
+    "Latest UTM Medium", "Latest UTM Campaign", "Latest UTM Term", "Latest UTM Content",
+    "Submission Count", "Current Status", "Latest Submission ID", "Notes",
+  ] },
   "Abandoned Leads": { key: "Submission ID", history: true, headers: [
     "Submission ID", "Lead ID", "Captured At", "Name", "Email", "Phone", "Source", "Page URL",
     "Trip ID", "Trip Slug", "Status", "Reason",
