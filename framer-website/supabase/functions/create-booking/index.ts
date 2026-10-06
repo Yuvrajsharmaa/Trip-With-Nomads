@@ -5,7 +5,22 @@ import {
     issueBookingStatusToken,
     resolveBookingStatusSecret,
 } from "../_shared/booking_status_token.ts"
-import { appendRow, sheetsEnabled } from "../_shared/sheets.ts"
+import {
+    buildPaymentAttemptInsert,
+    fingerprintBookingRequest,
+    isCompatibleIdempotentReplay,
+    normalizeIdempotencyKey,
+} from "../_shared/payment_idempotency.ts"
+import {
+    computeBasePricing,
+    normalizeTravellers as normalizePricingTravellers,
+} from "../_shared/pricing.ts"
+import {
+    createRazorpayOrder,
+    paymentCallbackUrl,
+    razorpayCredentials,
+} from "../_shared/razorpay.ts"
+import { sheetsEnabled, upsertCurrentRow } from "../_shared/sheets.ts"
 
 const corsHeaders = {
     "Access-Control-Allow-Origin": "*",
@@ -86,6 +101,10 @@ function isMissingColumnError(error: any, columnName: string): boolean {
     return message.includes("column") && message.includes(needle)
 }
 
+function isUniqueViolation(error: any): boolean {
+    return String(error?.code || "").trim() === "23505"
+}
+
 function bookingSheetsWriteEnabled(): boolean {
     return isTruthy(Deno.env.get("BOOKING_SHEETS_WRITE_ENABLED"))
 }
@@ -133,6 +152,17 @@ function normalizeDateKey(value: any): string {
     }
 
     return raw
+}
+
+function todayISTDateKey(): string {
+    const parts = new Intl.DateTimeFormat("en-CA", {
+        timeZone: "Asia/Kolkata",
+        year: "numeric",
+        month: "2-digit",
+        day: "2-digit",
+    }).formatToParts(new Date())
+    const get = (type: string) => parts.find((part) => part.type === type)?.value || ""
+    return `${get("year")}-${get("month")}-${get("day")}`
 }
 
 function getDateValue(row: any): string {
@@ -520,6 +550,7 @@ async function readPayload(req: Request): Promise<any> {
     ) {
         const form = await req.formData()
         return {
+            checkout_request_id: form.get("checkout_request_id") || form.get("idempotency_key"),
             trip_id: form.get("trip_id"),
             date: form.get("date"),
             departure_date: form.get("departure_date"),
@@ -609,7 +640,20 @@ serve(async (req) => {
 
     try {
         const body = await readPayload(req)
-        console.log("📥 Incoming booking payload:", body)
+
+        const rawCheckoutRequestId = firstNonEmpty(
+            body?.checkout_request_id,
+            req.headers.get("idempotency-key"),
+        )
+        let checkoutRequestId = ""
+        try {
+            checkoutRequestId = normalizeIdempotencyKey(rawCheckoutRequestId, "checkout_request_id")
+        } catch (error: any) {
+            return new Response(
+                JSON.stringify({ error: error?.message || "checkout_request_id is required" }),
+                { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } },
+            )
+        }
 
         const tripId = firstNonEmpty(body?.trip_id)
         const departureDate = normalizeDateKey(firstNonEmpty(body?.departure_date, body?.date))
@@ -617,7 +661,7 @@ serve(async (req) => {
         const travellersInput = Array.isArray(body?.travellers) ? body.travellers : []
 
         const name = firstNonEmpty(body?.name)
-        const email = firstNonEmpty(body?.email)
+        const email = firstNonEmpty(body?.email).toLowerCase()
         const phone = firstNonEmpty(body?.phone)
         const currency = firstNonEmpty(body?.currency, "INR")
         const paymentMode = normalizePaymentMode(body?.payment_mode || body?.pricing_snapshot?.payment_mode)
@@ -628,7 +672,7 @@ serve(async (req) => {
         if (!tripId || !departureDate || !travellersInput.length || !name || !email) {
             return new Response(
                 JSON.stringify({
-                    error: "Missing required fields (trip_id, departure_date, travellers, name, email)",
+                    error: "Missing required fields (trip_id, departure_date, travellers, name, email, checkout_request_id)",
                 }),
                 { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
             )
@@ -662,94 +706,222 @@ serve(async (req) => {
             )
         }
 
-        const isTest = Deno.env.get("PAYU_TEST_MODE") === "true"
-        const payuKey = isTest
-            ? Deno.env.get("PAYU_TEST_KEY") || Deno.env.get("PAYU_KEY")
-            : Deno.env.get("PAYU_LIVE_KEY") || Deno.env.get("PAYU_KEY")
-        const payuSalt = isTest
-            ? Deno.env.get("PAYU_TEST_SALT") || Deno.env.get("PAYU_SALT")
-            : Deno.env.get("PAYU_LIVE_SALT") || Deno.env.get("PAYU_SALT")
-
-        if (!payuKey || !payuSalt) {
-            return new Response(
-                JSON.stringify({ error: "Payment configuration missing" }),
-                { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-            )
-        }
-
         const supabase = createClient(supabaseUrl, serviceRoleKey)
-        const pricingRows = await fetchPricingRows(supabase, tripId)
-
-        if (!pricingRows.length) {
-            return new Response(
-                JSON.stringify({ error: "Pricing not configured for this trip" }),
-                { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-            )
-        }
-
-        if (isInviteOnlyTrip(pricingRows)) {
-            return new Response(
-                JSON.stringify({ error: "This trip is invite-only and cannot be booked online" }),
-                { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-            )
-        }
-
-        const normalizedTravellers = normalizeTravellers(travellersInput)
-        const { travellers: resolvedTravellers, pricingBreakdown: baseBreakdown } = buildLocalPricingBreakdown({
-            pricingRows,
-            departureDate,
-            travellers: normalizedTravellers,
-            fallbackTransport,
+        console.log("[create-booking] request received", {
+            checkout_request_id: checkoutRequestId,
+            trip_id: tripId,
+            departure_date: departureDate,
+        })
+        const canonicalTravellers = normalizePricingTravellers(travellersInput)
+        const checkoutRequestFingerprint = await fingerprintBookingRequest({
+            trip_id: tripId,
+            departure_date: departureDate,
+            transport: fallbackTransport,
+            travellers: canonicalTravellers,
+            name,
+            email,
+            phone,
+            currency: currency.toUpperCase(),
+            payment_mode: paymentMode,
+            coupon_code: couponCodeRequested,
         })
 
-        let pricingBreakdown = baseBreakdown
-        let couponSnapshot: any = null
-
-        if (couponCodeRequested) {
-            const couponPayload = {
-                trip_id: tripId,
-                departure_date: departureDate,
-                transport: fallbackTransport || null,
-                travellers: resolvedTravellers.map((traveller) => ({
-                    id: traveller.id,
-                    name: traveller.name,
-                    sharing: traveller.sharing,
-                    transport: traveller.transport,
-                })),
-                coupon_code: couponCodeRequested,
-                email,
-            }
-
-            const couponQuote = await validateCouponServerSide({
-                supabaseUrl,
-                functionAuthJwt,
-                apikey: functionApikey,
-                payload: couponPayload,
-            })
-
-            pricingBreakdown = buildPricingBreakdownFromQuote(couponQuote, baseBreakdown)
-            couponSnapshot = {
-                ...couponQuote,
-                validated_at: new Date().toISOString(),
-                validated_by: "create-booking",
-            }
-        }
-
-        const totalAmount = round2(Math.max(0, pricingBreakdown.total_amount))
-        const subtotalAmount = round2(Math.max(0, pricingBreakdown.base_subtotal))
-        const discountAmount = round2(Math.max(0, pricingBreakdown.discount_amount_total))
-        const taxAmount = round2(Math.max(0, pricingBreakdown.tax_amount))
-
-        const { payableNowAmount, dueAmount } = paymentModeSummary(paymentMode, totalAmount)
-        if (totalAmount <= 0 || payableNowAmount <= 0) {
+        const preflightLookup = await supabase
+            .from("bookings")
+            .select("*")
+            .eq("checkout_request_id", checkoutRequestId)
+            .maybeSingle()
+        if (preflightLookup.error) {
             return new Response(
-                JSON.stringify({ error: "Total amount must be greater than zero" }),
-                { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+                JSON.stringify({ error: preflightLookup.error.message || "Could not check checkout request" }),
+                { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } },
+            )
+        }
+        const existingBooking = preflightLookup.data || null
+        let replayed = Boolean(existingBooking)
+        if (existingBooking && !isCompatibleIdempotentReplay(existingBooking.checkout_request_fingerprint, checkoutRequestFingerprint)) {
+            return new Response(
+                JSON.stringify({
+                    error: "checkout_request_id was already used with different booking data",
+                    code: "IDEMPOTENCY_CONFLICT",
+                }),
+                { status: 409, headers: { ...corsHeaders, "Content-Type": "application/json" } },
             )
         }
 
-        const paymentBreakdown = buildGroupedPaymentBreakdown(pricingBreakdown.line_items)
-        const txnid = "txn_" + Date.now().toString().slice(-10) + Math.floor(Math.random() * 10000)
+        let data: any = existingBooking
+        let resolvedTravellers: TravellerResolved[]
+        let pricingBreakdown: PricingBreakdown
+        let couponSnapshot: any = null
+        let totalAmount: number
+        let subtotalAmount: number
+        let discountAmount: number
+        let taxAmount: number
+        let payableNowAmount: number
+        let dueAmount: number
+        let paymentBreakdown: any[]
+
+        if (existingBooking) {
+            const storedTravellers = normalizePricingTravellers(
+                Array.isArray(existingBooking.travellers) ? existingBooking.travellers : [],
+            )
+            resolvedTravellers = storedTravellers.map((traveller) => ({
+                id: Number(traveller.id),
+                name: firstNonEmpty(traveller.name, `Traveller ${traveller.id}`),
+                sharing: normalizeSharing(traveller.sharing),
+                transport: String(traveller.transport || "").trim(),
+            }))
+            paymentBreakdown = Array.isArray(existingBooking.payment_breakdown)
+                ? existingBooking.payment_breakdown
+                : []
+            const storedLineItems = resolvedTravellers.map((traveller) => ({
+                traveller_id: traveller.id,
+                sharing: traveller.sharing,
+                transport: traveller.transport,
+                unit_price: 0,
+            }))
+            subtotalAmount = round2(toNumber(existingBooking.subtotal_amount))
+            discountAmount = round2(toNumber(existingBooking.discount_amount))
+            taxAmount = round2(toNumber(existingBooking.tax_amount))
+            totalAmount = round2(toNumber(existingBooking.total_amount))
+            payableNowAmount = round2(toNumber(existingBooking.payable_now_amount))
+            dueAmount = round2(toNumber(existingBooking.due_amount))
+            couponSnapshot = existingBooking.coupon_snapshot || null
+            pricingBreakdown = {
+                base_subtotal: subtotalAmount,
+                early_bird_discount_amount: 0,
+                coupon_discount_amount: discountAmount,
+                applied_discount_source: existingBooking.coupon_code ? "coupon" : "none",
+                applied_discount_code: existingBooking.coupon_code || null,
+                discount_amount_total: discountAmount,
+                taxable_amount: round2(Math.max(0, subtotalAmount - discountAmount)),
+                tax_amount: taxAmount,
+                total_amount: totalAmount,
+                line_items: storedLineItems,
+            }
+        } else {
+            if (!/^\d{4}-\d{2}-\d{2}$/.test(departureDate) || departureDate < todayISTDateKey()) {
+                return new Response(
+                    JSON.stringify({ error: "Departure date is unavailable or already past" }),
+                    { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } },
+                )
+            }
+            const pricingRows = await fetchPricingRows(supabase, tripId)
+
+            if (!pricingRows.length) {
+                return new Response(
+                    JSON.stringify({ error: "Pricing not configured for this trip" }),
+                    { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } },
+                )
+            }
+
+            if (isInviteOnlyTrip(pricingRows)) {
+                return new Response(
+                    JSON.stringify({ error: "This trip is invite-only and cannot be booked online" }),
+                    { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } },
+                )
+            }
+
+            const basePricing = computeBasePricing({
+                pricingRows,
+                departureDate,
+                fallbackTransport,
+                travellers: canonicalTravellers,
+            })
+            if (basePricing.missingSharings.length > 0 || basePricing.lineItems.length !== canonicalTravellers.length) {
+                throw new Error("Pricing variant or traveller combination is unavailable")
+            }
+            resolvedTravellers = basePricing.lineItems.map((item) => {
+                const source = canonicalTravellers.find((traveller) => Number(traveller.id) === Number(item.traveller_id))
+                return {
+                    id: Number(item.traveller_id),
+                    name: firstNonEmpty(source?.name, `Traveller ${item.traveller_id}`),
+                    sharing: normalizeSharing(item.sharing),
+                    transport: String(item.transport || "").trim(),
+                }
+            })
+            const baseBreakdown: PricingBreakdown = {
+                base_subtotal: round2(basePricing.subtotal),
+                early_bird_discount_amount: round2(basePricing.earlyBirdDiscountAmount),
+                coupon_discount_amount: 0,
+                applied_discount_source: basePricing.earlyBirdDiscountAmount > 0 ? "early_bird" : "none",
+                applied_discount_code: null,
+                discount_amount_total: round2(basePricing.earlyBirdDiscountAmount),
+                taxable_amount: round2(Math.max(0, basePricing.subtotal - basePricing.earlyBirdDiscountAmount)),
+                tax_amount: round2(Math.max(0, basePricing.subtotal - basePricing.earlyBirdDiscountAmount) * TAX_RATE),
+                total_amount: round2(
+                    Math.max(0, basePricing.subtotal - basePricing.earlyBirdDiscountAmount) * (1 + TAX_RATE),
+                ),
+                line_items: basePricing.lineItems.map((item) => ({
+                    traveller_id: Number(item.traveller_id),
+                    sharing: String(item.sharing),
+                    transport: String(item.transport || ""),
+                    unit_price: round2(toNumber(item.unit_price)),
+                })),
+            }
+
+            pricingBreakdown = baseBreakdown
+            if (couponCodeRequested) {
+                const couponPayload = {
+                    trip_id: tripId,
+                    departure_date: departureDate,
+                    transport: fallbackTransport || null,
+                    travellers: resolvedTravellers.map((traveller) => ({
+                        id: traveller.id,
+                        name: traveller.name,
+                        sharing: traveller.sharing,
+                        transport: traveller.transport,
+                    })),
+                    coupon_code: couponCodeRequested,
+                    email,
+                }
+
+                const couponQuote = await validateCouponServerSide({
+                    supabaseUrl,
+                    functionAuthJwt,
+                    apikey: functionApikey,
+                    payload: couponPayload,
+                })
+
+                pricingBreakdown = buildPricingBreakdownFromQuote(couponQuote, baseBreakdown)
+                couponSnapshot = {
+                    ...couponQuote,
+                    validated_at: new Date().toISOString(),
+                    validated_by: "create-booking",
+                }
+            }
+
+            totalAmount = round2(Math.max(0, pricingBreakdown.total_amount))
+            subtotalAmount = round2(Math.max(0, pricingBreakdown.base_subtotal))
+            discountAmount = round2(Math.max(0, pricingBreakdown.discount_amount_total))
+            taxAmount = round2(Math.max(0, pricingBreakdown.tax_amount))
+
+            const payable = paymentModeSummary(paymentMode, totalAmount)
+            payableNowAmount = payable.payableNowAmount
+            dueAmount = payable.dueAmount
+            if (totalAmount <= 0 || payableNowAmount <= 0) {
+                return new Response(
+                    JSON.stringify({ error: "Total amount must be greater than zero" }),
+                    { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } },
+                )
+            }
+            paymentBreakdown = buildGroupedPaymentBreakdown(pricingBreakdown.line_items)
+        }
+
+        const paymentProvider = firstNonEmpty(
+            data?.payment_provider,
+            Deno.env.get("PAYMENT_PROVIDER"),
+            "razorpay",
+        ).toLowerCase()
+        if (paymentProvider !== "razorpay") {
+            return new Response(
+                JSON.stringify({
+                    error: `Unsupported payment provider: ${paymentProvider}`,
+                    code: "PAYMENT_PROVIDER_UNSUPPORTED",
+                }),
+                { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } },
+            )
+        }
 
         const initialPaidAmount = 0
         const settlementStatus = "pending"
@@ -784,14 +956,23 @@ serve(async (req) => {
             name,
             email,
             phone: phone || "",
-            payu_txnid: txnid,
+            checkout_request_id: checkoutRequestId,
+            checkout_request_fingerprint: checkoutRequestFingerprint,
+            payment_provider: paymentProvider,
+            payment_attempt_number: 1,
         }
 
-        let { data, error } = await supabase
-            .from("bookings")
-            .insert(insertPayload)
-            .select("*")
-            .single()
+        let error: any = null
+
+        if (!data) {
+            const inserted = await supabase
+                .from("bookings")
+                .insert(insertPayload)
+                .select("*")
+                .single()
+            data = inserted.data
+            error = inserted.error
+        }
 
         if (error && isMissingColumnError(error, "balance_due_note")) {
             const fallbackInsertPayload = { ...insertPayload }
@@ -805,6 +986,26 @@ serve(async (req) => {
             error = fallback.error
         }
 
+        if (error && isUniqueViolation(error)) {
+            const concurrentLookup = await supabase
+                .from("bookings")
+                .select("*")
+                .eq("checkout_request_id", checkoutRequestId)
+                .maybeSingle()
+            data = concurrentLookup.data
+            error = concurrentLookup.error
+            replayed = Boolean(data)
+            if (data && !isCompatibleIdempotentReplay(data.checkout_request_fingerprint, checkoutRequestFingerprint)) {
+                return new Response(
+                    JSON.stringify({
+                        error: "checkout_request_id was already used with different booking data",
+                        code: "IDEMPOTENCY_CONFLICT",
+                    }),
+                    { status: 409, headers: { ...corsHeaders, "Content-Type": "application/json" } },
+                )
+            }
+        }
+
         if (error || !data) {
             console.error("❌ Supabase insert error:", error)
             return new Response(
@@ -813,12 +1014,83 @@ serve(async (req) => {
             )
         }
 
+        const latestAttemptLookup = await supabase
+            .from("payment_attempts")
+            .select("*")
+            .eq("booking_id", data.id)
+            .order("attempt_no", { ascending: false })
+            .limit(1)
+        if (latestAttemptLookup.error) {
+            return new Response(
+                JSON.stringify({ error: latestAttemptLookup.error.message || "Could not read payment attempt" }),
+                { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } },
+            )
+        }
+
+        let paymentAttempt = Array.isArray(latestAttemptLookup.data) ? latestAttemptLookup.data[0] : null
+        if (!paymentAttempt) {
+            const attemptPayload = buildPaymentAttemptInsert({
+                bookingId: data.id,
+                attemptNo: 1,
+                idempotencyKey: checkoutRequestId,
+                provider: paymentProvider,
+                amount: payableNowAmount,
+                currency,
+                status: "pending",
+            })
+            attemptPayload.expires_at = new Date(Date.now() + 30 * 60 * 1000).toISOString()
+
+            const attemptInsert = await supabase
+                .from("payment_attempts")
+                .insert(attemptPayload)
+                .select("*")
+                .single()
+            if (attemptInsert.error && !isUniqueViolation(attemptInsert.error)) {
+                return new Response(
+                    JSON.stringify({ error: attemptInsert.error.message || "Could not create payment attempt" }),
+                    { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } },
+                )
+            }
+
+            if (attemptInsert.data) {
+                paymentAttempt = attemptInsert.data
+            } else {
+                const replayAttempt = await supabase
+                    .from("payment_attempts")
+                    .select("*")
+                    .eq("idempotency_key", checkoutRequestId)
+                    .maybeSingle()
+                if (replayAttempt.error || !replayAttempt.data) {
+                    return new Response(
+                        JSON.stringify({ error: replayAttempt.error?.message || "Could not resolve payment attempt" }),
+                        { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } },
+                    )
+                }
+                paymentAttempt = replayAttempt.data
+            }
+        }
+
+        const activeAttemptUpdate = await supabase
+            .from("bookings")
+            .update({
+                active_payment_attempt_id: paymentAttempt.id,
+                payment_attempt_number: paymentAttempt.attempt_no || 1,
+                payment_provider: paymentAttempt.provider || paymentProvider,
+            })
+            .eq("id", data.id)
+        if (activeAttemptUpdate.error && !isMissingColumnError(activeAttemptUpdate.error, "active_payment_attempt_id")) {
+            return new Response(
+                JSON.stringify({ error: activeAttemptUpdate.error.message || "Could not link payment attempt" }),
+                { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } },
+            )
+        }
+
         const bookingsSheetId = firstNonEmpty(
             Deno.env.get("GOOGLE_SHEET_ID_TRIPS"),
             Deno.env.get("GOOGLE_SHEET_ID")
         )
         const bookingsSheetTab = firstNonEmpty(Deno.env.get("BOOKINGS_SHEET_TAB"), "Bookings")
-        if (bookingLifecycleSheetsWriteEnabled() && sheetsEnabled() && bookingsSheetId) {
+        if (!replayed && bookingLifecycleSheetsWriteEnabled() && sheetsEnabled() && bookingsSheetId) {
             try {
                 const rowValues = buildBookingSheetRow({
                     booking: {
@@ -828,63 +1100,142 @@ serve(async (req) => {
                     eventStage: "created",
                     notes: "Booking initiated; awaiting payment callback.",
                 })
-                await appendRow(bookingsSheetId, bookingsSheetTab, rowValues, BOOKING_HEADERS)
+                await upsertCurrentRow(
+                    bookingsSheetId,
+                    bookingsSheetTab,
+                    "Booking ID",
+                    String(data.id),
+                    rowValues,
+                    BOOKING_HEADERS,
+                )
             } catch (sheetErr) {
                 console.error("[create-booking] sheets append failed", sheetErr)
             }
-        } else if (bookingSheetsWriteEnabled() && sheetsEnabled() && bookingsSheetId) {
+        } else if (!replayed && bookingSheetsWriteEnabled() && sheetsEnabled() && bookingsSheetId) {
             console.log(
                 "[create-booking] lifecycle sheet write skipped (BOOKING_LIFECYCLE_SHEETS_WRITE_ENABLED is false)"
             )
         }
 
-        const productinfo = "Trip Booking"
-        const firstname = name.split(" ")[0]
-        const udf1 = data.id
-        const gatewayAmount = payableNowAmount.toFixed(2)
-        const bookingStatusSecret = resolveBookingStatusSecret(payuSalt)
+        const effectivePayableNowAmount = round2(Math.max(0, toNumber(data.payable_now_amount || payableNowAmount)))
+        const activeProvider = firstNonEmpty(paymentAttempt.provider, paymentProvider).toLowerCase()
+        if (activeProvider !== "razorpay") {
+            return new Response(
+                JSON.stringify({
+                    error: `Unsupported payment provider: ${activeProvider}`,
+                    code: "PAYMENT_PROVIDER_UNSUPPORTED",
+                }),
+                { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } },
+            )
+        }
+        const bookingStatusSecret = resolveBookingStatusSecret(firstNonEmpty(
+            Deno.env.get("PAYMENT_STATUS_SECRET"),
+            Deno.env.get("RAZORPAY_LIVE_KEY_SECRET"),
+            Deno.env.get("RAZORPAY_TEST_KEY_SECRET"),
+            Deno.env.get("RAZORPAY_KEY_SECRET"),
+        ))
         const bookingStatusToken = bookingStatusSecret
-            ? await issueBookingStatusToken(udf1, bookingStatusSecret)
+            ? await issueBookingStatusToken(data.id, bookingStatusSecret)
             : null
 
-        const hashString = `${payuKey}|${txnid}|${gatewayAmount}|${productinfo}|${firstname}|${email}|${udf1}||||||||||${payuSalt}`
-        const hashBuffer = await crypto.subtle.digest("SHA-512", new TextEncoder().encode(hashString))
-        const hash = Array.from(new Uint8Array(hashBuffer))
-            .map((b) => b.toString(16).padStart(2, "0"))
-            .join("")
+        const responsePayload: Record<string, any> = {
+            booking_id: data.id,
+            checkout_request_id: checkoutRequestId,
+            replayed,
+            attempt_id: paymentAttempt.id,
+            attempt_no: paymentAttempt.attempt_no || 1,
+            gateway: activeProvider,
+            payment_provider: activeProvider,
+            payment_status: data.payment_status || "pending",
+            payment_mode: data.payment_mode || paymentMode,
+            total_amount: toNumber(data.total_amount || totalAmount),
+            payable_now_amount: effectivePayableNowAmount,
+            due_amount: toNumber(data.due_amount || dueAmount),
+            settlement_status: data.settlement_status || settlementStatus,
+            status_token: bookingStatusToken?.token || null,
+            status_token_expires_at: bookingStatusToken?.expiresAt || null,
+        }
 
-        const actionUrl = isTest ? "https://test.payu.in/_payment" : "https://secure.payu.in/_payment"
-        const callbackUrl =
-            Deno.env.get("PAYMENT_CALLBACK_URL") ||
-            `${Deno.env.get("SUPABASE_URL")}/functions/v1/handle-payment`
+        if (String(data.payment_status || "").trim().toLowerCase() === "paid") {
+            return new Response(JSON.stringify({ ...responsePayload, already_paid: true }), {
+                status: 200,
+                headers: { ...corsHeaders, "Content-Type": "application/json" },
+            })
+        }
 
-        return new Response(
-            JSON.stringify({
-                booking_id: data.id,
-                payment_mode: paymentMode,
-                total_amount: totalAmount,
-                payable_now_amount: payableNowAmount,
-                due_amount: dueAmount,
-                settlement_status: settlementStatus,
-                status_token: bookingStatusToken?.token || null,
-                status_token_expires_at: bookingStatusToken?.expiresAt || null,
-                payu: {
-                    key: payuKey,
-                    txnid,
-                    amount: gatewayAmount,
-                    productinfo,
-                    firstname,
-                    email,
-                    phone: phone || "",
-                    surl: callbackUrl,
-                    furl: callbackUrl,
-                    hash,
-                    udf1,
-                    action: actionUrl,
+        if (activeProvider === "razorpay") {
+            const credentials = razorpayCredentials()
+            if (!credentials.keyId || !credentials.keySecret) {
+                return new Response(
+                    JSON.stringify({ error: "Razorpay payment configuration missing" }),
+                    { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } },
+                )
+            }
+
+            let orderId = firstNonEmpty(paymentAttempt.provider_order_id, data.payment_gateway_order_or_ref_id)
+            let order: any = orderId ? { id: orderId, amount: Math.round(effectivePayableNowAmount * 100), currency } : null
+            if (!orderId) {
+                order = await createRazorpayOrder({
+                    amount: effectivePayableNowAmount,
+                    currency,
+                    receipt: `twn_${String(paymentAttempt.id).replace(/-/g, "").slice(0, 32)}`,
+                    notes: {
+                        booking_id: String(data.id),
+                        attempt_id: String(paymentAttempt.id),
+                    },
+                })
+                orderId = String(order.id)
+                const attemptUpdate = await supabase
+                    .from("payment_attempts")
+                    .update({
+                        provider: "razorpay",
+                        provider_order_id: orderId,
+                        updated_at: new Date().toISOString(),
+                    })
+                    .eq("id", paymentAttempt.id)
+                if (attemptUpdate.error) throw attemptUpdate.error
+                paymentAttempt = { ...paymentAttempt, provider: "razorpay", provider_order_id: orderId }
+            }
+
+            const bookingUpdate = await supabase
+                .from("bookings")
+                .update({
+                    payment_provider: "razorpay",
+                    payment_gateway_order_or_ref_id: orderId,
+                    active_payment_attempt_id: paymentAttempt.id,
+                    payment_attempt_number: paymentAttempt.attempt_no || 1,
+                })
+                .eq("id", data.id)
+            if (bookingUpdate.error && !isMissingColumnError(bookingUpdate.error, "payment_gateway_order_or_ref_id")) {
+                throw bookingUpdate.error
+            }
+
+            responsePayload.razorpay = {
+                key_id: credentials.keyId,
+                order_id: orderId,
+                amount: Math.max(1, Math.round(effectivePayableNowAmount * 100)),
+                currency: String(currency || "INR").toUpperCase(),
+                callback_url: paymentCallbackUrl({
+                    bookingId: String(data.id),
+                    statusToken: bookingStatusToken?.token,
+                    supabaseUrl,
+                }),
+                notes: {
+                    booking_id: String(data.id),
+                    attempt_id: String(paymentAttempt.id),
                 },
-            }),
-            { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-        )
+            }
+        } else {
+            return new Response(
+                JSON.stringify({ error: `Unsupported payment provider: ${activeProvider}` }),
+                { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } },
+            )
+        }
+
+        return new Response(JSON.stringify(responsePayload), {
+            status: 200,
+            headers: { ...corsHeaders, "Content-Type": "application/json" },
+        })
     } catch (err: any) {
         console.error("💥 create-booking error:", err)
         const message = String(err?.message || "Internal server error")

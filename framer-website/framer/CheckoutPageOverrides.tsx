@@ -2,6 +2,35 @@ import React from "react"
 import type { ComponentType } from "react"
 import { createStore } from "https://framer.com/m/framer/store.js@^1.0.0"
 
+const CHECKOUT_TIMEZONE = "Asia/Kolkata"
+
+function formatCheckoutDateKey(value: Date): string {
+    const parts = new Intl.DateTimeFormat("en-GB", {
+        timeZone: CHECKOUT_TIMEZONE,
+        year: "numeric",
+        month: "2-digit",
+        day: "2-digit",
+    }).formatToParts(value)
+    const year = parts.find((part) => part.type === "year")?.value || ""
+    const month = parts.find((part) => part.type === "month")?.value || ""
+    const day = parts.find((part) => part.type === "day")?.value || ""
+    return year && month && day ? `${year}-${month}-${day}` : ""
+}
+
+function normalizeDateKey(value: any): string {
+    const raw = String(value || "").trim()
+    if (!raw) return ""
+    const direct = raw.match(/^(\d{4}-\d{2}-\d{2})/)
+    if (direct?.[1] && raw.length === 10) return direct[1]
+    const parsed = new Date(raw)
+    return Number.isNaN(parsed.getTime()) ? "" : formatCheckoutDateKey(parsed)
+}
+
+function isBookableDepartureDate(value: any, now = new Date()): boolean {
+    const dateKey = normalizeDateKey(value)
+    return Boolean(dateKey) && dateKey >= formatCheckoutDateKey(now)
+}
+
 const {
     createContext,
     useContext,
@@ -16,6 +45,7 @@ type RuntimeConfig = {
     siteBaseUrl: string
     supabaseUrl: string
     supabaseAnonKey: string
+    apiBaseUrl: string
 }
 
 const RUNTIME_CONFIG: Record<RuntimeEnv, RuntimeConfig> = {
@@ -24,12 +54,17 @@ const RUNTIME_CONFIG: Record<RuntimeEnv, RuntimeConfig> = {
         supabaseUrl: "https://jxozzvwvprmnhvafmpsa.supabase.co",
         supabaseAnonKey:
             "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imp4b3p6dnd2cHJtbmh2YWZtcHNhIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjgwNTg2NjIsImV4cCI6MjA4MzYzNDY2Mn0.KpVa9dWlJEguL1TA00Tf4QDpziJ1mgA2I0f4_l-vlOk",
+        // Keep production on its own Supabase function origin until a
+        // production gateway is explicitly configured through the runtime
+        // override. The active worker below is staging-only evidence.
+        apiBaseUrl: "",
     },
     development: {
         siteBaseUrl: "https://maroon-aside-814100.framer.app",
         supabaseUrl: "https://ieuwiinbvbdvjrdqqzlb.supabase.co",
         supabaseAnonKey:
             "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImlldXdpaW5idmJkdmpyZHFxemxiIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzIwNDYwMTksImV4cCI6MjA4NzYyMjAxOX0.UlTMeyvArixD7byDCrGwEDXsbc4LQfx6QXDL6Je3blE",
+        apiBaseUrl: "https://twn-checkout-gateway-staging.tripwithnomads-crm.workers.dev",
     },
 }
 
@@ -118,6 +153,7 @@ function resolveRuntimeConfig(): RuntimeConfig {
         siteBaseUrl: normalizeBaseUrl(runtimeOverride.siteBaseUrl || selected.siteBaseUrl),
         supabaseUrl: resolvedSupabaseUrl,
         supabaseAnonKey: resolvedSupabaseAnonKey,
+        apiBaseUrl: normalizeBaseUrl(runtimeOverride.apiBaseUrl || selected.apiBaseUrl),
     }
 }
 
@@ -136,6 +172,124 @@ const PHONE_REGEX = /^\+?[\d\s\-()]{10,15}$/
 const tripDisplayCache = new Map<string, { ts: number; data: any }>()
 const tripDisplayInFlight = new Map<string, Promise<any | null>>()
 let forcedTripId = ""
+
+function isUuid(value: any): boolean {
+    return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
+        String(value || "").trim()
+    )
+}
+
+function createUuid(): string {
+    // Prefer crypto.randomUUID so refreshes and retries use a real UUID contract.
+    const randomUuid = (globalThis as any)?.crypto?.randomUUID
+    if (typeof randomUuid === "function") return randomUuid.call((globalThis as any).crypto)
+    return "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, (character) => {
+        const random = (Math.random() * 16) | 0
+        const value = character === "x" ? random : (random & 0x3) | 0x8
+        return value.toString(16)
+    })
+}
+
+function requestFingerprint(value: any): string {
+    const input = String(value || "")
+    let hash = 2166136261
+    for (let index = 0; index < input.length; index += 1) {
+        hash ^= input.charCodeAt(index)
+        hash = Math.imul(hash, 16777619)
+    }
+    return (hash >>> 0).toString(16)
+}
+
+function getOrCreateStableRequestId(namespace: string, fingerprint: string): string {
+    const storageKey = `__twn_${namespace}_request_id_v1:${fingerprint}`
+    try {
+        const existing = window.sessionStorage.getItem(storageKey)
+        if (isUuid(existing)) return String(existing)
+        const next = createUuid()
+        window.sessionStorage.setItem(storageKey, next)
+        return next
+    } catch (_) {
+        return createUuid()
+    }
+}
+
+function checkoutApiUrl(path: string): string {
+    const cleanPath = String(path || "").replace(/^\/+/, "")
+    const gatewayBase = normalizeBaseUrl(CURRENT_RUNTIME.apiBaseUrl)
+    if (gatewayBase) return `${gatewayBase}/${cleanPath}`
+    return `${SUPABASE_URL}/functions/v1/${cleanPath}`
+}
+
+function checkoutApiHeaders(): Record<string, string> {
+    const headers: Record<string, string> = { "Content-Type": "application/json" }
+    if (!CURRENT_RUNTIME.apiBaseUrl) {
+        headers.apikey = SUPABASE_KEY
+        headers.Authorization = `Bearer ${SUPABASE_KEY}`
+    }
+    return headers
+}
+
+async function loadRazorpayScript(): Promise<void> {
+    if (typeof window === "undefined") throw new Error("Payment gateway is unavailable")
+    if ((window as any).Razorpay) return
+    await new Promise<void>((resolve, reject) => {
+        const existing = document.querySelector('script[data-twn-razorpay="true"]') as HTMLScriptElement | null
+        if (existing) {
+            existing.addEventListener("load", () => resolve(), { once: true })
+            existing.addEventListener("error", () => reject(new Error("Could not load payment gateway")), { once: true })
+            return
+        }
+        const script = document.createElement("script")
+        script.src = "https://checkout.razorpay.com/v1/checkout.js"
+        script.async = true
+        script.dataset.twnRazorpay = "true"
+        script.onload = () => resolve()
+        script.onerror = () => reject(new Error("Could not load payment gateway"))
+        document.head.appendChild(script)
+    })
+}
+
+async function openRazorpayCheckout(
+    data: any,
+    contact: { name: string; email: string; phone: string },
+    onDismiss?: () => void
+): Promise<void> {
+    const razorpay = data?.razorpay
+    if (!razorpay?.order_id || !razorpay?.key_id) {
+        throw new Error("Payment gateway payload missing")
+    }
+    await loadRazorpayScript()
+    const Razorpay = (window as any).Razorpay
+    if (typeof Razorpay !== "function") throw new Error("Payment gateway is unavailable")
+
+    const instance = new Razorpay({
+        key: String(razorpay.key_id),
+        amount: Number(razorpay.amount || 0),
+        currency: String(razorpay.currency || "INR"),
+        name: "Trip With Nomads",
+        description: String(data?.booking?.trip_name || "Trip booking"),
+        order_id: String(razorpay.order_id),
+        prefill: {
+            name: contact.name,
+            email: contact.email,
+            contact: contact.phone,
+        },
+        notes: razorpay.notes || {},
+        callback_url: razorpay.callback_url || `${CURRENT_RUNTIME.siteBaseUrl}/payment-success`,
+        redirect: true,
+        modal: {
+            ondismiss: () => {
+                // Dismissal is not a payment result. The stable request ID remains in session storage.
+                onDismiss?.()
+            },
+        },
+    })
+    instance.on?.("payment.failed", () => {
+        // The signed status page and webhook determine the result.
+        showInlineError("Payment was not completed. You can retry from the status page.")
+    })
+    instance.open()
+}
 
 type Traveller = {
     id: number
@@ -375,7 +529,7 @@ function nextTravellerId(store: any): number {
 }
 
 function getDateValue(row: any): string {
-    return row?.start_date || row?.departure_date || ""
+    return normalizeDateKey(row?.start_date || row?.departure_date || "")
 }
 
 function normalizeSharing(value: string): SharingValue | "" {
@@ -401,7 +555,14 @@ function getTransportValue(row: any): string {
 }
 
 function getDateOptions(pricing: any[]): string[] {
-    return [...new Set((pricing || []).map((row: any) => getDateValue(row)).filter(Boolean))].sort()
+    return [
+        ...new Set(
+            (pricing || [])
+                .filter((row: any) => toNumber(row?.price) > 0)
+                .map((row: any) => getDateValue(row))
+                .filter((date: string) => date && isBookableDepartureDate(date))
+        ),
+    ].sort()
 }
 
 function getTransportOptions(pricing: any[], date: string): string[] {
@@ -1037,6 +1198,29 @@ function readCheckoutRouteContext() {
     }
 }
 
+type CheckoutDraft = {
+    tripId?: string
+    date?: string
+    transport?: string
+    contactName?: string
+    contactPhone?: string
+    contactEmail?: string
+    paymentMode?: PaymentMode
+    travellers?: Traveller[]
+}
+
+function readCheckoutDraft(): CheckoutDraft | null {
+    if (typeof window === "undefined") return null
+    try {
+        const raw = window.sessionStorage.getItem("__twn_checkout_draft_v1")
+        if (!raw) return null
+        const parsed = JSON.parse(raw)
+        return parsed && typeof parsed === "object" ? parsed : null
+    } catch (_) {
+        return null
+    }
+}
+
 function routeContextKey(ctx: {
     tripId: string
     slug: string
@@ -1051,6 +1235,73 @@ function withTextFromState(getText: (store: any) => string, fallback = "—") {
         return (props: any) => {
             const [store] = useStore()
             const text = getText(store) || fallback
+            return <Component {...props} text={text} />
+        }
+    }
+}
+
+function withFieldErrorText(getError: (store: any) => string) {
+    return function (Component: ComponentType): ComponentType {
+        return (props: any) => {
+            const [store] = useStore()
+            const text = String(getError(store) || "")
+            if (!text) {
+                return (
+                    <Component
+                        {...props}
+                        text=""
+                        style={{ ...(props.style || {}), display: "none" }}
+                    />
+                )
+            }
+            return <Component {...props} text={text} />
+        }
+    }
+}
+
+function checkoutFieldError(store: any, field: "date" | "name" | "phone" | "email"): string {
+    if (field === "date") {
+        if (!store?.date) return "Departure date is required"
+        if (!isBookableDepartureDate(store.date)) return "Select an upcoming departure date"
+        return ""
+    }
+    if (field === "name") return store?.contactName?.trim() ? "" : "Name is required"
+    if (field === "phone") {
+        if (!store?.contactPhone?.trim()) return "Phone number is required"
+        return PHONE_REGEX.test(store.contactPhone.trim()) ? "" : "Phone number is invalid"
+    }
+    if (!store?.contactEmail?.trim()) return "Email is required"
+    return EMAIL_REGEX.test(store.contactEmail.trim()) ? "" : "Email is invalid"
+}
+
+function travellerFieldError(
+    store: any,
+    context: TravellerContextValue | null,
+    field: "name" | "sharing" | "vehicle",
+): string {
+    const traveller = getTravellerByContext(store, context)
+    if (!traveller) return ""
+    if (field === "name") return traveller.name.trim() ? "" : "Traveller name is required"
+    if (field === "sharing") return traveller.sharing ? "" : "Sharing option is required"
+    const requiresVehicle = hasVehicleOptions(store?.pricingData || [], store?.date || "")
+    return !requiresVehicle || traveller.transport ? "" : "Vehicle is required"
+}
+
+function withTravellerFieldError(field: "name" | "sharing" | "vehicle") {
+    return function (Component: ComponentType): ComponentType {
+        return (props: any) => {
+            const [store] = useStore()
+            const context = useContext(TravellerContext)
+            const text = travellerFieldError(store, context, field)
+            if (!text) {
+                return (
+                    <Component
+                        {...props}
+                        text=""
+                        style={{ ...(props.style || {}), display: "none" }}
+                    />
+                )
+            }
             return <Component {...props} text={text} />
         }
     }
@@ -1133,14 +1384,23 @@ export function withCheckoutBootstrap(Component): ComponentType {
 
                 const inviteOnly = isInviteOnlyTrip(pricing)
                 const dates = getDateOptions(pricing)
-                const date = dates.includes(ctx.date) ? ctx.date : dates[0] || ""
-                const transport = getDefaultTransportForDate(pricing, date, ctx.transport)
+                const draft = readCheckoutDraft()
+                const draftMatchesTrip = !draft?.tripId || String(draft.tripId) === String(tripId)
+                const preferredDate = draftMatchesTrip ? String(draft?.date || ctx.date || "") : ctx.date
+                const date = dates.includes(preferredDate) ? preferredDate : dates[0] || ""
+                const preferredTransport = draftMatchesTrip
+                    ? String(draft?.transport || ctx.transport || "")
+                    : ctx.transport
+                const transport = getDefaultTransportForDate(pricing, date, preferredTransport)
+                const draftTravellers = draftMatchesTrip && Array.isArray(draft?.travellers)
+                    ? normalizeTravellers(draft.travellers)
+                    : normalizeTravellers(store.travellers || [])
                 const travellers = inviteOnly
-                    ? normalizeTravellers(store.travellers || [])
+                    ? draftTravellers
                     : sanitizeTravellersForDate(
                         pricing,
                         date,
-                        normalizeTravellers(store.travellers || []),
+                        draftTravellers,
                         transport
                     )
 
@@ -1153,6 +1413,12 @@ export function withCheckoutBootstrap(Component): ComponentType {
                     date,
                     transport,
                     travellers,
+                    contactName: draftMatchesTrip ? String(draft?.contactName || store.contactName || "") : store.contactName,
+                    contactPhone: draftMatchesTrip ? String(draft?.contactPhone || store.contactPhone || "") : store.contactPhone,
+                    contactEmail: draftMatchesTrip ? String(draft?.contactEmail || store.contactEmail || "") : store.contactEmail,
+                    paymentMode: draftMatchesTrip && (draft?.paymentMode === "partial_25" || draft?.paymentMode === "full")
+                        ? draft.paymentMode
+                        : store.paymentMode,
                     inviteOnly,
                     loading: false,
                 }
@@ -1166,6 +1432,10 @@ export function withCheckoutBootstrap(Component): ComponentType {
                     date,
                     transport,
                     travellers,
+                    contactName: nextState.contactName,
+                    contactPhone: nextState.contactPhone,
+                    contactEmail: nextState.contactEmail,
+                    paymentMode: nextState.paymentMode,
                     inviteOnly,
                     pricingBreakdown,
                     loading: false,
@@ -2022,6 +2292,54 @@ export function withCheckoutTotal(Component): ComponentType {
     return withTextFromState((store) => fmtINR(computeTotals(store).payableNow))(Component)
 }
 
+// Legacy Framer bindings kept as compatibility adapters. The canonical
+// checkout state and pricing calculation remain shared with the current UI.
+export function withCheckoutGrandTotalLabel(Component): ComponentType {
+    return withTextFromState(() => "Total trip cost")(Component)
+}
+
+export function withCheckoutGrandTotal(Component): ComponentType {
+    return withTextFromState((store) => fmtINR(computeTotals(store).total))(Component)
+}
+
+export function withCheckoutPayableNowLabel(Component): ComponentType {
+    return withTextFromState(() => "Payable now")(Component)
+}
+
+export function withCheckoutDueLabel(Component): ComponentType {
+    return withTextFromState((store) =>
+        computeTotals(store).paymentMode === "partial_25" ? "Remaining due" : "Balance due"
+    )(Component)
+}
+
+export function withCheckoutNameError(Component): ComponentType {
+    return withFieldErrorText((store) => checkoutFieldError(store, "name"))(Component)
+}
+
+export function withCheckoutPhoneError(Component): ComponentType {
+    return withFieldErrorText((store) => checkoutFieldError(store, "phone"))(Component)
+}
+
+export function withCheckoutEmailError(Component): ComponentType {
+    return withFieldErrorText((store) => checkoutFieldError(store, "email"))(Component)
+}
+
+export function withCheckoutDepartureDateError(Component): ComponentType {
+    return withFieldErrorText((store) => checkoutFieldError(store, "date"))(Component)
+}
+
+export function withTravellerNameError(Component): ComponentType {
+    return withTravellerFieldError("name")(Component)
+}
+
+export function withTravellerSharingError(Component): ComponentType {
+    return withTravellerFieldError("sharing")(Component)
+}
+
+export function withTravellerVehicleError(Component): ComponentType {
+    return withTravellerFieldError("vehicle")(Component)
+}
+
 export function withCheckoutValidationHint(Component): ComponentType {
     return (props: any) => (
         <Component {...props} text="" style={{ ...(props.style || {}), display: "none" }} />
@@ -2202,18 +2520,20 @@ export function withCheckoutHideWhenNoDiscount(Component): ComponentType {
 export function withCheckoutPayButton(Component): ComponentType {
     return (props: any) => {
         const [store, setStore] = useStore()
+        const submitLockRef = useRef(false)
         const totals = computeTotals(store)
         const errors = getValidationErrors(store)
         const isValid = errors.length === 0
 
         const submit = async () => {
-            if (!isValid || store.submitting) return
+            if (!isValid || store.submitting || submitLockRef.current) return
 
             if (store?.inviteOnly) {
                 showInlineError("This trip is invite-only. Please contact support to book.")
                 return
             }
 
+            submitLockRef.current = true
             setStore({ submitting: true })
             console.log("[Checkout] Pay initiated", {
                 tripId: store.tripId,
@@ -2255,7 +2575,7 @@ export function withCheckoutPayButton(Component): ComponentType {
                 transport: String(t.transport || "").trim(),
             }))
 
-            const payload = {
+            const payload: any = {
                 trip_id: store.tripId,
                 date: store.date,
                 departure_date: store.date,
@@ -2273,6 +2593,8 @@ export function withCheckoutPayButton(Component): ComponentType {
                 tax_amount: totals.tax,
                 payment_breakdown: totals.breakdown,
                 currency: "INR",
+                payment_status: "pending",
+                settlement_status: "pending",
                 created_at: new Date().toISOString(),
                 payment_mode: totals.paymentMode,
                 coupon_code: store.appliedCoupon?.code || null,
@@ -2289,16 +2611,30 @@ export function withCheckoutPayButton(Component): ComponentType {
                 },
             }
 
-            try {
-                const headers = {
-                    "Content-Type": "application/json",
-                    apikey: SUPABASE_KEY,
-                    Authorization: `Bearer ${SUPABASE_KEY}`,
-                }
+            const checkout_request_id = getOrCreateStableRequestId(
+                "checkout",
+                requestFingerprint(
+                    JSON.stringify({
+                        trip_id: payload.trip_id,
+                        date: payload.date,
+                        transport: payload.transport,
+                        travellers: payload.travellers,
+                        name: payload.name,
+                        email: payload.email,
+                        phone: payload.phone,
+                        payment_mode: payload.payment_mode,
+                        coupon_code: payload.coupon_code,
+                        total_amount: payload.total_amount,
+                        payable_now_amount: payload.payable_now_amount,
+                    })
+                )
+            )
+            payload.checkout_request_id = checkout_request_id
 
-                let res = await fetch(`${SUPABASE_URL}/functions/v1/create-booking`, {
+            try {
+                let res = await fetch(checkoutApiUrl("create-booking"), {
                     method: "POST",
-                    headers,
+                    headers: checkoutApiHeaders(),
                     body: JSON.stringify(payload),
                 })
 
@@ -2324,16 +2660,20 @@ export function withCheckoutPayButton(Component): ComponentType {
                     form.set("transport", String(payload.transport || ""))
                     form.set("travellers", JSON.stringify(payload.travellers || []))
                     form.set("payment_mode", String(payload.payment_mode || "full"))
+                    form.set("checkout_request_id", String(payload.checkout_request_id || ""))
                     form.set("coupon_code", String(payload.coupon_code || ""))
                     form.set("pricing_snapshot", JSON.stringify(payload.pricing_snapshot || {}))
 
-                    res = await fetch(`${SUPABASE_URL}/functions/v1/create-booking`, {
+                    const formHeaders: Record<string, string> = {
+                        "Content-Type": "application/x-www-form-urlencoded",
+                    }
+                    if (!CURRENT_RUNTIME.apiBaseUrl) {
+                        formHeaders.apikey = SUPABASE_KEY
+                        formHeaders.Authorization = `Bearer ${SUPABASE_KEY}`
+                    }
+                    res = await fetch(checkoutApiUrl("create-booking"), {
                         method: "POST",
-                        headers: {
-                            apikey: SUPABASE_KEY,
-                            Authorization: `Bearer ${SUPABASE_KEY}`,
-                            "Content-Type": "application/x-www-form-urlencoded",
-                        },
+                        headers: formHeaders,
                         body: form.toString(),
                     })
                     data = await res.json().catch(() => ({}))
@@ -2346,13 +2686,35 @@ export function withCheckoutPayButton(Component): ComponentType {
                         response: data,
                     })
                     showInlineError(data?.error || `Payment setup failed (HTTP ${res.status})`)
+                    submitLockRef.current = false
                     setStore({ submitting: false })
+                    return
+                }
+
+                if (data?.already_paid || data?.payment_status === "paid") {
+                    const statusUrl = new URL(`${CURRENT_RUNTIME.siteBaseUrl}/payment-success`)
+                    statusUrl.searchParams.set("booking_id", String(data.booking_id || ""))
+                    if (data?.status_token) statusUrl.searchParams.set("status_token", String(data.status_token))
+                    window.location.assign(statusUrl.toString())
+                    return
+                }
+
+                if (data?.gateway === "razorpay" && data?.razorpay?.order_id) {
+                    await openRazorpayCheckout(
+                        data,
+                        { name: contactName, email: contactEmail, phone: contactPhone },
+                        () => {
+                            submitLockRef.current = false
+                            setStore({ submitting: false })
+                        }
+                    )
                     return
                 }
 
                 const payu = data?.payu
                 if (!payu?.action) {
                     showInlineError("Payment gateway payload missing")
+                    submitLockRef.current = false
                     setStore({ submitting: false })
                     return
                 }
@@ -2375,6 +2737,7 @@ export function withCheckoutPayButton(Component): ComponentType {
             } catch (err) {
                 console.error("[Checkout] pay error", err)
                 showInlineError("Could not start payment")
+                submitLockRef.current = false
                 setStore({ submitting: false })
             }
         }

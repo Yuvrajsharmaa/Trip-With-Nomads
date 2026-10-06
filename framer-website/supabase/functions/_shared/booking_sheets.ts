@@ -1,42 +1,67 @@
 const BOOKING_TIMEZONE = "Asia/Kolkata"
 
+// Current-state contract for the managed Bookings tab. Keep these labels
+// human-readable and gateway-neutral.
 export const BOOKING_HEADERS = [
-    "Updated At (IST)",
+    "Last Updated (IST)",
     "Booking Ref",
     "Booking ID",
+    "Trip Name",
     "Trip ID",
     "Departure Date",
     "Guest Name",
     "Email",
     "Phone",
-    "Travellers Count",
-    "Travellers Summary",
-    "Pricing Summary",
+    "Traveller Count",
+    "Traveller Summary",
     "Coupon Code",
-    "Payment Mode",
+    "Payment Plan",
     "Subtotal",
     "Discount",
-    "Tax",
+    "GST",
     "Trip Total",
     "Payable Now",
     "Paid Amount",
-    "Due Amount",
+    "Balance Due",
     "Payment Status",
     "Settlement Status",
-    "PayU TxnID",
-    "PayU MihPayID",
-    "Balance Due Note",
-    "Event Stage",
+    "Payment Provider",
+    "Payment Attempt",
+    "Provider Order/Reference",
+    "Provider Payment/Transaction ID",
+    "Last Payment Event",
+    "Last Payment Event At (IST)",
     "Notes",
 ]
 
 function toNumber(value: any): number {
     const parsed = Number(value)
-    return Number.isFinite(parsed) ? parsed : 0
+    return Number.isFinite(parsed) ? Math.round(parsed * 100) / 100 : 0
+}
+
+function compact(value: any): string {
+    return String(value ?? "").trim()
+}
+
+function formatTimestampIST(value?: string): string {
+    const date = value ? new Date(value) : new Date()
+    if (Number.isNaN(date.getTime())) return compact(value)
+    const parts = new Intl.DateTimeFormat("en-CA", {
+        timeZone: BOOKING_TIMEZONE,
+        day: "2-digit",
+        month: "2-digit",
+        year: "numeric",
+        hour: "2-digit",
+        minute: "2-digit",
+        second: "2-digit",
+        hourCycle: "h23",
+    }).formatToParts(date)
+    const get = (type: string) => parts.find((part) => part.type === type)?.value || ""
+    return `${get("year")}-${get("month")}-${get("day")}T${get("hour")}:${get("minute")}:${get("second")}+05:30`
 }
 
 function normalizeSharing(value: any): string {
-    const raw = String(value || "").trim()
+    const raw = compact(value)
     if (!raw) return ""
     const lower = raw.toLowerCase()
     if (lower.includes("quad")) return "Quad"
@@ -45,116 +70,87 @@ function normalizeSharing(value: any): string {
     return raw
 }
 
-function formatTimestampIST(value?: string): string {
-    const date = value ? new Date(value) : new Date()
-    if (Number.isNaN(date.getTime())) return String(value || "")
-    const text = new Intl.DateTimeFormat("en-IN", {
-        timeZone: BOOKING_TIMEZONE,
-        day: "2-digit",
-        month: "short",
-        year: "numeric",
-        hour: "2-digit",
-        minute: "2-digit",
-        second: "2-digit",
-        hour12: true,
-    }).format(date)
-    return `${text} IST`
-}
-
-function formatINR(value: any): string {
-    const amount = Math.max(0, Math.round(toNumber(value) * 100) / 100)
-    return `₹${amount.toLocaleString("en-IN", {
-        minimumFractionDigits: 2,
-        maximumFractionDigits: 2,
-    })}`
-}
-
-function normalizePaymentMode(value: any): string {
-    return String(value || "").trim().toLowerCase() === "partial_25" ? "Partial payment (25%)" : "Pay in full"
-}
-
-function compact(value: any): string {
-    return String(value || "").trim()
-}
-
 function formatTravellerSummary(travellers: any[]): string {
-    if (!Array.isArray(travellers) || travellers.length === 0) return "—"
-    const rows = travellers
+    if (!Array.isArray(travellers) || travellers.length === 0) return ""
+    return travellers
         .map((traveller: any, index: number) => {
             const name = compact(traveller?.name) || `Traveller ${index + 1}`
             const sharing = normalizeSharing(traveller?.sharing)
             const vehicle = compact(traveller?.vehicle || traveller?.transport)
-            const meta = [sharing, vehicle].filter(Boolean).join(" · ")
-            return meta ? `${name} (${meta})` : name
+            const metadata = [sharing, vehicle].filter(Boolean).join(" · ")
+            return metadata ? `${name} (${metadata})` : name
         })
         .filter(Boolean)
-    return rows.length ? rows.join(" | ") : "—"
+        .join(" | ")
 }
 
-function normalizeBreakdownLabel(value: any): string {
-    const raw = compact(value)
-    if (!raw) return ""
-    return raw
-        .replace(/\bGuest\b/gi, "")
-        .replace(/[()]/g, "")
-        .replace(/\s{2,}/g, " ")
-        .trim()
+function paymentPlan(value: any): string {
+    return compact(value).toLowerCase() === "partial_25" ? "25% deposit" : "Full payment"
 }
 
-function formatPricingSummary(breakdown: any[]): string {
-    if (!Array.isArray(breakdown) || breakdown.length === 0) return "—"
-    const rows = breakdown
-        .map((item: any) => {
-            const count = Math.max(1, Math.round(toNumber(item?.count || 1)))
-            const sharing = normalizeSharing(item?.variant || item?.sharing)
-            const transport = compact(item?.transport || item?.vehicle)
-            const fallbackLabel = normalizeBreakdownLabel(item?.label)
-            const label = [sharing, transport].filter(Boolean).join(" · ")
-            const summary = `${count}x ${label || fallbackLabel || "Traveller"}`
-            const amount = toNumber(item?.price)
-            return `${summary} = ${formatINR(amount)}`
-        })
-        .filter(Boolean)
-    return rows.length ? rows.join(" | ") : "—"
+function providerOrderReference(booking: Record<string, any>): string {
+    return compact(
+        booking.payment_gateway_order_or_ref_id ||
+        booking.provider_order_id ||
+            booking.provider_order_reference ||
+            booking.razorpay_order_id ||
+            booking.payu_txnid
+    )
+}
+
+function providerPaymentReference(booking: Record<string, any>): string {
+    return compact(
+        booking.payment_gateway_payment_id ||
+            booking.payment_gateway_txn_id ||
+        booking.provider_payment_id ||
+            booking.provider_transaction_id ||
+            booking.razorpay_payment_id ||
+            booking.payu_mihpayid
+    )
 }
 
 export function buildBookingSheetRow(params: {
     booking: Record<string, any>
-    eventStage: string
+    eventStage?: string
     notes?: string | null
     updatedAt?: string
 }) {
     const booking = params.booking || {}
     const travellers = Array.isArray(booking.travellers) ? booking.travellers : []
-    const pricingBreakdown = Array.isArray(booking.payment_breakdown) ? booking.payment_breakdown : []
+    const notes = [
+        compact(booking.balance_due_note),
+        compact(params.notes),
+    ].filter(Boolean).join(" | ")
 
     return [
-        formatTimestampIST(params.updatedAt || new Date().toISOString()),
+        formatTimestampIST(params.updatedAt || booking.updated_at || new Date().toISOString()),
         compact(booking.booking_ref || booking.id),
         compact(booking.id),
+        compact(booking.trip_name || booking.trip_title),
         compact(booking.trip_id),
-        compact(booking.departure_date),
-        compact(booking.name),
-        compact(booking.email),
+        compact(booking.departure_date || booking.date),
+        compact(booking.name || booking.guest_name),
+        compact(booking.email).toLowerCase(),
         compact(booking.phone),
-        String(Math.max(0, travellers.length)),
+        travellers.length,
         formatTravellerSummary(travellers),
-        formatPricingSummary(pricingBreakdown),
         compact(booking.coupon_code),
-        normalizePaymentMode(booking.payment_mode),
-        formatINR(booking.subtotal_amount),
-        formatINR(booking.discount_amount),
-        formatINR(booking.tax_amount),
-        formatINR(booking.total_amount),
-        formatINR(booking.payable_now_amount),
-        formatINR(booking.paid_amount),
-        formatINR(booking.due_amount),
-        compact(booking.payment_status),
-        compact(booking.settlement_status),
-        compact(booking.payu_txnid),
-        compact(booking.payu_mihpayid),
-        compact(booking.balance_due_note),
-        compact(params.eventStage),
-        compact(params.notes),
+        paymentPlan(booking.payment_mode),
+        toNumber(booking.subtotal_amount),
+        toNumber(booking.discount_amount),
+        toNumber(booking.tax_amount || booking.gst_amount),
+        toNumber(booking.total_amount),
+        toNumber(booking.payable_now_amount || booking.amount),
+        toNumber(booking.paid_amount),
+        toNumber(booking.due_amount || booking.balance_due),
+        compact(booking.payment_status || "pending"),
+        compact(booking.settlement_status || "pending"),
+        compact(booking.payment_provider || booking.provider),
+        toNumber(booking.payment_attempt_number || booking.attempt_no),
+        providerOrderReference(booking),
+        providerPaymentReference(booking),
+        compact(booking.last_payment_event || params.eventStage),
+        booking.last_payment_event_at ? formatTimestampIST(booking.last_payment_event_at) : "",
+        notes,
     ]
 }
