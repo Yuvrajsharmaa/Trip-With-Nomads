@@ -14,6 +14,10 @@ Deno.test("create-booking persists a checkout request and replays its attempt", 
     assertStringIncludes(source, "computeBasePricing")
     assertStringIncludes(source, "already_paid")
     assertStringIncludes(source, "PAYMENT_PROVIDER_UNSUPPORTED")
+    assertStringIncludes(source, "key_id: credentials.keyId")
+    if (source.includes("key: credentials.keyId")) {
+        throw new Error("create-booking must return the key_id field consumed by the checkout client")
+    }
     if (source.includes('activeProvider === "payu"') || source.includes("responsePayload.payu")) {
         throw new Error("create-booking must not emit an unsupported PayU checkout")
     }
