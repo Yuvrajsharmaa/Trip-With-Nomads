@@ -2,6 +2,25 @@
 
 Status: executed against staging on 2026-10-06 IST; keep this as the reproducible verification record.
 
+## 2026-10-07 continuation
+
+The existing-sheet contract and routing hardening were re-verified on staging before the production backend rollout. The current deployed function versions are recorded below; earlier version numbers in the original runbook are historical evidence, not the active versions.
+
+| Environment | `create-booking` | `record-lead` | `get-booking-status` | `razorpay-webhook` |
+| --- | ---: | ---: | ---: | ---: |
+| Staging | 79 | 88 | 56 | 58 |
+| Production | 120 | 71 | 29 | 28 |
+
+### Latest controlled staging cases
+
+- Full-payment failure through Razorpay Test Mode bank simulator: booking `da0b3c63-6cea-4fd4-9b8e-d9735b2a90c6`, ref `TWN-2026-0136`. The verified `payment.failed` event is `applied`, its Sheet projection is `synced`, and its payment email projection is `sent`. The current `Bookings` row and `Bookings_Failed` event row both show the human-readable trip name `Vietnam`, `24 Oct 2026`, numeric INR amounts, and readable IST timestamps.
+- The first trip-name projection attempt exposed a missing Supabase client in the Sheet helper. It remained retryable with `sheet_sync_status = failed` and did not apply payment twice. The helper was corrected, redeployed, and the next controlled failure proved the repaired path above.
+- Production smoke checks returned HTTP 200 for the home page, full-page checkout, and the live `get-trip-checkout-context` endpoint. No production payment was created.
+
+### Routing correction
+
+Checkout abandonment is written to `TWN Bookings → Abandoned Bookings`. It is not written to the general `Abandoned Leads` tab or `Master Leads`. `Bookings` is the one current booking row; `Bookings_Success` and `Bookings_Failed` are verified payment-event history, so they intentionally contain related information without representing duplicate bookings.
+
 All values recorded here must be staging-only. Never record API keys, service-account JSON, payment credentials, webhook secrets, or complete signed tokens.
 
 ## Environment map

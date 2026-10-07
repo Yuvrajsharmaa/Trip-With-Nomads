@@ -12,6 +12,9 @@ export type LeadSheetEnvironment = {
     trips?: string | null
     custom?: string | null
     general?: string | null
+    // Booking abandonment is its own event stream in the booking workbook.
+    // It must never fall back to a general lead workbook.
+    booking?: string | null
 }
 
 function clean(value: unknown): string {
@@ -21,9 +24,7 @@ function clean(value: unknown): string {
 function location(sheetId: unknown, tab: string): LeadLocation | null {
     const normalizedSheetId = clean(sheetId)
     const normalizedTab = clean(tab)
-    return normalizedSheetId && normalizedTab
-        ? { sheetId: normalizedSheetId, tab: normalizedTab }
-        : null
+    return normalizedSheetId && normalizedTab ? { sheetId: normalizedSheetId, tab: normalizedTab } : null
 }
 
 export function targetForLead(
@@ -49,11 +50,10 @@ export function targetForLead(
         )
     }
 
-    // Booking abandonment historically belongs to the general current-contact
-    // route. It is an event in Supabase, but it must remain visible to the
-    // existing general lead workflow for compatibility.
+    // Checkout abandonment is an event, not a submitted current contact. Keep
+    // it in the booking workbook so it cannot be confused with a general lead.
     if (normalizedSource === "booking_abandoned") {
-        return location(env.general || env.original, "Leads")
+        return location(env.booking, "Abandoned Bookings")
     }
 
     if (normalizedSource === "custom_trip_lead" && clean(env.custom)) {
@@ -82,11 +82,11 @@ export function configuredLeadLocations(env: LeadSheetEnvironment): LeadLocation
         location(env.custom, "Abandoned Leads"),
         location(env.general, "Leads"),
         location(env.general, "Abandoned Leads"),
+        location(env.booking, "Abandoned Bookings"),
         location(env.original, "Leads"),
     ]
     return candidates.filter((candidate, index, all): candidate is LeadLocation =>
-        Boolean(candidate) && all.findIndex((item) =>
-            item?.sheetId === candidate?.sheetId && item?.tab === candidate?.tab
-        ) === index
+        Boolean(candidate) &&
+        all.findIndex((item) => item?.sheetId === candidate?.sheetId && item?.tab === candidate?.tab) === index
     )
 }

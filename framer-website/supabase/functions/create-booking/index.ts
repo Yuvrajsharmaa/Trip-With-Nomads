@@ -557,6 +557,7 @@ async function readPayload(req: Request): Promise<any> {
         return {
             checkout_request_id: form.get("checkout_request_id") || form.get("idempotency_key"),
             trip_id: form.get("trip_id"),
+            trip_slug: form.get("trip_slug"),
             date: form.get("date"),
             departure_date: form.get("departure_date"),
             transport: form.get("transport"),
@@ -666,7 +667,8 @@ serve(async (req) => {
         }
         notificationCheckoutRequestId = checkoutRequestId
 
-        const tripId = firstNonEmpty(body?.trip_id)
+        let tripId = firstNonEmpty(body?.trip_id)
+        const tripSlug = firstNonEmpty(body?.trip_slug)
         const departureDate = normalizeDateKey(firstNonEmpty(body?.departure_date, body?.date))
         const fallbackTransport = firstNonEmpty(body?.transport)
         const travellersInput = Array.isArray(body?.travellers) ? body.travellers : []
@@ -719,6 +721,22 @@ serve(async (req) => {
 
         const supabase = createClient(supabaseUrl, serviceRoleKey)
         notificationSupabase = supabase
+        if (tripSlug) {
+            const tripBySlug = await supabase
+                .from("trips")
+                .select("id, slug")
+                .eq("slug", tripSlug)
+                .maybeSingle()
+            if (tripBySlug.error) throw tripBySlug.error
+            if (tripBySlug.data?.id && String(tripBySlug.data.id) !== tripId) {
+                console.warn("[create-booking] canonicalizing trip ID from slug", {
+                    supplied_trip_id: tripId,
+                    trip_slug: tripSlug,
+                    canonical_trip_id: tripBySlug.data.id,
+                })
+                tripId = String(tripBySlug.data.id)
+            }
+        }
         console.log("[create-booking] request received", {
             checkout_request_id: checkoutRequestId,
             trip_id: tripId,

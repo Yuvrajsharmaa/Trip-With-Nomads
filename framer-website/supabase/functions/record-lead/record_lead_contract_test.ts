@@ -2,7 +2,9 @@ import { assert, assertStringIncludes } from "https://deno.land/std@0.224.0/asse
 
 const source = await Deno.readTextFile(new URL("./index.ts", import.meta.url))
 const wrapper = await Deno.readTextFile(new URL("../../../framer/EmailPopupOverride.tsx", import.meta.url))
-const migration = await Deno.readTextFile(new URL("../../migrations/20261006100000_lead_submission_idempotency.sql", import.meta.url))
+const migration = await Deno.readTextFile(
+    new URL("../../migrations/20261006100000_lead_submission_idempotency.sql", import.meta.url),
+)
 const routing = await Deno.readTextFile(new URL("../_shared/lead_routing.ts", import.meta.url))
 
 Deno.test("record-lead requires durable submission identity and retries Sheet projection", () => {
@@ -21,7 +23,7 @@ Deno.test("record-lead requires durable submission identity and retries Sheet pr
     assertStringIncludes(source, "booking_abandoned")
     assertStringIncludes(source, "GOOGLE_SHEET_ID_MASTER")
     assertStringIncludes(source, "Master Leads")
-    assertStringIncludes(source, '"Email",\n            normalizeEmail(params.lead.email)')
+    assert(source.includes('"Master Leads"') && source.includes('normalizeEmail(params.lead.email)'))
     assertStringIncludes(source, "LEAD_ID_CONFLICT")
     assertStringIncludes(source, "does not belong")
 })

@@ -815,6 +815,7 @@ function bookingSheetId(): string {
 }
 
 async function syncPaymentSheets(params: {
+    supabase: any
     booking: any
     attempt?: any
     eventId: string
@@ -833,8 +834,24 @@ async function syncPaymentSheets(params: {
     if (!sheetId) throw new Error("Booking Sheets are enabled but no booking spreadsheet is configured")
 
     const bookingsTab = firstNonEmpty(Deno.env.get("BOOKINGS_SHEET_TAB"), "Bookings")
+    // The bookings table stores the trip foreign key rather than a readable
+    // trip title. Resolve it before projecting current state and payment
+    // history so the managed workbook stays understandable to operators.
+    const trip = await loadTripDetails(params.supabase, params.booking)
+    const resolvedTripName = firstNonEmpty(
+        trip.title,
+        params.booking.trip_name,
+        params.booking.trip_title,
+        params.booking.trip_slug,
+    )
+    const sheetBooking = {
+        ...params.booking,
+        trip_name: resolvedTripName,
+        trip_title: resolvedTripName,
+        trip_slug: firstNonEmpty(params.booking.trip_slug, trip.slug),
+    }
     const currentRow = buildBookingSheetRow({
-        booking: params.booking,
+        booking: sheetBooking,
         eventStage: params.eventName,
         notes: params.notes,
         updatedAt: params.processedAt,
@@ -852,7 +869,7 @@ async function syncPaymentSheets(params: {
         ? firstNonEmpty(Deno.env.get("BOOKING_FAILED_SHEET_TAB"), "Bookings_Failed")
         : firstNonEmpty(Deno.env.get("BOOKING_SUCCESS_SHEET_TAB"), "Bookings_Success"))
     const historyRow = buildBookingCallbackRow({
-        booking: params.booking,
+        booking: sheetBooking,
         eventId: params.eventId,
         eventReceivedAt: params.eventReceivedAt,
         processedAt: params.processedAt,
@@ -949,6 +966,7 @@ serve(async (req) => {
             let synced = false
             try {
                 synced = await syncPaymentSheets({
+                    supabase,
                     booking,
                     attempt,
                     eventId: eventRow.provider_event_id,
@@ -1100,6 +1118,7 @@ serve(async (req) => {
 
         try {
             const synced = await syncPaymentSheets({
+                supabase,
                 booking: reconciliation.booking,
                 attempt,
                 eventId,

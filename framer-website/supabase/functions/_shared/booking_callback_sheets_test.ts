@@ -1,8 +1,5 @@
 import { assertEquals, assertMatch } from "https://deno.land/std@0.224.0/assert/mod.ts"
-import {
-    BOOKING_CALLBACK_HEADERS,
-    buildBookingCallbackRow,
-} from "./booking_callback_sheets.ts"
+import { BOOKING_CALLBACK_HEADERS, buildBookingCallbackRow } from "./booking_callback_sheets.ts"
 
 Deno.test("payment history is event-oriented and numeric", () => {
     const row = buildBookingCallbackRow({
@@ -32,10 +29,15 @@ Deno.test("payment history is event-oriented and numeric", () => {
 
     assertEquals(row.length, BOOKING_CALLBACK_HEADERS.length)
     assertEquals(row[0], "evt_123")
+    assertEquals(row[1], "11 Mar 2026, 6:04 PM IST")
+    assertEquals(row[2], "booking-123")
     assertEquals(row[4], 2)
+    assertEquals(row[5], "Razorpay")
+    assertEquals(row[6], "Payment captured")
+    assertEquals(row[11], "Guest User")
+    assertEquals(row[15], 17323.95)
+    assertEquals(row[16], 17323.95)
     assertEquals(row[13], "order_from_booking")
     assertEquals(row[14], "pay_from_booking")
-    assertEquals(row[15], 17323.95)
-    assertMatch(String(row[1]), /^2026-03-11T18:04:56\+05:30$/)
-    assertMatch(String(row[17]), /^2026-03-11T18:30:00\+05:30$/)
+    assertMatch(String(row[17]), /^11 Mar 2026, 6:30 PM IST$/)
 })

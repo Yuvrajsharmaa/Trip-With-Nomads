@@ -5,65 +5,64 @@ import path from "node:path"
 
 export const MANAGED_TABS = {
   Bookings: {
-    key: "Booking ID",
+    key: "Booking Key",
     headers: [
-      "Last Updated (IST)", "Booking Ref", "Booking ID", "Trip Name", "Trip ID",
-      "Departure Date", "Guest Name", "Email", "Phone", "Traveller Count",
-      "Traveller Summary", "Coupon Code", "Payment Plan", "Subtotal", "Discount",
-      "GST", "Trip Total", "Payable Now", "Paid Amount", "Balance Due", "Payment Status",
-      "Settlement Status", "Payment Provider", "Payment Attempt", "Provider Order/Reference",
-      "Provider Payment/Transaction ID", "Last Payment Event", "Last Payment Event At (IST)", "Notes",
+      "Last Updated", "Booking Reference", "Trip", "Departure", "Guest Name", "Email", "Phone",
+      "Traveller Count", "Traveller Details", "Coupon", "Payment Plan", "Subtotal", "Discount", "GST",
+      "Trip Total", "Payable Now", "Paid", "Balance Due", "Payment Status", "Settlement Status",
+      "Payment Provider", "Payment Attempt", "Last Payment Event", "Last Payment Event At", "Notes",
+      "Booking Key", "Trip Key", "Provider Order", "Provider Payment",
     ],
   },
-  Bookings_Success: { key: "Event ID", history: true, headers: [
-    "Event ID", "Event Received At (IST)", "Booking ID", "Booking Ref", "Payment Attempt",
-    "Payment Provider", "Event Type", "Payment Result", "Settlement Status", "Trip Name",
-    "Departure Date", "Guest Name", "Email", "Provider Order/Reference",
-    "Provider Payment/Transaction ID", "Amount Received", "Expected Amount", "Processed At (IST)",
-    "Reconciliation Result", "Notes",
+  Bookings_Success: { key: "Event Key", history: true, headers: [
+    "Event Received", "Booking Reference", "Trip", "Departure", "Guest Name", "Email", "Payment Provider",
+    "Payment Event", "Payment Result", "Settlement Status", "Amount Received", "Expected Amount",
+    "Processed At", "Reconciliation", "Notes", "Event Key", "Booking Key", "Payment Attempt",
+    "Provider Order", "Provider Payment",
   ] },
-  Bookings_Failed: { key: "Event ID", history: true, headers: [
-    "Event ID", "Event Received At (IST)", "Booking ID", "Booking Ref", "Payment Attempt",
-    "Payment Provider", "Event Type", "Payment Result", "Settlement Status", "Trip Name",
-    "Departure Date", "Guest Name", "Email", "Provider Order/Reference",
-    "Provider Payment/Transaction ID", "Amount Received", "Expected Amount", "Processed At (IST)",
-    "Reconciliation Result", "Notes",
+  Bookings_Failed: { key: "Event Key", history: true, headers: [
+    "Event Received", "Booking Reference", "Trip", "Departure", "Guest Name", "Email", "Payment Provider",
+    "Payment Event", "Payment Result", "Settlement Status", "Amount Received", "Expected Amount",
+    "Processed At", "Reconciliation", "Notes", "Event Key", "Booking Key", "Payment Attempt",
+    "Provider Order", "Provider Payment",
   ] },
   Leads: { key: "Email", headers: [
-    "Lead ID", "First Seen At", "Last Seen At", "Name", "Email", "Phone", "Instagram ID",
-    "Latest Source", "Latest Page URL", "Latest Trip ID", "Latest Trip Slug", "Latest UTM Source",
-    "Latest UTM Medium", "Latest UTM Campaign", "Latest UTM Term", "Latest UTM Content",
-    "Submission Count", "Current Status", "Latest Submission ID", "Notes",
+    "First Seen", "Last Seen", "Name", "Email", "Phone", "Country Code", "Instagram", "Source", "Page",
+    "Trip", "Reason", "Submissions", "Status", "Notes", "Lead Key", "Latest Submission Key", "Trip Key",
+    "Source Key", "Status Key", "UTM Source", "UTM Medium", "UTM Campaign", "UTM Term", "UTM Content",
   ] },
   "Custom Trip Leads": { key: "Email", headers: [
-    "Lead ID", "First Seen At", "Last Seen At", "Name", "Email", "Phone", "Instagram ID",
-    "Latest Source", "Latest Page URL", "Latest Trip ID", "Latest Trip Slug", "Latest UTM Source",
-    "Latest UTM Medium", "Latest UTM Campaign", "Latest UTM Term", "Latest UTM Content",
-    "Submission Count", "Current Status", "Latest Submission ID", "Notes",
+    "First Seen", "Last Seen", "Name", "Email", "Phone", "Country Code", "Instagram", "Source", "Page",
+    "Trip", "Reason", "Submissions", "Status", "Notes", "Lead Key", "Latest Submission Key", "Trip Key",
+    "Source Key", "Status Key", "UTM Source", "UTM Medium", "UTM Campaign", "UTM Term", "UTM Content",
   ] },
-  "Abandoned Leads": { key: "Submission ID", history: true, headers: [
-    "Submission ID", "Lead ID", "Captured At", "Name", "Email", "Phone", "Source", "Page URL",
-    "Trip ID", "Trip Slug", "Status", "Reason",
+  "Abandoned Leads": { key: "Submission Key", history: true, headers: [
+    "Captured At", "Name", "Email", "Phone", "Country Code", "Instagram", "Source", "Page", "Trip",
+    "Status", "Reason", "Notes", "Submission Key", "Lead Key", "Trip Key", "Source Key", "Status Key",
+    "UTM Source", "UTM Medium", "UTM Campaign", "UTM Term", "UTM Content",
   ] },
   "NTC - Invites": { key: "Email", headers: [
-    "Lead ID", "Created At", "Name", "Email", "Phone", "Country Code", "Instagram ID", "Reason", "Source",
-    "Page URL", "Trip ID", "Trip Slug", "UTM Source", "UTM Medium", "UTM Campaign", "Status",
+    "First Seen", "Last Seen", "Name", "Email", "Phone", "Country Code", "Instagram",
+    "Why They Want To Travel", "Source", "Page", "Trip", "Submissions", "Status", "Notes", "Lead Key",
+    "Latest Submission Key", "Trip Key", "Source Key", "Status Key", "UTM Source", "UTM Medium", "UTM Campaign",
+    "UTM Term", "UTM Content",
   ] },
   "Master Leads": { key: "Email", headers: [
-    "Lead ID", "Created At", "Name", "Email", "Phone", "Country Code", "Source", "Status",
-    "Page URL", "Trip ID", "Trip Slug",
+    "First Seen", "Last Seen", "Name", "Email", "Phone", "Country Code", "Instagram", "Source", "Page",
+    "Trip", "Reason", "Submissions", "Status", "Notes", "Lead Key", "Latest Submission Key", "Trip Key",
+    "Source Key", "Status Key", "UTM Source", "UTM Medium", "UTM Campaign", "UTM Term", "UTM Content",
   ] },
 }
 
 export const PROVIDER_COLUMN_MAP = {
-  "PayU TxnID": "Provider Payment/Transaction ID",
-  "PayU Transaction ID": "Provider Payment/Transaction ID",
-  "PayU Mihpayid": "Provider Payment/Transaction ID",
-  "PayU Order ID": "Provider Order/Reference",
-  "Razorpay Order ID": "Provider Order/Reference",
-  "Razorpay Payment ID": "Provider Payment/Transaction ID",
-  "Gateway Order ID": "Provider Order/Reference",
-  "Gateway Payment ID": "Provider Payment/Transaction ID",
+  "PayU TxnID": "Provider Payment",
+  "PayU Transaction ID": "Provider Payment",
+  "PayU Mihpayid": "Provider Payment",
+  "PayU Order ID": "Provider Order",
+  "Razorpay Order ID": "Provider Order",
+  "Razorpay Payment ID": "Provider Payment",
+  "Gateway Order ID": "Provider Order",
+  "Gateway Payment ID": "Provider Payment",
 }
 
 const normalize = (value) => String(value ?? "").trim()
