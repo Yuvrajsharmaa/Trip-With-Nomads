@@ -1,5 +1,5 @@
 export type ResendEmailRequest = {
-    to: string
+    to: string | string[]
     subject: string
     html: string
     text: string
@@ -25,6 +25,23 @@ function firstNonEmpty(...values: unknown[]): string {
     return ""
 }
 
+function isEmail(value: string): boolean {
+    return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value)
+}
+
+export function normalizeResendRecipients(value: unknown): string[] {
+    const values = Array.isArray(value)
+        ? value
+        : String(value || "").split(/[;,\n]/)
+    const recipients: string[] = []
+    for (const value of values) {
+        const email = String(value || "").trim().toLowerCase()
+        if (!email || !isEmail(email) || recipients.includes(email)) continue
+        recipients.push(email)
+    }
+    return recipients
+}
+
 export function resolveResendFrom(): string {
     return firstNonEmpty(
         Deno.env.get("RESEND_FROM_EMAIL"),
@@ -42,6 +59,12 @@ export function resolveResendReplyTo(): string {
 export async function sendResendEmail(
     request: ResendEmailRequest,
 ): Promise<ResendEmailResult> {
+    const recipients = normalizeResendRecipients(request.to)
+    if (recipients.length === 0) {
+        console.warn("[resend] no valid recipients; email skipped")
+        return { sent: false, skipped: true, reason: "no_recipient" }
+    }
+
     const apiKey = firstNonEmpty(Deno.env.get("RESEND_API_KEY"))
     if (!apiKey) {
         console.warn("[resend] RESEND_API_KEY is not configured; email skipped")
@@ -57,7 +80,7 @@ export async function sendResendEmail(
         },
         body: JSON.stringify({
             from: request.from || resolveResendFrom(),
-            to: [request.to],
+            to: recipients,
             reply_to: request.replyTo || resolveResendReplyTo(),
             subject: request.subject,
             html: request.html,
