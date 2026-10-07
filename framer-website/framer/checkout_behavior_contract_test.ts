@@ -80,4 +80,5 @@ Deno.test("all legacy lead routes remain exported and use one guarded submission
     assertStringIncludes(source, "SUBMIT_LOCK_KEY")
     assertStringIncludes(source, "onSubmit={undefined}")
     assertStringIncludes(source, "partial_fill")
+    assertStringIncludes(source, "querySelectorAll(selector)")
 })
