@@ -26,6 +26,8 @@ Deno.test("record-lead requires durable submission identity and retries Sheet pr
     assert(source.includes('"Master Leads"') && source.includes('normalizeEmail(params.lead.email)'))
     assertStringIncludes(source, "LEAD_ID_CONFLICT")
     assertStringIncludes(source, "does not belong")
+    assertStringIncludes(source, "notes: compact(body?.notes)")
+    assertStringIncludes(source, "notes: firstNonEmpty(body?.notes, existingLead?.notes)")
 })
 
 Deno.test("lead routing is explicit and custom tabs remain configuration-gated", () => {

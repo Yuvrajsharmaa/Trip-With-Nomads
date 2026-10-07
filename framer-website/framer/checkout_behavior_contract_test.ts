@@ -81,4 +81,6 @@ Deno.test("all legacy lead routes remain exported and use one guarded submission
     assertStringIncludes(source, "onSubmit={undefined}")
     assertStringIncludes(source, "partial_fill")
     assertStringIncludes(source, "querySelectorAll(selector)")
+    assertStringIncludes(source, 'input[name*="company" i]')
+    assertStringIncludes(source, 'Company: ${companyName}')
 })
