@@ -178,6 +178,7 @@ const bookingAbandonLeadInFlight = new Set<string>()
 const tripDisplayCache = new Map<string, { ts: number; data: any }>()
 const tripDisplayInFlight = new Map<string, Promise<any | null>>()
 let forcedTripId = ""
+let forcedTripIdPath = ""
 
 function isUuid(value: any): boolean {
     return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
@@ -1254,8 +1255,8 @@ async function fetchTripPricing(tripId: string): Promise<any[]> {
 }
 
 async function fetchTripDisplayPrice(params: { slug?: string; tripId?: string }): Promise<any | null> {
-    const slug = String(params.slug || "").trim()
-    const tripId = String(params.tripId || "").trim()
+    const tripId = normalizeTripId(params.tripId)
+    const slug = tripId ? "" : String(params.slug || "").trim()
     if (!slug && !tripId) return null
 
     const cacheKey = `${slug}::${tripId}`
@@ -1310,7 +1311,7 @@ function readCheckoutRouteContext() {
     }
     const query = new URLSearchParams(window.location.search)
     return {
-        tripId: String(query.get("tripId") || query.get("trip_id") || "").trim(),
+        tripId: normalizeTripId(query.get("tripId") || query.get("trip_id") || ""),
         slug: String(query.get("slug") || "").trim(),
         date: String(query.get("date") || "").trim(),
         transport: String(query.get("vehicle") || query.get("transport") || "").trim(),
@@ -1347,6 +1348,12 @@ function routeContextKey(ctx: {
     transport: string
 }): string {
     return [ctx.tripId, ctx.slug, ctx.date, ctx.transport].join("|")
+}
+
+function getPageScopedTripId(): string {
+    if (typeof window === "undefined") return ""
+    const currentPath = String(window.location.pathname || "")
+    return forcedTripIdPath === currentPath ? normalizeTripId(forcedTripId) : ""
 }
 
 function withTextFromState(getText: (store: any) => string, fallback = "—") {
@@ -1470,11 +1477,11 @@ export function withCheckoutBootstrap(Component): ComponentType {
                 bootKeyRef.current = routeKey
 
                 setStore({ loading: true })
-                let tripId = ctx.tripId
+                let tripId = normalizeTripId(ctx.tripId)
                 let slug = ctx.slug
 
                 if (!tripId && slug) {
-                    tripId = await fetchTripIdBySlug(slug)
+                    tripId = normalizeTripId(await fetchTripIdBySlug(slug))
                 }
 
                 if (!tripId) {
@@ -1494,10 +1501,21 @@ export function withCheckoutBootstrap(Component): ComponentType {
                 ])
                 if (disposed) return
 
-                slug = slug || String(tripContext?.slug || "").trim()
+                if (ctx.tripId && !tripContext) {
+                    setStore({
+                        loading: false,
+                        couponMessageType: "error",
+                        couponMessage: "Trip not found. Please reopen checkout from the trip page.",
+                    })
+                    return
+                }
+
+                slug = tripId
+                    ? String(tripContext?.slug || "").trim()
+                    : slug || String(tripContext?.slug || "").trim()
                 const tripName = firstNonEmpty(
                     String(tripContext?.title || "").trim(),
-                    toTitleFromSlug(slug),
+                    tripId ? "" : toTitleFromSlug(slug),
                     tripId
                 )
 
@@ -1609,12 +1627,19 @@ export function withBookNowToCheckout(Component): ComponentType {
                 ? current.split("/").pop() || ""
                 : ""
 
-            const tripId = props?.tripId || props?.["data-trip-id"] || store.tripId || ""
-            const slug = props?.slug || props?.["data-trip-slug"] || slugFromPath || store.slug || ""
+            const tripId = readTripIdCandidate(props) ||
+                normalizeTripId(store.tripId) ||
+                getPageScopedTripId()
+            const slug = tripId
+                ? ""
+                : readTripSlugCandidate(props) ||
+                    slugFromPath ||
+                    store.slug ||
+                    ""
 
             const next = new URLSearchParams()
             if (tripId) next.set("tripId", tripId)
-            if (slug) next.set("slug", slug)
+            if (!tripId && slug) next.set("slug", slug)
             if (store.date) next.set("date", store.date)
             const travellers = normalizeTravellers(store.travellers || [])
             const firstTransport = travellers[0]?.transport || store.transport
@@ -2418,7 +2443,7 @@ export function withCheckoutGrandTotalLabel(Component): ComponentType {
 }
 
 export function withCheckoutGrandTotal(Component): ComponentType {
-    return withTextFromState((store) => fmtINR(computeTotals(store).total))(Component)
+    return withTextFromState((store) => fmtINR(computeTotals(store).subtotal))(Component)
 }
 
 export function withCheckoutPayableNowLabel(Component): ComponentType {
@@ -2967,8 +2992,17 @@ export function withTripIdSource(Component): ComponentType {
         const nextTripId = readTripIdCandidate(props)
 
         useEffect(() => {
-            if (nextTripId) {
-                forcedTripId = nextTripId
+            if (!nextTripId || typeof window === "undefined") return
+            const currentPath = String(window.location.pathname || "")
+            if (currentPath.toLowerCase().startsWith("/checkout")) return
+            forcedTripId = nextTripId
+            forcedTripIdPath = currentPath
+
+            return () => {
+                if (forcedTripIdPath === currentPath && forcedTripId === nextTripId) {
+                    forcedTripId = ""
+                    forcedTripIdPath = ""
+                }
             }
         }, [nextTripId])
 
@@ -2985,9 +3019,13 @@ function useTripDisplayData(props?: any) {
         let disposed = false
         const query = new URLSearchParams(window.location.search)
         const slugFromPath = getTripSlugFromPathname(window.location.pathname)
-        const tripId =
-            propTripId || query.get("tripId") || query.get("trip_id") || forcedTripId || ""
-        const slug = propSlug || slugFromPath || (tripId ? "" : query.get("slug") || "")
+        const tripId = normalizeTripId(
+            propTripId ||
+                query.get("tripId") ||
+                query.get("trip_id") ||
+                getPageScopedTripId()
+        )
+        const slug = tripId ? "" : propSlug || slugFromPath || query.get("slug") || ""
 
         fetchTripDisplayPrice({ slug, tripId })
             .then((payload) => {
