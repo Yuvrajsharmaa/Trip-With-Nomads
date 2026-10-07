@@ -103,8 +103,10 @@ Deno.test("builds a designed paid email with booking details", () => {
   assertStringIncludes(email.html, "Chat on WhatsApp");
   assertStringIncludes(
     email.html,
-    'href="https://wa.me/919318405401?text=Hi%20Trip%20With%20Nomads%2C%20I%20need%20help%20with%20booking%20TWN-2026-00123."',
+    'href="https://wa.me/918076425366?text=Hi%20Trip%20With%20Nomads%2C%20I%20need%20help%20with%20booking%20TWN-2026-00123."',
   );
+  assertStringIncludes(email.html, "+91 8076425366");
+  assertStringIncludes(email.html, 'href="tel:+918076425366"');
   assertStringIncludes(
     email.html,
     'href="https://tripwithnomads.com/privacy-policy"',
