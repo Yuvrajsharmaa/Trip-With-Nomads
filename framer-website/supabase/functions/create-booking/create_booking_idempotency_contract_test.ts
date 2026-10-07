@@ -14,6 +14,10 @@ Deno.test("create-booking persists a checkout request and replays its attempt", 
     assertStringIncludes(source, "computeBasePricing")
     assertStringIncludes(source, "already_paid")
     assertStringIncludes(source, "PAYMENT_PROVIDER_UNSUPPORTED")
+    assertStringIncludes(source, "BOOKING_CALLBACK_SHEET_ID")
+    if (source.includes('Deno.env.get("GOOGLE_SHEET_ID_TRIPS")')) {
+        throw new Error("create-booking must never use the trip-lead workbook as a booking Sheet fallback")
+    }
     assertStringIncludes(source, "key_id: credentials.keyId")
     if (source.includes("key: credentials.keyId")) {
         throw new Error("create-booking must return the key_id field consumed by the checkout client")

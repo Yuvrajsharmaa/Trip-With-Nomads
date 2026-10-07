@@ -78,6 +78,8 @@ function resolveRuntimeEnv(): RuntimeEnv {
     if (host === "tripwithnomads.com" || host === "www.tripwithnomads.com") return "production"
     if (
         host === "maroon-aside-814100.framer.app" ||
+        host.endsWith(".framer.app") ||
+        host.endsWith(".framer.website") ||
         host === "localhost" ||
         host === "127.0.0.1"
     ) {
@@ -169,9 +171,14 @@ type PaymentMode = "full" | "partial_25"
 
 const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
 const PHONE_REGEX = /^\+?[\d\s\-()]{10,15}$/
+const BOOKING_ABANDON_LEAD_SOURCE = "booking_abandoned"
+const BOOKING_ABANDON_LEAD_STATUS = "abandoned_booking"
+const BOOKING_ABANDON_LEAD_PREFIX = "__twn_booking_abandon_lead_v1"
+const bookingAbandonLeadInFlight = new Set<string>()
 const tripDisplayCache = new Map<string, { ts: number; data: any }>()
 const tripDisplayInFlight = new Map<string, Promise<any | null>>()
 let forcedTripId = ""
+let forcedTripIdPath = ""
 
 function isUuid(value: any): boolean {
     return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
@@ -1035,6 +1042,119 @@ function readInputValue(selectors: string[]): string {
     return ""
 }
 
+function bookingAbandonIdentity(tripId: string, email: string): string {
+    const path = typeof window !== "undefined" ? window.location.pathname : ""
+    return [tripId, email, path].join("|")
+}
+
+function bookingAbandonStorageKey(kind: string, identity: string): string {
+    return `${BOOKING_ABANDON_LEAD_PREFIX}:${kind}:${identity}`
+}
+
+function getStableBookingAbandonId(kind: string, identity: string): string {
+    return getOrCreateStableRequestId(
+        `booking-abandon-${kind}`,
+        requestFingerprint(identity),
+    )
+}
+
+function hasBookingAbandonBeenSent(identity: string): boolean {
+    try {
+        return window.sessionStorage.getItem(bookingAbandonStorageKey("sent", identity)) === "1"
+    } catch (_) {
+        return false
+    }
+}
+
+function markBookingAbandonSent(identity: string): void {
+    try {
+        window.sessionStorage.setItem(bookingAbandonStorageKey("sent", identity), "1")
+    } catch (_) {
+        // Server-side submission idempotency remains authoritative.
+    }
+}
+
+async function postBookingAbandonLead(store: any): Promise<boolean> {
+    const params = new URLSearchParams(
+        typeof window !== "undefined" ? window.location.search : "",
+    )
+    const tripId = firstNonEmpty(
+        store?.tripId,
+        params.get("tripId"),
+        params.get("trip_id"),
+    )
+    const email = firstNonEmpty(
+        store?.contactEmail,
+        readInputValue([
+            'input[name="contact_email"]',
+            'input[name="email"]',
+            'input[type="email"]',
+            'input[placeholder*="email" i]',
+        ]),
+    ).toLowerCase()
+    if (!tripId || !EMAIL_REGEX.test(email)) return false
+
+    const identity = bookingAbandonIdentity(tripId, email)
+    if (hasBookingAbandonBeenSent(identity) || bookingAbandonLeadInFlight.has(identity)) {
+        return true
+    }
+    bookingAbandonLeadInFlight.add(identity)
+
+    const submissionId = getStableBookingAbandonId("submission", identity)
+    const leadId = getStableBookingAbandonId("lead", identity)
+    const payload = {
+        submission_id: submissionId,
+        lead_id: leadId,
+        email,
+        name: firstNonEmpty(
+            store?.contactName,
+            readInputValue([
+                'input[name="contact_name"]',
+                'input[name="name"]',
+                'input[placeholder*="name" i]',
+            ]),
+        ) || null,
+        phone: firstNonEmpty(
+            store?.contactPhone,
+            readInputValue([
+                'input[name="contact_phone"]',
+                'input[name="phone"]',
+                'input[type="tel"]',
+                'input[placeholder*="phone" i]',
+                'input[placeholder*="number" i]',
+            ]),
+        ) || null,
+        source: BOOKING_ABANDON_LEAD_SOURCE,
+        status: BOOKING_ABANDON_LEAD_STATUS,
+        reason: "checkout_abandoned_before_payment",
+        page_url: typeof window !== "undefined" ? window.location.href : null,
+        trip_id: tripId,
+        trip_slug: params.get("slug") || params.get("trip_slug"),
+        utm_source: params.get("utm_source"),
+        utm_medium: params.get("utm_medium"),
+        utm_campaign: params.get("utm_campaign"),
+        utm_term: params.get("utm_term"),
+        utm_content: params.get("utm_content"),
+    }
+
+    try {
+        const response = await fetch(checkoutApiUrl("record-lead"), {
+            method: "POST",
+            headers: checkoutApiHeaders(),
+            body: JSON.stringify(payload),
+            keepalive: true,
+        })
+        const result = await response.json().catch(() => ({}))
+        if (!response.ok || result?.ok !== true) return false
+        markBookingAbandonSent(identity)
+        return true
+    } catch (_) {
+        return false
+    } finally {
+        bookingAbandonLeadInFlight.delete(identity)
+    }
+}
+
 function populateDropdown(select: HTMLSelectElement, options: string[]) {
     if (!select) return
 
@@ -1135,8 +1255,8 @@ async function fetchTripPricing(tripId: string): Promise<any[]> {
 }
 
 async function fetchTripDisplayPrice(params: { slug?: string; tripId?: string }): Promise<any | null> {
-    const slug = String(params.slug || "").trim()
-    const tripId = String(params.tripId || "").trim()
+    const tripId = normalizeTripId(params.tripId)
+    const slug = tripId ? "" : String(params.slug || "").trim()
     if (!slug && !tripId) return null
 
     const cacheKey = `${slug}::${tripId}`
@@ -1191,7 +1311,7 @@ function readCheckoutRouteContext() {
     }
     const query = new URLSearchParams(window.location.search)
     return {
-        tripId: String(query.get("tripId") || query.get("trip_id") || "").trim(),
+        tripId: normalizeTripId(query.get("tripId") || query.get("trip_id") || ""),
         slug: String(query.get("slug") || "").trim(),
         date: String(query.get("date") || "").trim(),
         transport: String(query.get("vehicle") || query.get("transport") || "").trim(),
@@ -1228,6 +1348,12 @@ function routeContextKey(ctx: {
     transport: string
 }): string {
     return [ctx.tripId, ctx.slug, ctx.date, ctx.transport].join("|")
+}
+
+function getPageScopedTripId(): string {
+    if (typeof window === "undefined") return ""
+    const currentPath = String(window.location.pathname || "")
+    return forcedTripIdPath === currentPath ? normalizeTripId(forcedTripId) : ""
 }
 
 function withTextFromState(getText: (store: any) => string, fallback = "—") {
@@ -1351,11 +1477,11 @@ export function withCheckoutBootstrap(Component): ComponentType {
                 bootKeyRef.current = routeKey
 
                 setStore({ loading: true })
-                let tripId = ctx.tripId
+                let tripId = normalizeTripId(ctx.tripId)
                 let slug = ctx.slug
 
                 if (!tripId && slug) {
-                    tripId = await fetchTripIdBySlug(slug)
+                    tripId = normalizeTripId(await fetchTripIdBySlug(slug))
                 }
 
                 if (!tripId) {
@@ -1375,10 +1501,21 @@ export function withCheckoutBootstrap(Component): ComponentType {
                 ])
                 if (disposed) return
 
-                slug = slug || String(tripContext?.slug || "").trim()
+                if (ctx.tripId && !tripContext) {
+                    setStore({
+                        loading: false,
+                        couponMessageType: "error",
+                        couponMessage: "Trip not found. Please reopen checkout from the trip page.",
+                    })
+                    return
+                }
+
+                slug = tripId
+                    ? String(tripContext?.slug || "").trim()
+                    : slug || String(tripContext?.slug || "").trim()
                 const tripName = firstNonEmpty(
                     String(tripContext?.title || "").trim(),
-                    toTitleFromSlug(slug),
+                    tripId ? "" : toTitleFromSlug(slug),
                     tripId
                 )
 
@@ -1490,12 +1627,19 @@ export function withBookNowToCheckout(Component): ComponentType {
                 ? current.split("/").pop() || ""
                 : ""
 
-            const tripId = props?.tripId || props?.["data-trip-id"] || store.tripId || ""
-            const slug = props?.slug || props?.["data-trip-slug"] || slugFromPath || store.slug || ""
+            const tripId = readTripIdCandidate(props) ||
+                normalizeTripId(store.tripId) ||
+                getPageScopedTripId()
+            const slug = tripId
+                ? ""
+                : readTripSlugCandidate(props) ||
+                    slugFromPath ||
+                    store.slug ||
+                    ""
 
             const next = new URLSearchParams()
             if (tripId) next.set("tripId", tripId)
-            if (slug) next.set("slug", slug)
+            if (!tripId && slug) next.set("slug", slug)
             if (store.date) next.set("date", store.date)
             const travellers = normalizeTravellers(store.travellers || [])
             const firstTransport = travellers[0]?.transport || store.transport
@@ -2299,7 +2443,7 @@ export function withCheckoutGrandTotalLabel(Component): ComponentType {
 }
 
 export function withCheckoutGrandTotal(Component): ComponentType {
-    return withTextFromState((store) => fmtINR(computeTotals(store).total))(Component)
+    return withTextFromState((store) => fmtINR(computeTotals(store).subtotal))(Component)
 }
 
 export function withCheckoutPayableNowLabel(Component): ComponentType {
@@ -2521,9 +2665,25 @@ export function withCheckoutPayButton(Component): ComponentType {
     return (props: any) => {
         const [store, setStore] = useStore()
         const submitLockRef = useRef(false)
+        const latestStoreRef = useRef(store)
+        const paymentStartedRef = useRef(false)
         const totals = computeTotals(store)
         const errors = getValidationErrors(store)
         const isValid = errors.length === 0
+
+        useEffect(() => {
+            latestStoreRef.current = store
+        }, [store])
+
+        useEffect(() => {
+            if (typeof window === "undefined") return
+            const handlePageHide = () => {
+                if (paymentStartedRef.current) return
+                void postBookingAbandonLead(latestStoreRef.current)
+            }
+            window.addEventListener("pagehide", handlePageHide)
+            return () => window.removeEventListener("pagehide", handlePageHide)
+        }, [])
 
         const submit = async () => {
             if (!isValid || store.submitting || submitLockRef.current) return
@@ -2534,6 +2694,7 @@ export function withCheckoutPayButton(Component): ComponentType {
             }
 
             submitLockRef.current = true
+            paymentStartedRef.current = true
             setStore({ submitting: true })
             console.log("[Checkout] Pay initiated", {
                 tripId: store.tripId,
@@ -2680,6 +2841,7 @@ export function withCheckoutPayButton(Component): ComponentType {
                 }
 
                 if (!res.ok) {
+                    paymentStartedRef.current = false
                     console.error("[Checkout] create-booking failed", {
                         status: res.status,
                         payload,
@@ -2704,6 +2866,7 @@ export function withCheckoutPayButton(Component): ComponentType {
                         data,
                         { name: contactName, email: contactEmail, phone: contactPhone },
                         () => {
+                            paymentStartedRef.current = false
                             submitLockRef.current = false
                             setStore({ submitting: false })
                         }
@@ -2713,6 +2876,7 @@ export function withCheckoutPayButton(Component): ComponentType {
 
                 const payu = data?.payu
                 if (!payu?.action) {
+                    paymentStartedRef.current = false
                     showInlineError("Payment gateway payload missing")
                     submitLockRef.current = false
                     setStore({ submitting: false })
@@ -2735,6 +2899,7 @@ export function withCheckoutPayButton(Component): ComponentType {
                 document.body.appendChild(form)
                 form.submit()
             } catch (err) {
+                paymentStartedRef.current = false
                 console.error("[Checkout] pay error", err)
                 showInlineError("Could not start payment")
                 submitLockRef.current = false
@@ -2827,8 +2992,17 @@ export function withTripIdSource(Component): ComponentType {
         const nextTripId = readTripIdCandidate(props)
 
         useEffect(() => {
-            if (nextTripId) {
-                forcedTripId = nextTripId
+            if (!nextTripId || typeof window === "undefined") return
+            const currentPath = String(window.location.pathname || "")
+            if (currentPath.toLowerCase().startsWith("/checkout")) return
+            forcedTripId = nextTripId
+            forcedTripIdPath = currentPath
+
+            return () => {
+                if (forcedTripIdPath === currentPath && forcedTripId === nextTripId) {
+                    forcedTripId = ""
+                    forcedTripIdPath = ""
+                }
             }
         }, [nextTripId])
 
@@ -2845,9 +3019,13 @@ function useTripDisplayData(props?: any) {
         let disposed = false
         const query = new URLSearchParams(window.location.search)
         const slugFromPath = getTripSlugFromPathname(window.location.pathname)
-        const tripId =
-            propTripId || query.get("tripId") || query.get("trip_id") || forcedTripId || ""
-        const slug = propSlug || slugFromPath || (tripId ? "" : query.get("slug") || "")
+        const tripId = normalizeTripId(
+            propTripId ||
+                query.get("tripId") ||
+                query.get("trip_id") ||
+                getPageScopedTripId()
+        )
+        const slug = tripId ? "" : propSlug || slugFromPath || query.get("slug") || ""
 
         fetchTripDisplayPrice({ slug, tripId })
             .then((payload) => {

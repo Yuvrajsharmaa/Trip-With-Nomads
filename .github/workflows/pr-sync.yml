@@ -30,4 +30,3 @@ jobs:
               context: "pr-sync",
               description: "PR sync policy satisfied",
             });
-

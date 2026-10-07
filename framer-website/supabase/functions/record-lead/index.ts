@@ -9,9 +9,12 @@ import {
     buildAbandonedLeadSheetRow,
     buildInviteLeadSheetRow,
     buildLeadSheetRow,
+    buildMasterLeadSheetRow,
     LEAD_HEADERS,
+    MASTER_LEAD_HEADERS,
     NTC_INVITE_HEADERS,
 } from "../_shared/lead_sheets.ts"
+import { targetForLead } from "../_shared/lead_routing.ts"
 
 const corsHeaders = {
     "Access-Control-Allow-Origin": "*",
@@ -43,7 +46,10 @@ function isValidEmail(value: string): boolean {
 }
 
 function normalizeSource(value: unknown): string {
-    return compact(value) || "unknown"
+    const source = compact(value).toLowerCase()
+    if (source === "waitlist") return "waitlist_popup"
+    if (source === "generic_form") return "general_lead"
+    return source || "unknown"
 }
 
 function isTerminalStatus(value: unknown): boolean {
@@ -83,31 +89,25 @@ async function payloadHash(value: any): Promise<string> {
 }
 
 function routeForLead(source: string, status: string): { sheetId: string; tab: string; note: string } {
-    const ntcSheetId = compact(Deno.env.get("GOOGLE_SHEET_ID_NTC"))
-    const tripsSheetId = compact(Deno.env.get("GOOGLE_SHEET_ID_TRIPS"))
-    const generalSheetId = compact(Deno.env.get("GOOGLE_SHEET_ID_GENERAL") || Deno.env.get("GOOGLE_SHEET_ID"))
-    const isPartial = status === "partial_fill"
-    const knownSource = new Set(["waitlist_popup", "booking_invite", "trip_page_lead", "general_lead"])
-    const sourceNote = knownSource.has(source) ? "" : `unknown_source:${source}`
-
-    if (source === "booking_invite") {
-        return {
-            sheetId: ntcSheetId,
-            tab: isPartial ? "Abandoned Leads" : "NTC - Invites",
-            note: sourceNote,
-        }
-    }
-    if (source === "trip_page_lead") {
-        return {
-            sheetId: tripsSheetId,
-            tab: isPartial ? "Abandoned Leads" : "Leads",
-            note: sourceNote,
-        }
-    }
+    const route = targetForLead(source, status, {
+        original: Deno.env.get("GOOGLE_SHEET_ID"),
+        ntc: Deno.env.get("GOOGLE_SHEET_ID_NTC"),
+        tripLeads: Deno.env.get("GOOGLE_SHEET_ID_TRIP_LEADS"),
+        custom: Deno.env.get("GOOGLE_SHEET_ID_CUSTOM_TRIPS") || Deno.env.get("CUSTOM_TRIPS_SHEET_ID"),
+        general: Deno.env.get("GOOGLE_SHEET_ID_GENERAL"),
+    })
+    const knownSource = new Set([
+        "waitlist_popup",
+        "booking_invite",
+        "trip_page_lead",
+        "general_lead",
+        "custom_trip_lead",
+        "booking_abandoned",
+    ])
     return {
-        sheetId: generalSheetId,
-        tab: isPartial ? "Abandoned Leads" : "Leads",
-        note: sourceNote,
+        sheetId: route?.sheetId || "",
+        tab: route?.tab || "",
+        note: knownSource.has(source) ? "" : `unknown_source:${source}`,
     }
 }
 
@@ -335,7 +335,24 @@ async function projectLead(params: {
             isInviteRoute ? NTC_INVITE_HEADERS : LEAD_HEADERS,
         )
     }
-    return { sheetLogged: true, sheetStatus: "synced" }
+    const masterSheetId = compact(Deno.env.get("GOOGLE_SHEET_ID_MASTER"))
+    let masterLogged = false
+    if (masterSheetId && params.lead) {
+        await upsertCurrentRow(
+            masterSheetId,
+            "Master Leads",
+            // Master Leads is a current-contact overview. Match it by the
+            // normalized email identity rather than the internal lead UUID so
+            // legacy identity repairs cannot create another visible row.
+            "Email",
+            normalizeEmail(params.lead.email),
+            buildMasterLeadSheetRow({ lead: params.lead, status: params.status }),
+            MASTER_LEAD_HEADERS,
+        )
+        masterLogged = true
+    }
+
+    return { sheetLogged: true, masterLogged, sheetStatus: "synced" }
 }
 
 Deno.serve(async (req) => {
@@ -361,9 +378,10 @@ Deno.serve(async (req) => {
             normalized_email: normalizedEmail || null,
             source,
             status,
-            name: compact(body?.name),
-            email: normalizedEmail,
-            phone: compact(body?.phone),
+        name: compact(body?.name),
+        email: normalizedEmail,
+        phone: compact(body?.phone),
+        country_code: compact(body?.country_code),
             instagram_id: compact(body?.instagram_id),
             page_url: compact(body?.page_url),
             trip_id: compact(body?.trip_id),
@@ -504,7 +522,12 @@ Deno.serve(async (req) => {
     } catch (err: any) {
         console.error("[record-lead] error", err)
         const message = compact(err?.message || err)
-        const conflict = /conflict|duplicate|different normalized email|repair required/i.test(message)
-        return json({ error: message || "Internal Server Error" }, conflict ? 409 : 500)
+        const conflict = /conflict|duplicate|different normalized email|does not belong|repair required/i.test(message)
+        return json(
+            conflict
+                ? { error: message || "Lead identity conflict", code: "LEAD_ID_CONFLICT" }
+                : { error: message || "Internal Server Error" },
+            conflict ? 409 : 500,
+        )
     }
 })
