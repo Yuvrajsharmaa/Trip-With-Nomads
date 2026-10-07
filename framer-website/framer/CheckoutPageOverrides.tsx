@@ -1618,35 +1618,47 @@ export function withBookNowToCheckout(Component): ComponentType {
     return (props: any) => {
         const [store] = useStore()
 
-        const handleClick = (e: any) => {
+        const handleClick = async (e: any) => {
             e?.preventDefault?.()
             e?.stopPropagation?.()
 
-            const current = window.location.pathname
-            const slugFromPath = current.includes("/upcoming-trips/")
-                ? current.split("/").pop() || ""
-                : ""
+            const currentSlug = normalizeSlug(getTripSlugFromPathname(window.location.pathname))
+            const slug = currentSlug || readTripSlugCandidate(props) || String(store.slug || "").trim()
+            let tripId = ""
 
-            const tripId = readTripIdCandidate(props) ||
-                normalizeTripId(store.tripId) ||
-                getPageScopedTripId()
-            const slug = tripId
-                ? ""
-                : readTripSlugCandidate(props) ||
-                    slugFromPath ||
-                    store.slug ||
-                    ""
+            if (currentSlug) {
+                try {
+                    tripId = normalizeTripId(await fetchTripIdBySlug(currentSlug))
+                } catch (_) {
+                    tripId = ""
+                }
+            }
+
+            if (!tripId) {
+                tripId = getPageScopedTripId() || readTripIdCandidate(props)
+            }
+
+            if (!tripId && !currentSlug && slug) {
+                try {
+                    tripId = normalizeTripId(await fetchTripIdBySlug(slug))
+                } catch (_) {
+                    tripId = ""
+                }
+            }
+
+            const storeTripId = normalizeTripId(store.tripId)
+            const sameTrip = Boolean(tripId && storeTripId && tripId === storeTripId)
 
             const next = new URLSearchParams()
             if (tripId) next.set("tripId", tripId)
-            if (!tripId && slug) next.set("slug", slug)
-            if (store.date) next.set("date", store.date)
-            const travellers = normalizeTravellers(store.travellers || [])
-            const firstTransport = travellers[0]?.transport || store.transport
+            if (slug) next.set("slug", slug)
+            if (sameTrip && store.date) next.set("date", store.date)
+            const travellers = sameTrip ? normalizeTravellers(store.travellers || []) : []
+            const firstTransport = sameTrip ? travellers[0]?.transport || store.transport : ""
             if (firstTransport) next.set("vehicle", firstTransport)
 
             const qs = next.toString()
-            window.location.href = qs ? `${CHECKOUT_PAGE_URL}?${qs}` : CHECKOUT_PAGE_URL
+                window.location.href = qs ? CHECKOUT_PAGE_URL + "?" + qs : CHECKOUT_PAGE_URL
         }
 
         return <Component {...props} onClick={handleClick} />
@@ -2944,6 +2956,11 @@ export function withCheckoutPayButton(Component): ComponentType {
     }
 }
 
+function readBrowserLocationKey(): string {
+    if (typeof window === "undefined") return ""
+    return String(window.location.pathname || "") + "|" + String(window.location.search || "")
+}
+
 function getTripSlugFromPathname(pathname: string): string {
     const clean = String(pathname || "")
     const match = clean.match(/\/upcoming-trips\/([^/?#]+)/i)
@@ -3012,20 +3029,37 @@ export function withTripIdSource(Component): ComponentType {
 
 function useTripDisplayData(props?: any) {
     const [data, setData] = useState<any>(null)
+    const [locationKey, setLocationKey] = useState(() => readBrowserLocationKey())
     const propTripId = readTripIdCandidate(props)
     const propSlug = readTripSlugCandidate(props)
+
+    useEffect(() => {
+        const refreshLocationKey = () => {
+            const nextKey = readBrowserLocationKey()
+            setLocationKey((previous) => (previous === nextKey ? previous : nextKey))
+        }
+
+        const interval = window.setInterval(refreshLocationKey, 500)
+        window.addEventListener("popstate", refreshLocationKey)
+        refreshLocationKey()
+
+        return () => {
+            window.clearInterval(interval)
+            window.removeEventListener("popstate", refreshLocationKey)
+        }
+    }, [])
 
     useEffect(() => {
         let disposed = false
         const query = new URLSearchParams(window.location.search)
         const slugFromPath = getTripSlugFromPathname(window.location.pathname)
         const tripId = normalizeTripId(
-            propTripId ||
-                query.get("tripId") ||
+            query.get("tripId") ||
                 query.get("trip_id") ||
-                getPageScopedTripId()
+                (slugFromPath ? "" : propTripId) ||
+                (slugFromPath ? "" : getPageScopedTripId())
         )
-        const slug = tripId ? "" : propSlug || slugFromPath || query.get("slug") || ""
+        const slug = tripId ? "" : slugFromPath || propSlug || query.get("slug") || ""
 
         fetchTripDisplayPrice({ slug, tripId })
             .then((payload) => {
@@ -3040,7 +3074,7 @@ function useTripDisplayData(props?: any) {
         return () => {
             disposed = true
         }
-    }, [propTripId, propSlug])
+    }, [propTripId, propSlug, locationKey])
 
     return data
 }
