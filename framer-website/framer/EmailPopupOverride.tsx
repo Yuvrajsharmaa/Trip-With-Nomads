@@ -118,12 +118,14 @@ function isValidEmail(value: string): boolean {
 function findInputValue(root: ParentNode | null, selectors: string[]): string {
     if (!root) return ""
     for (const selector of selectors) {
-        const node = root.querySelector(selector) as
-            | HTMLInputElement
-            | HTMLTextAreaElement
-            | null
-        if (node && String(node.value || "").trim()) {
-            return String(node.value || "").trim()
+        const nodes = root.querySelectorAll(selector) as NodeListOf<
+            HTMLInputElement | HTMLTextAreaElement
+        >
+        for (const node of nodes) {
+            const value = String(node.value || "").trim()
+            if (value) {
+                return value
+            }
         }
     }
     return ""
