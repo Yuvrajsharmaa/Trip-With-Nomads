@@ -327,6 +327,7 @@ async function updateCurrentLead(params: {
             existingLead?.latest_reason,
             existingLead?.reason,
         ) || null,
+        notes: firstNonEmpty(body?.notes, existingLead?.notes) || null,
         source,
         latest_source: source,
         page_url: firstNonEmpty(body?.page_url, existingLead?.page_url) || null,
@@ -549,6 +550,7 @@ Deno.serve(async (req) => {
             utm_term: compact(body?.utm_term),
             utm_content: compact(body?.utm_content),
             reason: compact(body?.reason || (partialFill ? "partial_fill" : "")),
+            notes: compact(body?.notes),
         }
         const hash = await payloadHash(submissionPayload)
 

@@ -194,6 +194,11 @@ async function postLead(
         'input[name*="reason" i]',
         'input[placeholder*="why" i]',
     ])
+    const companyName = findInputValue(root, [
+        'input[name="company_name"]',
+        'input[name*="company" i]',
+        'input[placeholder*="company" i]',
+    ])
 
     const params = new URLSearchParams(window.location.search)
     const projectRef = getProjectRefFromHost()
@@ -212,6 +217,7 @@ async function postLead(
                 country_code: country_code || null,
                 instagram_id: instagram_id || null,
                 reason: reason || null,
+                notes: companyName ? `Company: ${companyName}` : null,
                 source: "waitlist_popup",
                 status: statusOverride || "submitted",
                 page_url: window.location.href,
@@ -574,6 +580,11 @@ async function postLeadWithSource(
         'textarea[placeholder*="why" i]',
         'input[placeholder*="why" i]',
     ])
+    const companyName = findInputValue(root, [
+        'input[name="company_name"]',
+        'input[name*="company" i]',
+        'input[placeholder*="company" i]',
+    ])
 
     const params = new URLSearchParams(window.location.search)
     const projectRef = getProjectRefFromHost()
@@ -591,6 +602,7 @@ async function postLeadWithSource(
                 phone: phone || null,
                 instagram_id: instagram_id || null,
                 reason: reason || null,
+                notes: companyName ? `Company: ${companyName}` : null,
                 source,
                 country_code: country_code || null,
                 status: effectiveStatus,
