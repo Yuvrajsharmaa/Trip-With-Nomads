@@ -1,7 +1,8 @@
 const BOOKING_TIMEZONE = "Asia/Kolkata"
 
-// Current-state contract for the managed Bookings tab. Keep these labels
-// human-readable and gateway-neutral.
+// The visible part is a booking register. Provider and reconciliation keys
+// remain in the row, but sheets.ts hides them so the team sees the booking,
+// the money, and the current payment state first.
 export const BOOKING_HEADERS = [
     "Last Updated (IST)",
     "Booking Ref",
@@ -46,18 +47,76 @@ function compact(value: any): string {
 function formatTimestampIST(value?: string): string {
     const date = value ? new Date(value) : new Date()
     if (Number.isNaN(date.getTime())) return compact(value)
-    const parts = new Intl.DateTimeFormat("en-CA", {
+    const parts = new Intl.DateTimeFormat("en-IN", {
         timeZone: BOOKING_TIMEZONE,
-        day: "2-digit",
-        month: "2-digit",
+        day: "numeric",
+        month: "short",
         year: "numeric",
-        hour: "2-digit",
+        hour: "numeric",
         minute: "2-digit",
-        second: "2-digit",
-        hourCycle: "h23",
+        hour12: true,
     }).formatToParts(date)
     const get = (type: string) => parts.find((part) => part.type === type)?.value || ""
-    return `${get("year")}-${get("month")}-${get("day")}T${get("hour")}:${get("minute")}:${get("second")}+05:30`
+    return `${get("day")} ${get("month")} ${get("year")}, ${get("hour")}:${get("minute")} ${
+        get("dayPeriod").toUpperCase()
+    } IST`
+}
+
+function formatDeparture(value: any): string {
+    const raw = compact(value)
+    if (!raw) return ""
+    const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(raw)
+    if (!match) return raw
+    const date = new Date(`${raw}T00:00:00Z`)
+    return new Intl.DateTimeFormat("en-IN", {
+        timeZone: BOOKING_TIMEZONE,
+        day: "numeric",
+        month: "short",
+        year: "numeric",
+    }).format(date)
+}
+
+function humanize(value: any): string {
+    return compact(value)
+        .replace(/[_-]+/g, " ")
+        .replace(/\s+/g, " ")
+        .trim()
+        .replace(/\b\w/g, (character) => character.toUpperCase())
+}
+
+function humanizePaymentStatus(value: any): string {
+    const status = compact(value).toLowerCase()
+    const labels: Record<string, string> = {
+        pending: "Pending",
+        paid: "Paid",
+        failed: "Failed",
+        expired: "Expired",
+        cancelled: "Cancelled",
+    }
+    return labels[status] || humanize(status)
+}
+
+function humanizeSettlementStatus(value: any): string {
+    const status = compact(value).toLowerCase()
+    const labels: Record<string, string> = {
+        pending: "Pending",
+        partially_paid: "Partially paid",
+        fully_paid: "Fully paid",
+        failed: "Failed",
+    }
+    return labels[status] || humanize(status)
+}
+
+function humanizePaymentEvent(value: any): string {
+    const event = compact(value).toLowerCase()
+    const labels: Record<string, string> = {
+        "payment.captured": "Payment captured",
+        "payment.failed": "Payment failed",
+        "payment.authorized": "Payment authorised",
+        paid_callback: "Paid callback",
+        failed_webhook: "Failed webhook",
+    }
+    return labels[event] || humanize(event)
 }
 
 function normalizeSharing(value: any): string {
@@ -91,10 +150,10 @@ function paymentPlan(value: any): string {
 function providerOrderReference(booking: Record<string, any>): string {
     return compact(
         booking.payment_gateway_order_or_ref_id ||
-        booking.provider_order_id ||
+            booking.provider_order_id ||
             booking.provider_order_reference ||
             booking.razorpay_order_id ||
-            booking.payu_txnid
+            booking.payu_txnid,
     )
 }
 
@@ -102,10 +161,10 @@ function providerPaymentReference(booking: Record<string, any>): string {
     return compact(
         booking.payment_gateway_payment_id ||
             booking.payment_gateway_txn_id ||
-        booking.provider_payment_id ||
+            booking.provider_payment_id ||
             booking.provider_transaction_id ||
             booking.razorpay_payment_id ||
-            booking.payu_mihpayid
+            booking.payu_mihpayid,
     )
 }
 
@@ -121,14 +180,17 @@ export function buildBookingSheetRow(params: {
         compact(booking.balance_due_note),
         compact(params.notes),
     ].filter(Boolean).join(" | ")
+    const eventKey = compact(booking.last_payment_event || params.eventStage)
 
     return [
-        formatTimestampIST(params.updatedAt || booking.updated_at || new Date().toISOString()),
-        compact(booking.booking_ref || booking.id),
+        formatTimestampIST(
+            params.updatedAt || booking.updated_at || new Date().toISOString(),
+        ),
+        compact(booking.booking_ref),
         compact(booking.id),
         compact(booking.trip_name || booking.trip_title),
         compact(booking.trip_id),
-        compact(booking.departure_date || booking.date),
+        formatDeparture(booking.departure_date || booking.date),
         compact(booking.name || booking.guest_name),
         compact(booking.email).toLowerCase(),
         compact(booking.phone),
@@ -143,13 +205,13 @@ export function buildBookingSheetRow(params: {
         toNumber(booking.payable_now_amount || booking.amount),
         toNumber(booking.paid_amount),
         toNumber(booking.due_amount || booking.balance_due),
-        compact(booking.payment_status || "pending"),
-        compact(booking.settlement_status || "pending"),
-        compact(booking.payment_provider || booking.provider),
+        humanizePaymentStatus(booking.payment_status || "pending"),
+        humanizeSettlementStatus(booking.settlement_status || "pending"),
+        humanize(booking.payment_provider || booking.provider),
         toNumber(booking.payment_attempt_number || booking.attempt_no),
         providerOrderReference(booking),
         providerPaymentReference(booking),
-        compact(booking.last_payment_event || params.eventStage),
+        humanizePaymentEvent(eventKey),
         booking.last_payment_event_at ? formatTimestampIST(booking.last_payment_event_at) : "",
         notes,
     ]

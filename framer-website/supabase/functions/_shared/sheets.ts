@@ -1,201 +1,206 @@
-import { importPKCS8, SignJWT } from "https://esm.sh/jose@4.15.4";
+import { importPKCS8, SignJWT } from "https://esm.sh/jose@4.15.4"
 
-const TOKEN_URL = "https://oauth2.googleapis.com/token";
-const SHEETS_SCOPE = "https://www.googleapis.com/auth/spreadsheets";
+const TOKEN_URL = "https://oauth2.googleapis.com/token"
+const SHEETS_SCOPE = "https://www.googleapis.com/auth/spreadsheets"
 
 type ServiceAccount = {
-    client_email: string;
-    private_key: string;
-};
+    client_email: string
+    private_key: string
+}
 
 type TokenCache = {
-    token: string;
-    exp: number;
-};
+    token: string
+    exp: number
+}
 
 export type SheetTabMetadata = {
-    title: string;
-    sheetId: number;
-};
+    title: string
+    sheetId: number
+}
 
-const ensuredHeaders = new Map<string, Set<string>>(); // map sheetId -> Set of tab names
-const ensuredTabs = new Map<string, Set<string>>();
-const ensuredFormatting = new Map<string, Set<string>>();
-let cachedToken: TokenCache | null = null;
-let cachedServiceAccount: ServiceAccount | null = null;
+const ensuredHeaders = new Map<string, Set<string>>() // map sheetId -> Set of tab names
+const ensuredTabs = new Map<string, Set<string>>()
+const ensuredFormatting = new Map<string, Set<string>>()
+let cachedToken: TokenCache | null = null
+let cachedServiceAccount: ServiceAccount | null = null
 
 function isTruthy(value: string | undefined): boolean {
-    const raw = String(value || "").trim().toLowerCase();
-    return raw === "1" || raw === "true" || raw === "yes";
+    const raw = String(value || "").trim().toLowerCase()
+    return raw === "1" || raw === "true" || raw === "yes"
 }
 
 export function sheetsEnabled(): boolean {
-    return isTruthy(Deno.env.get("SHEETS_WRITE_ENABLED"));
+    return isTruthy(Deno.env.get("SHEETS_WRITE_ENABLED"))
 }
 
 export type CurrentRowAction = "append" | "update" | "fail"
 
 export function currentRowAction(matchCount: number): CurrentRowAction {
-    if (matchCount === 0) return "append";
-    if (matchCount === 1) return "update";
-    return "fail";
+    if (matchCount === 0) return "append"
+    if (matchCount === 1) return "update"
+    return "fail"
 }
 
 export function hasExactHeaders(actual: string[], expected: string[]): boolean {
-    return actual.length === expected.length && expected.every((header, index) => actual[index] === header);
+    return actual.length === expected.length &&
+        expected.every((header, index) => actual[index] === header)
 }
 
 function getServiceAccount(): ServiceAccount {
-    if (cachedServiceAccount) return cachedServiceAccount;
-    const raw = String(Deno.env.get("GOOGLE_SERVICE_ACCOUNT_JSON") || "").trim();
-    if (!raw) throw new Error("GOOGLE_SERVICE_ACCOUNT_JSON is not set");
-    const parsed = JSON.parse(raw);
+    if (cachedServiceAccount) return cachedServiceAccount
+    const raw = String(Deno.env.get("GOOGLE_SERVICE_ACCOUNT_JSON") || "").trim()
+    if (!raw) throw new Error("GOOGLE_SERVICE_ACCOUNT_JSON is not set")
+    const parsed = JSON.parse(raw)
     if (!parsed?.client_email || !parsed?.private_key) {
         throw new Error(
             "GOOGLE_SERVICE_ACCOUNT_JSON missing client_email or private_key",
-        );
+        )
     }
     cachedServiceAccount = {
         client_email: parsed.client_email,
         private_key: parsed.private_key,
-    };
-    return cachedServiceAccount;
+    }
+    return cachedServiceAccount
 }
 
 async function getAccessToken(): Promise<string> {
-    const now = Math.floor(Date.now() / 1000);
+    const now = Math.floor(Date.now() / 1000)
     // Cache the token aggressively
-    if (cachedToken && cachedToken.exp - 60 > now) return cachedToken.token;
+    if (cachedToken && cachedToken.exp - 60 > now) return cachedToken.token
 
-    const { client_email, private_key } = getServiceAccount();
-    const key = await importPKCS8(private_key, "RS256");
+    const { client_email, private_key } = getServiceAccount()
+    const key = await importPKCS8(private_key, "RS256")
     const jwt = await new SignJWT({ scope: SHEETS_SCOPE })
         .setProtectedHeader({ alg: "RS256", typ: "JWT" })
         .setIssuedAt(now)
         .setExpirationTime(now + 3600)
         .setIssuer(client_email)
         .setAudience(TOKEN_URL)
-        .sign(key);
+        .sign(key)
 
     const body = new URLSearchParams({
         grant_type: "urn:ietf:params:oauth:grant-type:jwt-bearer",
         assertion: jwt,
-    });
+    })
 
     const res = await fetch(TOKEN_URL, {
         method: "POST",
         headers: { "Content-Type": "application/x-www-form-urlencoded" },
         body,
-    });
+    })
 
     if (!res.ok) {
-        const text = await res.text();
-        throw new Error(`Token request failed: ${res.status} ${text}`);
+        const text = await res.text()
+        throw new Error(`Token request failed: ${res.status} ${text}`)
     }
 
-    const data = await res.json();
-    const token = String(data.access_token || "");
-    const exp = now + Number(data.expires_in || 0);
-    if (!token) throw new Error("Missing access_token in token response");
-    cachedToken = { token, exp };
-    return token;
+    const data = await res.json()
+    const token = String(data.access_token || "")
+    const exp = now + Number(data.expires_in || 0)
+    if (!token) throw new Error("Missing access_token in token response")
+    cachedToken = { token, exp }
+    return token
 }
 
 async function sheetsFetch(path: string, sheetId: string, init?: RequestInit) {
-    const token = await getAccessToken();
-    const headers = new Headers(init?.headers || {});
-    headers.set("Authorization", `Bearer ${token}`);
-    headers.set("Content-Type", "application/json");
+    const token = await getAccessToken()
+    const headers = new Headers(init?.headers || {})
+    headers.set("Authorization", `Bearer ${token}`)
+    headers.set("Content-Type", "application/json")
     return fetch(
         `https://sheets.googleapis.com/v4/spreadsheets/${sheetId}${path}`,
         {
             ...init,
             headers,
-        }
-    );
+        },
+    )
 }
 
 async function ensureTab(tab: string, sheetId: string) {
-    if (!ensuredTabs.has(sheetId)) ensuredTabs.set(sheetId, new Set());
-    if (ensuredTabs.get(sheetId)!.has(tab)) return;
+    if (!ensuredTabs.has(sheetId)) ensuredTabs.set(sheetId, new Set())
+    if (ensuredTabs.get(sheetId)!.has(tab)) return
 
-    const metaRes = await sheetsFetch("?fields=sheets.properties.title", sheetId);
+    const metaRes = await sheetsFetch("?fields=sheets.properties.title", sheetId)
     if (!metaRes.ok) {
-        const text = await metaRes.text();
-        throw new Error(`Sheet metadata read failed: ${metaRes.status} ${text}`);
+        const text = await metaRes.text()
+        throw new Error(`Sheet metadata read failed: ${metaRes.status} ${text}`)
     }
 
-    const meta = await metaRes.json();
+    const meta = await metaRes.json()
     const exists = Array.isArray(meta?.sheets) &&
-        meta.sheets.some((sheet: any) =>
-            String(sheet?.properties?.title || "").trim() === tab
-        );
+        meta.sheets.some((sheet: any) => String(sheet?.properties?.title || "").trim() === tab)
 
     if (!exists) {
-        throw new Error(`Managed Sheet tab not found: ${tab}`);
+        throw new Error(`Managed Sheet tab not found: ${tab}`)
     }
 
-    ensuredTabs.get(sheetId)!.add(tab);
+    ensuredTabs.get(sheetId)!.add(tab)
 }
 
 async function ensureHeaders(tab: string, headers: string[], sheetId: string) {
-    await ensureTab(tab, sheetId);
-    if (!ensuredHeaders.has(sheetId)) ensuredHeaders.set(sheetId, new Set());
-    if (ensuredHeaders.get(sheetId)!.has(tab)) return;
+    await ensureTab(tab, sheetId)
+    if (!ensuredHeaders.has(sheetId)) ensuredHeaders.set(sheetId, new Set())
+    if (ensuredHeaders.get(sheetId)!.has(tab)) return
 
-    const check = await sheetsFetch(`/values/${encodeURIComponent(tab)}!A1:ZZ1`, sheetId);
+    const check = await sheetsFetch(
+        `/values/${encodeURIComponent(tab)}!A1:ZZ1`,
+        sheetId,
+    )
     if (!check.ok) {
-        const text = await check.text();
-        throw new Error(`Header check failed: ${check.status} ${text}`);
+        const text = await check.text()
+        throw new Error(`Header check failed: ${check.status} ${text}`)
     }
-    const data = await check.json();
-    const actual = Array.isArray(data?.values?.[0])
-        ? data.values[0].map((cell: any) => String(cell ?? "").trim())
-        : [];
-    const expected = headers.map((header) => String(header || "").trim());
-    const matches = hasExactHeaders(actual, expected);
+    const data = await check.json()
+    const actual = Array.isArray(data?.values?.[0]) ? data.values[0].map((cell: any) => String(cell ?? "").trim()) : []
+    const expected = headers.map((header) => String(header || "").trim())
+    const matches = hasExactHeaders(actual, expected)
     if (!matches) {
         throw new Error(
             `Managed Sheet header drift in ${tab}: expected ${JSON.stringify(expected)}, got ${JSON.stringify(actual)}`,
-        );
+        )
     }
-    ensuredHeaders.get(sheetId)!.add(tab);
-    await formatManagedTab(sheetId, tab, headers);
+    ensuredHeaders.get(sheetId)!.add(tab)
+    await formatManagedTab(sheetId, tab, headers)
 }
 
 function parseRowIndex(range?: string | null): number | null {
-    if (!range) return null;
-    const match = /!A(\d+)/.exec(range);
-    if (!match) return null;
-    return Number(match[1]);
+    if (!range) return null
+    const match = /!A(\d+)/.exec(range)
+    if (!match) return null
+    return Number(match[1])
 }
 
 function columnNumberToName(columnNumber: number): string {
-    let next = Math.max(1, Math.floor(columnNumber));
-    let name = "";
+    let next = Math.max(1, Math.floor(columnNumber))
+    let name = ""
     while (next > 0) {
-        const remainder = (next - 1) % 26;
-        name = String.fromCharCode(65 + remainder) + name;
-        next = Math.floor((next - 1) / 26);
+        const remainder = (next - 1) % 26
+        name = String.fromCharCode(65 + remainder) + name
+        next = Math.floor((next - 1) / 26)
     }
-    return name;
+    return name
 }
 
-export async function getSpreadsheetTabs(sheetId: string): Promise<SheetTabMetadata[]> {
-    if (!sheetsEnabled()) return [];
-    const res = await sheetsFetch("?fields=sheets.properties(sheetId,title)", sheetId);
+export async function getSpreadsheetTabs(
+    sheetId: string,
+): Promise<SheetTabMetadata[]> {
+    if (!sheetsEnabled()) return []
+    const res = await sheetsFetch(
+        "?fields=sheets.properties(sheetId,title)",
+        sheetId,
+    )
     if (!res.ok) {
-        const text = await res.text();
-        throw new Error(`Spreadsheet tabs read failed: ${res.status} ${text}`);
+        const text = await res.text()
+        throw new Error(`Spreadsheet tabs read failed: ${res.status} ${text}`)
     }
-    const data = await res.json();
-    const sheets = Array.isArray(data?.sheets) ? data.sheets : [];
+    const data = await res.json()
+    const sheets = Array.isArray(data?.sheets) ? data.sheets : []
     return sheets
         .map((sheet: any) => ({
             title: String(sheet?.properties?.title || "").trim(),
             sheetId: Number(sheet?.properties?.sheetId),
         }))
-        .filter((sheet: SheetTabMetadata) => sheet.title && Number.isFinite(sheet.sheetId));
+        .filter((sheet: SheetTabMetadata) => sheet.title && Number.isFinite(sheet.sheetId))
 }
 
 export async function formatManagedTab(
@@ -203,36 +208,72 @@ export async function formatManagedTab(
     tab: string,
     headers: string[],
 ): Promise<void> {
-    if (!sheetsEnabled() || !headers.length) return;
-    if (!ensuredFormatting.has(sheetId)) ensuredFormatting.set(sheetId, new Set());
-    if (ensuredFormatting.get(sheetId)!.has(tab)) return;
+    if (!sheetsEnabled() || !headers.length) return
+    if (!ensuredFormatting.has(sheetId)) {
+        ensuredFormatting.set(sheetId, new Set())
+    }
+    if (ensuredFormatting.get(sheetId)!.has(tab)) return
 
-    const metadata = await getSpreadsheetTabs(sheetId);
-    const target = metadata.find((item) => item.title === tab);
-    if (!target) throw new Error(`Managed Sheet tab not found: ${tab}`);
+    const metadata = await getSpreadsheetTabs(sheetId)
+    const target = metadata.find((item) => item.title === tab)
+    if (!target) throw new Error(`Managed Sheet tab not found: ${tab}`)
 
     const amountHeaders = new Set([
-        "Subtotal", "Discount", "GST", "Trip Total", "Payable Now", "Paid Amount", "Balance Due",
-        "Amount Received", "Expected Amount",
-    ]);
-    const wrapHeaders = new Set(["Traveller Summary", "Notes", "Reason", "Latest Page URL"]);
+        "Subtotal",
+        "Discount",
+        "GST",
+        "Trip Total",
+        "Payable Now",
+        "Paid Amount",
+        "Balance Due",
+        "Amount Received",
+        "Expected Amount",
+    ])
+    const wrapHeaders = new Set([
+        "Traveller Summary",
+        "Notes",
+        "Reason",
+        "Why They Want To Travel",
+        "Page",
+        "Reconciliation",
+        "Reconciliation Result",
+    ])
+    const hiddenHeaders = new Set(
+        headers.filter((header) =>
+            /^utm\s/i.test(header) ||
+            /key$/i.test(header) ||
+            /^(event id|booking id|trip id|provider order\/reference|provider payment\/transaction id)$/i.test(header)
+        ),
+    )
     const requests: any[] = [
         {
             updateSheetProperties: {
-                properties: { sheetId: target.sheetId, gridProperties: { frozenRowCount: 1 } },
+                properties: {
+                    sheetId: target.sheetId,
+                    gridProperties: { frozenRowCount: 1 },
+                },
                 fields: "gridProperties.frozenRowCount",
             },
         },
         {
             setBasicFilter: {
                 filter: {
-                    range: { sheetId: target.sheetId, startRowIndex: 0, endColumnIndex: headers.length },
+                    range: {
+                        sheetId: target.sheetId,
+                        startRowIndex: 0,
+                        endColumnIndex: headers.length,
+                    },
                 },
             },
         },
         {
             repeatCell: {
-                range: { sheetId: target.sheetId, startRowIndex: 0, endRowIndex: 1, endColumnIndex: headers.length },
+                range: {
+                    sheetId: target.sheetId,
+                    startRowIndex: 0,
+                    endRowIndex: 1,
+                    endColumnIndex: headers.length,
+                },
                 cell: {
                     userEnteredFormat: {
                         textFormat: { bold: true },
@@ -242,81 +283,122 @@ export async function formatManagedTab(
                 fields: "userEnteredFormat(textFormat,backgroundColor)",
             },
         },
-    ];
+    ]
 
     headers.forEach((header, index) => {
-        const width = wrapHeaders.has(header) ? 280 : /url/i.test(header) ? 240 : 140;
+        const width = hiddenHeaders.has(header)
+            ? 120
+            : wrapHeaders.has(header)
+            ? 280
+            : /^last (updated|seen)|^first seen|^captured at|^event received|^processed at|^last payment event at/i
+                    .test(header)
+            ? 205
+            : /url|page/i.test(header)
+            ? 240
+            : 140
         requests.push({
             updateDimensionProperties: {
-                range: { sheetId: target.sheetId, dimension: "COLUMNS", startIndex: index, endIndex: index + 1 },
-                properties: { pixelSize: width },
-                fields: "pixelSize",
+                range: {
+                    sheetId: target.sheetId,
+                    dimension: "COLUMNS",
+                    startIndex: index,
+                    endIndex: index + 1,
+                },
+                properties: {
+                    pixelSize: width,
+                    hiddenByUser: hiddenHeaders.has(header),
+                },
+                fields: "pixelSize,hiddenByUser",
             },
-        });
+        })
         if (amountHeaders.has(header)) {
             requests.push({
                 repeatCell: {
-                    range: { sheetId: target.sheetId, startRowIndex: 1, startColumnIndex: index, endColumnIndex: index + 1 },
-                    cell: { userEnteredFormat: { numberFormat: { type: "NUMBER", pattern: "₹#,##0.00" } } },
+                    range: {
+                        sheetId: target.sheetId,
+                        startRowIndex: 1,
+                        startColumnIndex: index,
+                        endColumnIndex: index + 1,
+                    },
+                    cell: {
+                        userEnteredFormat: {
+                            numberFormat: { type: "NUMBER", pattern: "₹#,##0.00" },
+                        },
+                    },
                     fields: "userEnteredFormat.numberFormat",
                 },
-            });
+            })
         }
         if (wrapHeaders.has(header)) {
             requests.push({
                 repeatCell: {
-                    range: { sheetId: target.sheetId, startRowIndex: 1, startColumnIndex: index, endColumnIndex: index + 1 },
-                    cell: { userEnteredFormat: { wrapStrategy: "WRAP", verticalAlignment: "TOP" } },
+                    range: {
+                        sheetId: target.sheetId,
+                        startRowIndex: 1,
+                        startColumnIndex: index,
+                        endColumnIndex: index + 1,
+                    },
+                    cell: {
+                        userEnteredFormat: {
+                            wrapStrategy: "WRAP",
+                            verticalAlignment: "TOP",
+                        },
+                    },
                     fields: "userEnteredFormat(wrapStrategy,verticalAlignment)",
                 },
-            });
+            })
         }
-    });
+    })
 
-    const sendFormatting = (batchRequests: any[]) => sheetsFetch(":batchUpdate", sheetId, {
-        method: "POST",
-        body: JSON.stringify({ requests: batchRequests }),
-    });
+    const sendFormatting = (batchRequests: any[]) =>
+        sheetsFetch(":batchUpdate", sheetId, {
+            method: "POST",
+            body: JSON.stringify({ requests: batchRequests }),
+        })
 
-    let res = await sendFormatting(requests);
+    let res = await sendFormatting(requests)
     if (!res.ok) {
-        const text = await res.text();
+        const text = await res.text()
         const tableOwnsFilter = text.includes("setBasicFilter") &&
-            text.includes("partially intersects a table");
+            text.includes("partially intersects a table")
         if (!tableOwnsFilter) {
-            throw new Error(`Managed Sheet formatting failed: ${res.status} ${text}`);
+            throw new Error(`Managed Sheet formatting failed: ${res.status} ${text}`)
         }
 
         // Some existing managed tabs already contain a Google Sheets table.
         // Google rejects a basic filter that intersects that table; the table
         // already supplies filtering, so preserve the other formatting and
         // retry without trying to replace the table's filter.
-        res = await sendFormatting(requests.filter((request) => !request.setBasicFilter));
+        res = await sendFormatting(
+            requests.filter((request) => !request.setBasicFilter),
+        )
         if (!res.ok) {
-            const retryText = await res.text();
-            throw new Error(`Managed Sheet formatting failed: ${res.status} ${retryText}`);
+            const retryText = await res.text()
+            throw new Error(
+                `Managed Sheet formatting failed: ${res.status} ${retryText}`,
+            )
         }
     }
-    ensuredFormatting.get(sheetId)!.add(tab);
+    ensuredFormatting.get(sheetId)!.add(tab)
 }
 
 export async function clearTabValues(
     sheetId: string,
     tab: string,
 ): Promise<void> {
-    if (!sheetsEnabled()) return;
-    await ensureTab(tab, sheetId);
+    if (!sheetsEnabled()) return
+    await ensureTab(tab, sheetId)
     const res = await sheetsFetch(
         `/values/${encodeURIComponent(tab)}!A:ZZ:clear`,
         sheetId,
         {
             method: "POST",
             body: JSON.stringify({}),
-        }
-    );
+        },
+    )
     if (!res.ok) {
-        const text = await res.text();
-        throw new Error(`Clear tab failed: ${res.status} ${text}`);
+        const text = await res.text()
+        throw new Error(`Clear tab failed: ${res.status} ${text}`)
     }
 }
 
@@ -325,28 +407,31 @@ export async function replaceTabValues(
     tab: string,
     rows: (string | number | null)[][],
 ): Promise<number> {
-    if (!sheetsEnabled()) return 0;
-    await ensureTab(tab, sheetId);
-    await clearTabValues(sheetId, tab);
-    if (!Array.isArray(rows) || rows.length === 0) return 0;
+    if (!sheetsEnabled()) return 0
+    await ensureTab(tab, sheetId)
+    await clearTabValues(sheetId, tab)
+    if (!Array.isArray(rows) || rows.length === 0) return 0
 
-    const maxCols = rows.reduce((max, row) => Math.max(max, Array.isArray(row) ? row.length : 0), 0);
-    const endCol = columnNumberToName(Math.max(1, maxCols));
-    const endRow = rows.length;
-    const range = `${tab}!A1:${endCol}${endRow}`;
+    const maxCols = rows.reduce(
+        (max, row) => Math.max(max, Array.isArray(row) ? row.length : 0),
+        0,
+    )
+    const endCol = columnNumberToName(Math.max(1, maxCols))
+    const endRow = rows.length
+    const range = `${tab}!A1:${endCol}${endRow}`
     const res = await sheetsFetch(
         `/values/${encodeURIComponent(range)}?valueInputOption=RAW`,
         sheetId,
         {
             method: "PUT",
             body: JSON.stringify({ values: rows }),
-        }
-    );
+        },
+    )
     if (!res.ok) {
-        const text = await res.text();
-        throw new Error(`Replace tab failed: ${res.status} ${text}`);
+        const text = await res.text()
+        throw new Error(`Replace tab failed: ${res.status} ${text}`)
     }
-    return rows.length;
+    return rows.length
 }
 
 export async function appendRow(
@@ -355,38 +440,40 @@ export async function appendRow(
     values: (string | number | null)[],
     headers?: string[],
 ) {
-    if (!sheetsEnabled()) return null;
-    await ensureTab(tab, sheetId);
-    if (headers?.length) await ensureHeaders(tab, headers, sheetId);
+    if (!sheetsEnabled()) return null
+    await ensureTab(tab, sheetId)
+    if (headers?.length) await ensureHeaders(tab, headers, sheetId)
 
     // Some existing managed tabs contain a legacy table/range whose append
     // anchor is offset from column A. Use an explicit next-row update instead
     // of values.append so every new record starts at the contract's first
     // column and cannot shift the visible fields.
-    const existingRows = await readTabValues(sheetId, tab, "A1:ZZ10000");
-    let lastPopulatedRow = 0;
+    const existingRows = await readTabValues(sheetId, tab, "A1:ZZ10000")
+    let lastPopulatedRow = 0
     for (let index = 0; index < existingRows.length; index++) {
-        const row = Array.isArray(existingRows[index]) ? existingRows[index] : [];
-        if (row.some((cell) => String(cell ?? "").trim() !== "")) lastPopulatedRow = index + 1;
+        const row = Array.isArray(existingRows[index]) ? existingRows[index] : []
+        if (row.some((cell) => String(cell ?? "").trim() !== "")) {
+            lastPopulatedRow = index + 1
+        }
     }
-    const rowNumber = Math.max(2, lastPopulatedRow + 1);
-    const endColumn = columnNumberToName(Math.max(1, values.length));
+    const rowNumber = Math.max(2, lastPopulatedRow + 1)
+    const endColumn = columnNumberToName(Math.max(1, values.length))
     const res = await sheetsFetch(
         `/values/${encodeURIComponent(tab)}!A${rowNumber}:${endColumn}${rowNumber}?valueInputOption=RAW`,
         sheetId,
         {
             method: "PUT",
             body: JSON.stringify({ values: [values] }),
-        }
-    );
+        },
+    )
 
     if (!res.ok) {
-        const text = await res.text();
-        throw new Error(`Append failed: ${res.status} ${text}`);
+        const text = await res.text()
+        throw new Error(`Append failed: ${res.status} ${text}`)
     }
 
-    const data = await res.json();
-    return parseRowIndex(data?.updates?.updatedRange || null) || rowNumber;
+    const data = await res.json()
+    return parseRowIndex(data?.updates?.updatedRange || null) || rowNumber
 }
 
 export async function updateRow(
@@ -396,9 +483,9 @@ export async function updateRow(
     values: (string | number | null)[],
     headers?: string[],
 ) {
-    if (!sheetsEnabled()) return null;
-    await ensureTab(tab, sheetId);
-    if (headers?.length) await ensureHeaders(tab, headers, sheetId);
+    if (!sheetsEnabled()) return null
+    await ensureTab(tab, sheetId)
+    if (headers?.length) await ensureHeaders(tab, headers, sheetId)
 
     const res = await sheetsFetch(
         `/values/${encodeURIComponent(tab)}!A${row}?valueInputOption=RAW`,
@@ -406,14 +493,14 @@ export async function updateRow(
         {
             method: "PUT",
             body: JSON.stringify({ values: [values] }),
-        }
-    );
+        },
+    )
 
     if (!res.ok) {
-        const text = await res.text();
-        throw new Error(`Update failed: ${res.status} ${text}`);
+        const text = await res.text()
+        throw new Error(`Update failed: ${res.status} ${text}`)
     }
-    return row;
+    return row
 }
 
 export async function readTabValues(
@@ -421,18 +508,18 @@ export async function readTabValues(
     tab: string,
     range = "A:ZZ",
 ): Promise<any[][]> {
-    if (!sheetsEnabled()) return [];
-    await ensureTab(tab, sheetId);
+    if (!sheetsEnabled()) return []
+    await ensureTab(tab, sheetId)
     const res = await sheetsFetch(
         `/values/${encodeURIComponent(tab)}!${encodeURIComponent(range)}`,
         sheetId,
-    );
+    )
     if (!res.ok) {
-        const text = await res.text();
-        throw new Error(`Read values failed: ${res.status} ${text}`);
+        const text = await res.text()
+        throw new Error(`Read values failed: ${res.status} ${text}`)
     }
-    const data = await res.json();
-    return Array.isArray(data?.values) ? data.values : [];
+    const data = await res.json()
+    return Array.isArray(data?.values) ? data.values : []
 }
 
 export async function findRowByColumnValue(
@@ -442,13 +529,19 @@ export async function findRowByColumnValue(
     value: string,
     headers?: string[],
 ): Promise<number | null> {
-    const matches = await findRowsByColumnValue(sheetId, tab, columnName, value, headers);
+    const matches = await findRowsByColumnValue(
+        sheetId,
+        tab,
+        columnName,
+        value,
+        headers,
+    )
     if (currentRowAction(matches.length) === "fail") {
         throw new Error(
             `Multiple current-state Sheet rows match ${columnName}=${String(value || "").trim()} in ${tab}`,
-        );
+        )
     }
-    return matches[0] || null;
+    return matches[0] || null
 }
 
 export async function findRowsByColumnValue(
@@ -458,31 +551,31 @@ export async function findRowsByColumnValue(
     value: string,
     headers?: string[],
 ): Promise<number[]> {
-    if (!sheetsEnabled()) return [];
-    const needle = String(value || "").trim();
-    if (!needle) return [];
+    if (!sheetsEnabled()) return []
+    const needle = String(value || "").trim()
+    if (!needle) return []
 
-    await ensureTab(tab, sheetId);
-    if (headers?.length) await ensureHeaders(tab, headers, sheetId);
+    await ensureTab(tab, sheetId)
+    if (headers?.length) await ensureHeaders(tab, headers, sheetId)
 
     // `A1:ZZ` is interpreted by Sheets as a one-row range because the end
     // coordinate has no row number. Use an explicit bounded range so all
     // current rows are considered before deciding whether to append.
-    const rows = await readTabValues(sheetId, tab, "A1:ZZ10000");
-    if (rows.length === 0) return [];
+    const rows = await readTabValues(sheetId, tab, "A1:ZZ10000")
+    if (rows.length === 0) return []
 
-    const header = Array.isArray(rows[0]) ? rows[0].map((cell) => String(cell || "").trim()) : [];
-    const index = header.findIndex((cell) => cell.toLowerCase() === String(columnName || "").trim().toLowerCase());
-    if (index < 0) return [];
+    const header = Array.isArray(rows[0]) ? rows[0].map((cell) => String(cell || "").trim()) : []
+    const index = header.findIndex((cell) => cell.toLowerCase() === String(columnName || "").trim().toLowerCase())
+    if (index < 0) return []
 
-    const matches: number[] = [];
+    const matches: number[] = []
     for (let i = 1; i < rows.length; i++) {
-        const row = Array.isArray(rows[i]) ? rows[i] : [];
-        const cell = String(row[index] || "").trim();
-        if (cell === needle) matches.push(i + 1);
+        const row = Array.isArray(rows[i]) ? rows[i] : []
+        const cell = String(row[index] || "").trim()
+        if (cell === needle) matches.push(i + 1)
     }
 
-    return matches;
+    return matches
 }
 
 export async function upsertCurrentRow(
@@ -496,32 +589,46 @@ export async function upsertCurrentRow(
     if (!String(keyValue || "").trim()) {
         throw new Error(`Current-state Sheet key is required for ${tab}`)
     }
-    const matches = await findRowsByColumnValue(sheetId, tab, keyColumn, keyValue, headers);
+    const matches = await findRowsByColumnValue(
+        sheetId,
+        tab,
+        keyColumn,
+        keyValue,
+        headers,
+    )
     if (currentRowAction(matches.length) === "fail") {
         throw new Error(
             `Multiple current-state Sheet rows match ${keyColumn}=${String(keyValue || "").trim()} in ${tab}`,
-        );
+        )
     }
     if (matches.length === 1) {
-        await updateRow(sheetId, tab, matches[0], values, headers);
-        return { row: matches[0], created: false };
+        await updateRow(sheetId, tab, matches[0], values, headers)
+        return { row: matches[0], created: false }
     }
-    const row = await appendRow(sheetId, tab, values, headers);
+    const row = await appendRow(sheetId, tab, values, headers)
     if (!row) {
         // Google can commit the append while omitting updates.updatedRange from
         // the values.append response. Re-read the idempotency key before
         // reporting a projection failure; this avoids turning a successful
         // append into a false retry/error response.
-        const rechecked = await findRowsByColumnValue(sheetId, tab, keyColumn, keyValue, headers);
+        const rechecked = await findRowsByColumnValue(
+            sheetId,
+            tab,
+            keyColumn,
+            keyValue,
+            headers,
+        )
         if (currentRowAction(rechecked.length) === "fail") {
             throw new Error(
                 `Multiple current-state Sheet rows match ${keyColumn}=${String(keyValue || "").trim()} in ${tab}`,
-            );
+            )
         }
-        if (rechecked.length === 1) return { row: rechecked[0], created: true };
-        throw new Error(`Current-state Sheet row append returned no row for ${tab}`);
+        if (rechecked.length === 1) return { row: rechecked[0], created: true }
+        throw new Error(
+            `Current-state Sheet row append returned no row for ${tab}`,
+        )
     }
-    return { row, created: true };
+    return { row, created: true }
 }
 
 export async function appendHistoryRowOnce(
@@ -535,21 +642,33 @@ export async function appendHistoryRowOnce(
     if (!String(eventId || "").trim()) {
         throw new Error(`History event key is required for ${tab}`)
     }
-    const matches = await findRowsByColumnValue(sheetId, tab, eventIdColumn, eventId, headers);
-    if (matches.length > 0) return { row: matches[0], appended: false };
-    const row = await appendRow(sheetId, tab, values, headers);
-    if (row) return { row, appended: true };
+    const matches = await findRowsByColumnValue(
+        sheetId,
+        tab,
+        eventIdColumn,
+        eventId,
+        headers,
+    )
+    if (matches.length > 0) return { row: matches[0], appended: false }
+    const row = await appendRow(sheetId, tab, values, headers)
+    if (row) return { row, appended: true }
 
     // Treat a committed append with a missing updatedRange as successful only
     // after the event key is visible. Otherwise leave the caller retryable.
-    const rechecked = await findRowsByColumnValue(sheetId, tab, eventIdColumn, eventId, headers);
+    const rechecked = await findRowsByColumnValue(
+        sheetId,
+        tab,
+        eventIdColumn,
+        eventId,
+        headers,
+    )
     if (rechecked.length > 1) {
         throw new Error(
             `Multiple history Sheet rows match ${eventIdColumn}=${String(eventId || "").trim()} in ${tab}`,
-        );
+        )
     }
-    if (rechecked.length === 1) return { row: rechecked[0], appended: true };
-    throw new Error(`History Sheet row append returned no row for ${tab}`);
+    if (rechecked.length === 1) return { row: rechecked[0], appended: true }
+    throw new Error(`History Sheet row append returned no row for ${tab}`)
 }
 
 export async function safeUpdateRow(
@@ -559,6 +678,6 @@ export async function safeUpdateRow(
     values: (string | number | null)[],
     headers?: string[],
 ): Promise<number | null> {
-    if (!row || row < 1) return null;
-    return updateRow(sheetId, tab, row, values, headers);
+    if (!row || row < 1) return null
+    return updateRow(sheetId, tab, row, values, headers)
 }

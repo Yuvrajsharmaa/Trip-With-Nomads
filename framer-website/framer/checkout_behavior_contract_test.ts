@@ -8,6 +8,12 @@ Deno.test("canonical checkout uses stable request ids, the active Razorpay gatew
     const source = await read("CheckoutPageOverrides.tsx")
 
     assertStringIncludes(source, "checkout_request_id")
+    assertStringIncludes(source, "trip_slug")
+    assertStringIncludes(source, "fetchTripContextBySlug")
+    assertStringIncludes(source, "fetchCheckoutRequest")
+    assertStringIncludes(source, "retrying once")
+    assertStringIncludes(source, "canonical public route identity")
+    assertStringIncludes(source, "This trip is not available for online booking")
     assertStringIncludes(source, "sessionStorage")
     assertStringIncludes(source, "crypto.randomUUID")
     assertStringIncludes(source, "Razorpay")
@@ -55,17 +61,19 @@ Deno.test("status UI renders payment and settlement state from the signed respon
 Deno.test("all legacy lead routes remain exported and use one guarded submission path", async () => {
     const source = await read("EmailPopupOverride.tsx")
 
-    for (const exportName of [
-        "withCustomTripTracking",
-        "withWaitlistTracking",
-        "withWaitlistAbandonTracking",
-        "withLeadAbandonTrackingGeneric",
-        "withLeadTracking",
-        "withFormTracking",
-        "withBookingInviteTracking",
-        "withTripPageLeadTracking",
-        "withPartialFillTracking",
-    ]) {
+    for (
+        const exportName of [
+            "withCustomTripTracking",
+            "withWaitlistTracking",
+            "withWaitlistAbandonTracking",
+            "withLeadAbandonTrackingGeneric",
+            "withLeadTracking",
+            "withFormTracking",
+            "withBookingInviteTracking",
+            "withTripPageLeadTracking",
+            "withPartialFillTracking",
+        ]
+    ) {
         assertStringIncludes(source, `export function ${exportName}`)
     }
     assertStringIncludes(source, "submission_id")
