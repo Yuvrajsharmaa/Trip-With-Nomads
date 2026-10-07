@@ -52,6 +52,27 @@ async function readRedirectInput(req: Request): Promise<Record<string, string>> 
     return input
 }
 
+function isPaymentFailureCallback(input: Record<string, string>): boolean {
+    const failureSignals = [
+        input["error[code]"],
+        input["error[description]"],
+        input["error[reason]"],
+        input.error_code,
+        input.error_description,
+        input.error_reason,
+        input.payment_status,
+        input.status,
+        input.unmappedstatus,
+        input.error,
+    ]
+
+    return failureSignals.some((value) =>
+        /bad_request_error|payment_failed|failed|failure|declined|cancelled|canceled/i.test(
+            String(value || ""),
+        )
+    )
+}
+
 serve(async (req) => {
     if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders })
     if (req.method !== "GET" && req.method !== "POST") {
@@ -71,7 +92,9 @@ serve(async (req) => {
             Deno.env.get("PAYMENT_REDIRECT_BASE_URL"),
             "https://tripwithnomads.com",
         ).replace(/\/$/, "")
-        const statusPath = firstNonEmpty(Deno.env.get("PAYMENT_STATUS_PATH"), "/payment-success")
+        const statusPath = isPaymentFailureCallback(input)
+            ? "/payment-failed"
+            : firstNonEmpty(Deno.env.get("PAYMENT_STATUS_PATH"), "/payment-success")
         const baseOrigin = /^https?:\/\//i.test(siteBase) ? siteBase : `https://${siteBase}`
         const redirectUrl = new URL(statusPath.startsWith("/") ? statusPath : `/${statusPath}`, `${baseOrigin}/`)
 
