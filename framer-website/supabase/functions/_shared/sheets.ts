@@ -20,6 +20,7 @@ export type SheetTabMetadata = {
 
 const ensuredHeaders = new Map<string, Set<string>>(); // map sheetId -> Set of tab names
 const ensuredTabs = new Map<string, Set<string>>();
+const ensuredSheetIds = new Map<string, Map<string, number>>();
 const ensuredFormatting = new Map<string, Set<string>>();
 let cachedToken: TokenCache | null = null;
 let cachedServiceAccount: ServiceAccount | null = null;
@@ -115,27 +116,32 @@ async function sheetsFetch(path: string, sheetId: string, init?: RequestInit) {
     );
 }
 
-async function ensureTab(tab: string, sheetId: string) {
+async function ensureTab(tab: string, sheetId: string): Promise<number> {
     if (!ensuredTabs.has(sheetId)) ensuredTabs.set(sheetId, new Set());
-    if (ensuredTabs.get(sheetId)!.has(tab)) return;
+    if (!ensuredSheetIds.has(sheetId)) ensuredSheetIds.set(sheetId, new Map());
+    const knownSheetId = ensuredSheetIds.get(sheetId)!.get(tab);
+    if (ensuredTabs.get(sheetId)!.has(tab) && knownSheetId !== undefined) return knownSheetId;
 
-    const metaRes = await sheetsFetch("?fields=sheets.properties.title", sheetId);
+    const metaRes = await sheetsFetch("?fields=sheets.properties(sheetId,title)", sheetId);
     if (!metaRes.ok) {
         const text = await metaRes.text();
         throw new Error(`Sheet metadata read failed: ${metaRes.status} ${text}`);
     }
 
     const meta = await metaRes.json();
-    const exists = Array.isArray(meta?.sheets) &&
-        meta.sheets.some((sheet: any) =>
-            String(sheet?.properties?.title || "").trim() === tab
-        );
-
-    if (!exists) {
+    const sheet = Array.isArray(meta?.sheets)
+        ? meta.sheets.find((candidate: any) =>
+            String(candidate?.properties?.title || "").trim() === tab
+        )
+        : null;
+    const worksheetId = Number(sheet?.properties?.sheetId);
+    if (!sheet || !Number.isInteger(worksheetId)) {
         throw new Error(`Managed Sheet tab not found: ${tab}`);
     }
 
     ensuredTabs.get(sheetId)!.add(tab);
+    ensuredSheetIds.get(sheetId)!.set(tab, worksheetId);
+    return worksheetId;
 }
 
 async function ensureHeaders(tab: string, headers: string[], sheetId: string) {
@@ -161,13 +167,6 @@ async function ensureHeaders(tab: string, headers: string[], sheetId: string) {
     }
     ensuredHeaders.get(sheetId)!.add(tab);
     await formatManagedTab(sheetId, tab, headers);
-}
-
-function parseRowIndex(range?: string | null): number | null {
-    if (!range) return null;
-    const match = /!A(\d+)/.exec(range);
-    if (!match) return null;
-    return Number(match[1]);
 }
 
 function columnNumberToName(columnNumber: number): string {
@@ -356,37 +355,42 @@ export async function appendRow(
     headers?: string[],
 ) {
     if (!sheetsEnabled()) return null;
-    await ensureTab(tab, sheetId);
+    const worksheetId = await ensureTab(tab, sheetId);
     if (headers?.length) await ensureHeaders(tab, headers, sheetId);
 
-    // Some existing managed tabs contain a legacy table/range whose append
-    // anchor is offset from column A. Use an explicit next-row update instead
-    // of values.append so every new record starts at the contract's first
-    // column and cannot shift the visible fields.
-    const existingRows = await readTabValues(sheetId, tab, "A1:ZZ10000");
-    let lastPopulatedRow = 0;
-    for (let index = 0; index < existingRows.length; index++) {
-        const row = Array.isArray(existingRows[index]) ? existingRows[index] : [];
-        if (row.some((cell) => String(cell ?? "").trim() !== "")) lastPopulatedRow = index + 1;
-    }
-    const rowNumber = Math.max(2, lastPopulatedRow + 1);
-    const endColumn = columnNumberToName(Math.max(1, values.length));
     const res = await sheetsFetch(
-        `/values/${encodeURIComponent(tab)}!A${rowNumber}:${endColumn}${rowNumber}?valueInputOption=RAW`,
+        ":batchUpdate",
         sheetId,
         {
-            method: "PUT",
-            body: JSON.stringify({ values: [values] }),
+            method: "POST",
+            body: JSON.stringify({
+                requests: [{
+                    appendCells: {
+                        sheetId: worksheetId,
+                        rows: [{
+                            values: values.map((value) => ({
+                                userEnteredValue: value === null
+                                    ? {}
+                                    : typeof value === "number"
+                                    ? { numberValue: value }
+                                    : { stringValue: value },
+                            })),
+                        }],
+                        fields: "userEnteredValue",
+                    },
+                }],
+            }),
         }
     );
 
     if (!res.ok) {
         const text = await res.text();
-        throw new Error(`Append failed: ${res.status} ${text}`);
+        throw new Error(`Atomic append failed: ${res.status} ${text}`);
     }
 
-    const data = await res.json();
-    return parseRowIndex(data?.updates?.updatedRange || null) || rowNumber;
+    // appendCells allocates the next row atomically. The caller re-reads its
+    // idempotency key when it needs the resulting row number.
+    return null;
 }
 
 export async function updateRow(

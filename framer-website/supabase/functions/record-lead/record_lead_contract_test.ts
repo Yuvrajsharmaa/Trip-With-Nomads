@@ -17,7 +17,7 @@ Deno.test("record-lead requires durable submission identity and retries Sheet pr
     assertStringIncludes(source, "utm_term")
     assertStringIncludes(source, "GOOGLE_SHEET_ID_CUSTOM_TRIPS")
     assertStringIncludes(source, "GOOGLE_SHEET_ID_TRIP_LEADS")
-    assert(!source.includes("GOOGLE_SHEET_ID_TRIPS"))
+    assertStringIncludes(source, 'trips: Deno.env.get("GOOGLE_SHEET_ID_TRIPS")')
     assertStringIncludes(source, "booking_abandoned")
     assertStringIncludes(source, "GOOGLE_SHEET_ID_MASTER")
     assertStringIncludes(source, "Master Leads")

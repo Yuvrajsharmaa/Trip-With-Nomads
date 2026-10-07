@@ -1101,10 +1101,8 @@ async function postBookingAbandonLead(store: any): Promise<boolean> {
     bookingAbandonLeadInFlight.add(identity)
 
     const submissionId = getStableBookingAbandonId("submission", identity)
-    const leadId = getStableBookingAbandonId("lead", identity)
     const payload = {
         submission_id: submissionId,
-        lead_id: leadId,
         email,
         name: firstNonEmpty(
             store?.contactName,

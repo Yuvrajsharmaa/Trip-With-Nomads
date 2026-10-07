@@ -25,6 +25,8 @@ Deno.test("canonical checkout uses stable request ids, the active Razorpay gatew
     assertStringIncludes(source, "BOOKING_ABANDON_LEAD_SOURCE")
     assertStringIncludes(source, "checkout_abandoned_before_payment")
     assertStringIncludes(source, "getStableBookingAbandonId")
+    assert(!source.includes('const leadId = getStableBookingAbandonId("lead", identity)'))
+    assert(!source.includes("lead_id: leadId"))
     assertStringIncludes(source, "pagehide")
 })
 

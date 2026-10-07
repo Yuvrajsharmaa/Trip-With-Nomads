@@ -93,6 +93,7 @@ function routeForLead(source: string, status: string): { sheetId: string; tab: s
         original: Deno.env.get("GOOGLE_SHEET_ID"),
         ntc: Deno.env.get("GOOGLE_SHEET_ID_NTC"),
         tripLeads: Deno.env.get("GOOGLE_SHEET_ID_TRIP_LEADS"),
+        trips: Deno.env.get("GOOGLE_SHEET_ID_TRIPS"),
         custom: Deno.env.get("GOOGLE_SHEET_ID_CUSTOM_TRIPS") || Deno.env.get("CUSTOM_TRIPS_SHEET_ID"),
         general: Deno.env.get("GOOGLE_SHEET_ID_GENERAL"),
     })
