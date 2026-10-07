@@ -17,9 +17,18 @@ Deno.test("checkout links and display pricing are ID-first", () => {
   const bookNow = source.slice(bookNowStart, checkoutIdStart);
 
   assert(bookNowStart >= 0, "Book now override should exist");
+  assertStringIncludes(bookNow, "const currentSlug = normalizeSlug");
+  assertStringIncludes(bookNow, "fetchTripIdBySlug(currentSlug)");
+  assertStringIncludes(bookNow, "const slug = currentSlug ||");
   assertStringIncludes(bookNow, "getPageScopedTripId");
   assertStringIncludes(bookNow, 'if (tripId) next.set("tripId", tripId)');
-  assertStringIncludes(bookNow, 'if (!tripId && slug) next.set("slug", slug)');
+  assertStringIncludes(bookNow, 'if (slug) next.set("slug", slug)');
+  assertStringIncludes(bookNow, "const sameTrip = Boolean");
+  assertFalse(
+    bookNow.includes(
+      "|| normalizeTripId(store.tripId) || getPageScopedTripId()",
+    ),
+  );
 
   const displayStart = source.indexOf("function useTripDisplayData");
   const displayEnd = source.indexOf(
@@ -28,6 +37,8 @@ Deno.test("checkout links and display pricing are ID-first", () => {
   );
   const display = source.slice(displayStart, displayEnd);
   assertStringIncludes(display, 'const slug = tripId ? "" :');
+  assertStringIncludes(display, "slugFromPath || propSlug");
+  assertStringIncludes(display, "const [locationKey, setLocationKey]");
 
   const bootstrapStart = source.indexOf(
     "export function withCheckoutBootstrap",
