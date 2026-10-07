@@ -1,37 +1,20 @@
 const BOOKING_TIMEZONE = "Asia/Kolkata"
 
-// The visible part is a booking register. Provider and reconciliation keys
-// remain in the row, but sheets.ts hides them so the team sees the booking,
-// the money, and the current payment state first.
 export const BOOKING_HEADERS = [
-    "Last Updated (IST)",
+    "Last Updated",
     "Booking Ref",
-    "Booking ID",
-    "Trip Name",
-    "Trip ID",
+    "Trip",
     "Departure Date",
     "Guest Name",
     "Email",
     "Phone",
-    "Traveller Count",
-    "Traveller Summary",
-    "Coupon Code",
+    "Travellers",
     "Payment Plan",
-    "Subtotal",
-    "Discount",
-    "GST",
     "Trip Total",
-    "Payable Now",
-    "Paid Amount",
+    "Paid",
     "Balance Due",
     "Payment Status",
     "Settlement Status",
-    "Payment Provider",
-    "Payment Attempt",
-    "Provider Order/Reference",
-    "Provider Payment/Transaction ID",
-    "Last Payment Event",
-    "Last Payment Event At (IST)",
     "Notes",
 ]
 
@@ -57,9 +40,7 @@ function formatTimestampIST(value?: string): string {
         hour12: true,
     }).formatToParts(date)
     const get = (type: string) => parts.find((part) => part.type === type)?.value || ""
-    return `${get("day")} ${get("month")} ${get("year")}, ${get("hour")}:${get("minute")} ${
-        get("dayPeriod").toUpperCase()
-    } IST`
+    return `${get("day")} ${get("month")} ${get("year")}, ${get("hour")}:${get("minute")} ${get("dayPeriod").toUpperCase()} IST`
 }
 
 function formatDeparture(value: any): string {
@@ -68,6 +49,7 @@ function formatDeparture(value: any): string {
     const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(raw)
     if (!match) return raw
     const date = new Date(`${raw}T00:00:00Z`)
+    if (Number.isNaN(date.getTime())) return raw
     return new Intl.DateTimeFormat("en-IN", {
         timeZone: BOOKING_TIMEZONE,
         day: "numeric",
@@ -82,6 +64,16 @@ function humanize(value: any): string {
         .replace(/\s+/g, " ")
         .trim()
         .replace(/\b\w/g, (character) => character.toUpperCase())
+}
+
+function formatPhone(countryCode: unknown, phone: unknown): string {
+    const rawPhone = compact(phone)
+    if (!rawPhone) return ""
+    if (rawPhone.startsWith("+")) return rawPhone
+    const country = compact(countryCode)
+    if (!country) return rawPhone
+    const prefix = country.startsWith("+") ? country : `+${country.replace(/\D/g, "")}`
+    return prefix === "+" ? rawPhone : `${prefix} ${rawPhone}`
 }
 
 function humanizePaymentStatus(value: any): string {
@@ -107,18 +99,6 @@ function humanizeSettlementStatus(value: any): string {
     return labels[status] || humanize(status)
 }
 
-function humanizePaymentEvent(value: any): string {
-    const event = compact(value).toLowerCase()
-    const labels: Record<string, string> = {
-        "payment.captured": "Payment captured",
-        "payment.failed": "Payment failed",
-        "payment.authorized": "Payment authorised",
-        paid_callback: "Paid callback",
-        failed_webhook: "Failed webhook",
-    }
-    return labels[event] || humanize(event)
-}
-
 function normalizeSharing(value: any): string {
     const raw = compact(value)
     if (!raw) return ""
@@ -129,8 +109,11 @@ function normalizeSharing(value: any): string {
     return raw
 }
 
-function formatTravellerSummary(travellers: any[]): string {
-    if (!Array.isArray(travellers) || travellers.length === 0) return ""
+function formatTravellerSummary(travellers: any[], fallbackCount?: any): string {
+    if (!Array.isArray(travellers) || travellers.length === 0) {
+        const count = Number(fallbackCount)
+        return Number.isFinite(count) && count > 0 ? `${count} traveller${count === 1 ? "" : "s"}` : ""
+    }
     return travellers
         .map((traveller: any, index: number) => {
             const name = compact(traveller?.name) || `Traveller ${index + 1}`
@@ -147,27 +130,6 @@ function paymentPlan(value: any): string {
     return compact(value).toLowerCase() === "partial_25" ? "25% deposit" : "Full payment"
 }
 
-function providerOrderReference(booking: Record<string, any>): string {
-    return compact(
-        booking.payment_gateway_order_or_ref_id ||
-            booking.provider_order_id ||
-            booking.provider_order_reference ||
-            booking.razorpay_order_id ||
-            booking.payu_txnid,
-    )
-}
-
-function providerPaymentReference(booking: Record<string, any>): string {
-    return compact(
-        booking.payment_gateway_payment_id ||
-            booking.payment_gateway_txn_id ||
-            booking.provider_payment_id ||
-            booking.provider_transaction_id ||
-            booking.razorpay_payment_id ||
-            booking.payu_mihpayid,
-    )
-}
-
 export function buildBookingSheetRow(params: {
     booking: Record<string, any>
     eventStage?: string
@@ -180,39 +142,22 @@ export function buildBookingSheetRow(params: {
         compact(booking.balance_due_note),
         compact(params.notes),
     ].filter(Boolean).join(" | ")
-    const eventKey = compact(booking.last_payment_event || params.eventStage)
 
     return [
-        formatTimestampIST(
-            params.updatedAt || booking.updated_at || new Date().toISOString(),
-        ),
+        formatTimestampIST(params.updatedAt || booking.updated_at || new Date().toISOString()),
         compact(booking.booking_ref),
-        compact(booking.id),
         compact(booking.trip_name || booking.trip_title),
-        compact(booking.trip_id),
         formatDeparture(booking.departure_date || booking.date),
         compact(booking.name || booking.guest_name),
         compact(booking.email).toLowerCase(),
-        compact(booking.phone),
-        travellers.length,
-        formatTravellerSummary(travellers),
-        compact(booking.coupon_code),
+        formatPhone(booking.country_code, booking.phone),
+        formatTravellerSummary(travellers, booking.traveller_count || booking.travellers_count),
         paymentPlan(booking.payment_mode),
-        toNumber(booking.subtotal_amount),
-        toNumber(booking.discount_amount),
-        toNumber(booking.tax_amount || booking.gst_amount),
         toNumber(booking.total_amount),
-        toNumber(booking.payable_now_amount || booking.amount),
         toNumber(booking.paid_amount),
         toNumber(booking.due_amount || booking.balance_due),
         humanizePaymentStatus(booking.payment_status || "pending"),
         humanizeSettlementStatus(booking.settlement_status || "pending"),
-        humanize(booking.payment_provider || booking.provider),
-        toNumber(booking.payment_attempt_number || booking.attempt_no),
-        providerOrderReference(booking),
-        providerPaymentReference(booking),
-        humanizePaymentEvent(eventKey),
-        booking.last_payment_event_at ? formatTimestampIST(booking.last_payment_event_at) : "",
         notes,
     ]
 }

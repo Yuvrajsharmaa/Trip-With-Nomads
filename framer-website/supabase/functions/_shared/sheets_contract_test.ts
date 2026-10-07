@@ -30,3 +30,14 @@ Deno.test("application Sheet helper never creates missing managed tabs", async (
     assert(source.includes('readTabValues(sheetId, tab, "A1:ZZ10000")'))
     assert(!source.includes('readTabValues(sheetId, tab, "A1:ZZ")'))
 })
+
+Deno.test("managed tab formatting supports the sales-facing contracts", async () => {
+    const source = await Deno.readTextFile(new URL("./sheets.ts", import.meta.url))
+    assert(source.includes('"Captured At"'))
+    assert(source.includes('"Last Activity"'))
+    assert(source.includes('"Reason / Activity"'))
+    assert(source.includes('"Trip / Itinerary"'))
+    assert(source.includes('"Paid"'))
+    assert(source.includes('"Departure Date"'))
+    assert(!source.includes('headers.filter((header) =>') || source.includes("hiddenHeaders"))
+})

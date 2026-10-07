@@ -226,18 +226,29 @@ export async function formatManagedTab(
         "Payable Now",
         "Paid Amount",
         "Balance Due",
+        "Paid",
         "Amount Received",
         "Expected Amount",
     ])
     const wrapHeaders = new Set([
         "Traveller Summary",
+        "Travellers",
+        "Trip / Itinerary",
+        "Reason / Activity",
+        "Company / Group",
         "Notes",
         "Reason",
         "Why They Want To Travel",
-        "Page",
         "Reconciliation",
         "Reconciliation Result",
     ])
+    const dateTimeHeaders = new Set([
+        "Captured At",
+        "Last Activity",
+        "Last Updated",
+        "Payment Date",
+    ])
+    const dateHeaders = new Set(["Departure Date"])
     const hiddenHeaders = new Set(
         headers.filter((header) =>
             /^utm\s/i.test(header) ||
@@ -290,7 +301,7 @@ export async function formatManagedTab(
             ? 120
             : wrapHeaders.has(header)
             ? 280
-            : /^last (updated|seen)|^first seen|^captured at|^event received|^processed at|^last payment event at/i
+            : /^last (updated|seen|activity)|^first seen|^captured at|^payment date|^event received|^processed at|^last payment event at/i
                     .test(header)
             ? 205
             : /url|page/i.test(header)
@@ -323,6 +334,42 @@ export async function formatManagedTab(
                     cell: {
                         userEnteredFormat: {
                             numberFormat: { type: "NUMBER", pattern: "₹#,##0.00" },
+                        },
+                    },
+                    fields: "userEnteredFormat.numberFormat",
+                },
+            })
+        }
+        if (dateTimeHeaders.has(header)) {
+            requests.push({
+                repeatCell: {
+                    range: {
+                        sheetId: target.sheetId,
+                        startRowIndex: 1,
+                        startColumnIndex: index,
+                        endColumnIndex: index + 1,
+                    },
+                    cell: {
+                        userEnteredFormat: {
+                            numberFormat: { type: "DATE_TIME", pattern: "d mmm yyyy, h:mm AM/PM" },
+                        },
+                    },
+                    fields: "userEnteredFormat.numberFormat",
+                },
+            })
+        }
+        if (dateHeaders.has(header)) {
+            requests.push({
+                repeatCell: {
+                    range: {
+                        sheetId: target.sheetId,
+                        startRowIndex: 1,
+                        startColumnIndex: index,
+                        endColumnIndex: index + 1,
+                    },
+                    cell: {
+                        userEnteredFormat: {
+                            numberFormat: { type: "DATE", pattern: "d mmm yyyy" },
                         },
                     },
                     fields: "userEnteredFormat.numberFormat",

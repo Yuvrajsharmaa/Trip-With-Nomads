@@ -1,25 +1,16 @@
 const BOOKING_TIMEZONE = "Asia/Kolkata"
 
 export const BOOKING_CALLBACK_HEADERS = [
-    "Event ID",
-    "Event Received At (IST)",
-    "Booking ID",
+    "Payment Date",
     "Booking Ref",
-    "Payment Attempt",
-    "Payment Provider",
-    "Event Type",
-    "Payment Result",
-    "Settlement Status",
-    "Trip Name",
+    "Trip",
     "Departure Date",
     "Guest Name",
     "Email",
-    "Provider Order/Reference",
-    "Provider Payment/Transaction ID",
     "Amount Received",
     "Expected Amount",
-    "Processed At (IST)",
-    "Reconciliation Result",
+    "Payment Result",
+    "Settlement Status",
     "Notes",
 ]
 
@@ -45,9 +36,7 @@ function formatTimestampIST(value?: string): string {
         hour12: true,
     }).formatToParts(date)
     const get = (type: string) => parts.find((part) => part.type === type)?.value || ""
-    return `${get("day")} ${get("month")} ${get("year")}, ${get("hour")}:${get("minute")} ${
-        get("dayPeriod").toUpperCase()
-    } IST`
+    return `${get("day")} ${get("month")} ${get("year")}, ${get("hour")}:${get("minute")} ${get("dayPeriod").toUpperCase()} IST`
 }
 
 function formatDeparture(value: any): string {
@@ -73,9 +62,7 @@ function humanize(value: any): string {
 
 function paymentResult(value: any): string {
     const result = compact(value).toLowerCase()
-    if (result === "paid" || result === "success" || result === "captured") {
-        return "Paid"
-    }
+    if (result === "paid" || result === "success" || result === "captured") return "Paid"
     if (result === "failed" || result === "failure") return "Failed"
     return humanize(result)
 }
@@ -86,45 +73,6 @@ function settlementStatus(value: any): string {
     if (status === "partially_paid") return "Partially paid"
     if (status === "pending") return "Pending"
     return humanize(status)
-}
-
-function paymentEvent(value: any): string {
-    const event = compact(value).toLowerCase()
-    const labels: Record<string, string> = {
-        "payment.captured": "Payment captured",
-        "payment.failed": "Payment failed",
-        "payment.authorized": "Payment authorised",
-    }
-    return labels[event] || humanize(event)
-}
-
-function providerOrderReference(
-    booking: Record<string, any>,
-    override?: any,
-): string {
-    return compact(
-        override ||
-            booking.payment_gateway_order_or_ref_id ||
-            booking.provider_order_id ||
-            booking.provider_order_reference ||
-            booking.razorpay_order_id ||
-            booking.payu_txnid,
-    )
-}
-
-function providerPaymentReference(
-    booking: Record<string, any>,
-    override?: any,
-): string {
-    return compact(
-        override ||
-            booking.payment_gateway_payment_id ||
-            booking.payment_gateway_txn_id ||
-            booking.provider_payment_id ||
-            booking.provider_transaction_id ||
-            booking.razorpay_payment_id ||
-            booking.payu_mihpayid,
-    )
 }
 
 export function buildBookingCallbackRow(params: {
@@ -145,34 +93,24 @@ export function buildBookingCallbackRow(params: {
     notes?: string
 }) {
     const booking = params.booking || {}
-    const processedAt = params.processedAt || new Date().toISOString()
+    const reconciliation = compact(params.reconciliationResult)
+    const notes = [
+        compact(params.notes),
+        reconciliation && reconciliation.toLowerCase() !== "matched"
+            ? `Reconciliation: ${humanize(reconciliation)}`
+            : "",
+    ].filter(Boolean).join(" | ")
     return [
-        compact(params.eventId),
-        formatTimestampIST(params.eventReceivedAt || processedAt),
-        compact(booking.id),
+        formatTimestampIST(params.eventReceivedAt || params.processedAt),
         compact(booking.booking_ref),
-        toNumber(
-            params.paymentAttempt || booking.payment_attempt_number ||
-                booking.attempt_no,
-        ),
-        humanize(
-            params.paymentProvider || booking.payment_provider || booking.provider,
-        ),
-        paymentEvent(params.eventType),
-        paymentResult(params.paymentResult || booking.payment_status),
-        settlementStatus(params.settlementStatus || booking.settlement_status),
         compact(booking.trip_name || booking.trip_title),
         formatDeparture(booking.departure_date || booking.date),
         compact(booking.name || booking.guest_name),
         compact(booking.email).toLowerCase(),
-        providerOrderReference(booking, params.providerOrderReference),
-        providerPaymentReference(booking, params.providerPaymentReference),
         toNumber(params.amountReceived),
-        toNumber(
-            params.expectedAmount || booking.payable_now_amount || booking.amount,
-        ),
-        formatTimestampIST(processedAt),
-        humanize(params.reconciliationResult),
-        compact(params.notes),
+        toNumber(params.expectedAmount || booking.payable_now_amount || booking.amount),
+        paymentResult(params.paymentResult || booking.payment_status),
+        settlementStatus(params.settlementStatus || booking.settlement_status),
+        notes,
     ]
 }
