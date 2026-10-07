@@ -22,7 +22,15 @@ export type PaymentEmailBooking = {
   payment_status?: unknown;
   settlement_status?: unknown;
   payment_mode?: unknown;
+  payment_provider?: unknown;
   payment_gateway_txn_id?: unknown;
+  payment_gateway_payment_id?: unknown;
+  payment_gateway_order_or_ref_id?: unknown;
+  payment_attempt_number?: unknown;
+  active_payment_attempt_id?: unknown;
+  checkout_request_id?: unknown;
+  created_at?: unknown;
+  status?: unknown;
 };
 
 export type PaymentEmailContent = {
@@ -56,7 +64,8 @@ const PAYMENT_ANIMATION_URLS = {
     "https://framerusercontent.com/assets/jtbxonFosA8D3IAyIFdpHJMXUPI.gif",
 };
 const SUPPORT_EMAIL = "support@tripwithnomads.com";
-const WHATSAPP_PHONE = "919318405401";
+const SUPPORT_PHONE = "+91 8076425366";
+const SUPPORT_PHONE_DIGITS = "918076425366";
 const BRAND_BLUE = "#08b1ff";
 const BRAND_NAVY = "#0b3550";
 const REGISTERED_OFFICE_MAP_URL = "https://maps.app.goo.gl/TS9umsDXBHxs6K2d6";
@@ -275,8 +284,12 @@ function buildWhatsAppUrl(bookingRef: string): string {
   const message = "Hi Trip With Nomads, I need help with booking " +
     bookingRef +
     ".";
-  return "https://wa.me/" + WHATSAPP_PHONE + "?text=" +
+  return "https://wa.me/" + SUPPORT_PHONE_DIGITS + "?text=" +
     encodeURIComponent(message);
+}
+
+function buildPhoneUrl(): string {
+  return "tel:+" + SUPPORT_PHONE_DIGITS;
 }
 
 function buildUnsubscribeUrl(): string {
@@ -510,6 +523,7 @@ export function buildPaymentEmail(
     actionLabel + ": " + actionUrl,
     "",
     "Need help? Chat on WhatsApp: " + whatsappUrl,
+    "Call or WhatsApp: " + SUPPORT_PHONE,
     "Questions? Reply to " + SUPPORT_EMAIL + ".",
     "",
     "Privacy policy: " + privacyUrl,
@@ -683,6 +697,9 @@ export function buildPaymentEmail(
     SUPPORT_EMAIL + '" style="color:' + BRAND_NAVY +
     ';text-decoration:underline;">' +
     SUPPORT_EMAIL + "</a>.</p>",
+    '                <p style="margin:8px 0 0;color:#174e6a;font-size:12px;line-height:1.6;">Call or WhatsApp <a href="' +
+    buildPhoneUrl() + '" style="color:' + BRAND_NAVY +
+    ';text-decoration:underline;">' + SUPPORT_PHONE + "</a>.</p>",
     '                <p style="margin:16px 0 0;color:#174e6a;font-size:11px;line-height:1.6;">Trip With Nomads<br>Registered office: <a href="' +
     escapeHtml(REGISTERED_OFFICE_MAP_URL) + '" style="color:' + BRAND_NAVY +
     ';text-decoration:underline;">' + escapeHtml(REGISTERED_OFFICE) +

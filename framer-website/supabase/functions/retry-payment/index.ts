@@ -16,6 +16,11 @@ import {
     issueBookingStatusToken,
     resolveBookingStatusSecret,
 } from "../_shared/booking_status_token.ts"
+import {
+    deliverInternalBookingNotification,
+} from "../_shared/internal_booking_notifications.ts"
+import { buildInternalNotificationEventKey } from "../_shared/internal_booking_email.ts"
+import type { PaymentEmailBooking } from "../_shared/payment_email.ts"
 
 const corsHeaders = {
     "Access-Control-Allow-Origin": "*",
@@ -108,6 +113,11 @@ Deno.serve(async (req) => {
         return new Response("ok", { headers: corsHeaders })
     }
 
+    let notificationSupabase: any = null
+    let notificationBooking: PaymentEmailBooking | null = null
+    let notificationAttempt: Record<string, unknown> | null = null
+    let notificationRequestId = ""
+
     try {
         const supabaseUrl = Deno.env.get("SUPABASE_URL")
         const supabaseKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")
@@ -127,6 +137,7 @@ Deno.serve(async (req) => {
         } catch (error: any) {
             return responseJson({ error: error?.message || "retry_request_id is required" }, 400)
         }
+        notificationRequestId = retryRequestId
 
         if (!isUuid(bookingId)) {
             return responseJson({ error: "Invalid booking_id format" }, 400)
@@ -136,11 +147,10 @@ Deno.serve(async (req) => {
         }
 
         const supabase = createClient(supabaseUrl, supabaseKey)
+        notificationSupabase = supabase
         const { data: booking, error: bookingError } = await supabase
             .from("bookings")
-            .select(
-                "id, booking_ref, total_amount, payable_now_amount, payment_mode, payment_status, settlement_status, name, email, phone, currency, payment_provider, payment_gateway_order_or_ref_id",
-            )
+            .select("*")
             .eq("id", bookingId)
             .single()
         if (bookingError || !booking) throw new Error("Booking not found")
@@ -148,6 +158,40 @@ Deno.serve(async (req) => {
         const bookingEmail = normalizeEmail(booking.email)
         if (!bookingEmail || bookingEmail !== providedEmail) {
             return responseJson({ error: "Booking not found" }, 404)
+        }
+        notificationBooking = booking as PaymentEmailBooking
+
+        const notifyRetryStarted = async (attempt: any, orderId: string) => {
+            notificationAttempt = attempt
+            const bookingForNotification = {
+                ...booking,
+                payment_status: "pending",
+                settlement_status: "pending",
+                payment_provider: attempt.provider || "razorpay",
+                payment_gateway_order_or_ref_id: orderId || booking.payment_gateway_order_or_ref_id,
+                active_payment_attempt_id: attempt.id,
+                payment_attempt_number: attempt.attempt_no,
+            }
+            const status = await deliverInternalBookingNotification({
+                supabase,
+                eventType: "payment_retry_started",
+                eventKey: buildInternalNotificationEventKey({
+                    eventType: "payment_retry_started",
+                    bookingId: String(booking.id),
+                    attemptId: String(attempt.id),
+                }),
+                booking: bookingForNotification as PaymentEmailBooking,
+                attempt,
+                eventName: "payment.retry_started",
+                eventId: notificationRequestId,
+                occurredAt: new Date().toISOString(),
+            })
+            if (status === "failed") {
+                console.error("[retry-payment] internal retry-started email failed", {
+                    bookingId: booking.id,
+                    attemptId: attempt.id,
+                })
+            }
         }
 
         const existingRequest = await supabase
@@ -181,6 +225,7 @@ Deno.serve(async (req) => {
                     code: "PAYMENT_PROVIDER_UNSUPPORTED",
                 }, 409)
             }
+            notificationAttempt = existingRequest.data
             const existingGateway = await buildRazorpayPayload({
                 supabase,
                 attempt: existingRequest.data,
@@ -188,6 +233,7 @@ Deno.serve(async (req) => {
                 supabaseUrl,
                 statusToken: statusToken?.token,
             })
+            await notifyRetryStarted(existingRequest.data, String(existingGateway.order_id || ""))
             return responseJson({
                 booking_id: booking.id,
                 retry_request_id: retryRequestId,
@@ -329,6 +375,7 @@ Deno.serve(async (req) => {
         if (attemptInsert.error && !paymentAttempt) {
             throw new Error(attemptInsert.error.message || "Could not create payment attempt")
         }
+        notificationAttempt = paymentAttempt
 
         const bookingUpdate = await supabase
             .from("bookings")
@@ -364,6 +411,7 @@ Deno.serve(async (req) => {
         } else {
             throw new Error(`Unsupported payment provider: ${paymentProvider}`)
         }
+        await notifyRetryStarted(paymentAttempt, String(gateway.order_id || ""))
 
         return responseJson({
             booking_id: booking.id,
@@ -382,6 +430,29 @@ Deno.serve(async (req) => {
             [paymentProvider]: gateway,
         })
     } catch (error: any) {
+        if (notificationBooking && notificationAttempt) {
+            const status = await deliverInternalBookingNotification({
+                supabase: notificationSupabase,
+                eventType: "payment_retry_failed",
+                eventKey: buildInternalNotificationEventKey({
+                    eventType: "payment_retry_failed",
+                    bookingId: String(notificationBooking.id || ""),
+                    attemptId: String(notificationAttempt.id || ""),
+                }),
+                booking: notificationBooking,
+                attempt: notificationAttempt,
+                eventName: "payment.retry_failed",
+                eventId: notificationRequestId,
+                errorMessage: String(error?.message || "Payment retry failed"),
+                occurredAt: new Date().toISOString(),
+            })
+            if (status === "failed") {
+                console.error("[retry-payment] internal retry-failed email failed", {
+                    bookingId: notificationBooking.id,
+                    attemptId: notificationAttempt.id,
+                })
+            }
+        }
         return responseJson({ error: error?.message || "Retry failed" }, 400)
     }
 })

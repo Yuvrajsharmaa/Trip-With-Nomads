@@ -35,13 +35,23 @@ export const MANAGED_TABS = {
     "Latest UTM Medium", "Latest UTM Campaign", "Latest UTM Term", "Latest UTM Content",
     "Submission Count", "Current Status", "Latest Submission ID", "Notes",
   ] },
+  "Custom Trip Leads": { key: "Email", headers: [
+    "Lead ID", "First Seen At", "Last Seen At", "Name", "Email", "Phone", "Instagram ID",
+    "Latest Source", "Latest Page URL", "Latest Trip ID", "Latest Trip Slug", "Latest UTM Source",
+    "Latest UTM Medium", "Latest UTM Campaign", "Latest UTM Term", "Latest UTM Content",
+    "Submission Count", "Current Status", "Latest Submission ID", "Notes",
+  ] },
   "Abandoned Leads": { key: "Submission ID", history: true, headers: [
     "Submission ID", "Lead ID", "Captured At", "Name", "Email", "Phone", "Source", "Page URL",
     "Trip ID", "Trip Slug", "Status", "Reason",
   ] },
   "NTC - Invites": { key: "Email", headers: [
-    "Lead ID", "Created At", "Name", "Email", "Phone", "Instagram ID", "Reason", "Source",
+    "Lead ID", "Created At", "Name", "Email", "Phone", "Country Code", "Instagram ID", "Reason", "Source",
     "Page URL", "Trip ID", "Trip Slug", "UTM Source", "UTM Medium", "UTM Campaign", "Status",
+  ] },
+  "Master Leads": { key: "Email", headers: [
+    "Lead ID", "Created At", "Name", "Email", "Phone", "Country Code", "Source", "Status",
+    "Page URL", "Trip ID", "Trip Slug",
   ] },
 }
 
@@ -140,7 +150,7 @@ export function buildDryRunRepairPlan(audit) {
     }
     const duplicates = tab.history ? (tab.exactHistoryDuplicates || []) : (tab.duplicateKeys || [])
     for (const duplicate of duplicates) {
-      if (tab.tab === "Bookings" || tab.tab === "Leads" || tab.tab === "NTC - Invites") {
+      if (tab.tab === "Bookings" || tab.tab === "Leads" || tab.tab === "NTC - Invites" || tab.tab === "Master Leads") {
         actions.push({
           action: "merge_current_rows_dry_run",
           tab: tab.tab,

@@ -21,6 +21,11 @@ import {
     razorpayCredentials,
 } from "../_shared/razorpay.ts"
 import { sheetsEnabled, upsertCurrentRow } from "../_shared/sheets.ts"
+import {
+    deliverInternalBookingNotification,
+} from "../_shared/internal_booking_notifications.ts"
+import { buildInternalNotificationEventKey } from "../_shared/internal_booking_email.ts"
+import type { PaymentEmailBooking } from "../_shared/payment_email.ts"
 
 const corsHeaders = {
     "Access-Control-Allow-Origin": "*",
@@ -638,6 +643,11 @@ serve(async (req) => {
         return new Response("ok", { headers: corsHeaders })
     }
 
+    let notificationCheckoutRequestId = ""
+    let notificationBooking: PaymentEmailBooking | null = null
+    let notificationAttempt: Record<string, unknown> | null = null
+    let notificationSupabase: any = null
+
     try {
         const body = await readPayload(req)
 
@@ -654,6 +664,7 @@ serve(async (req) => {
                 { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } },
             )
         }
+        notificationCheckoutRequestId = checkoutRequestId
 
         const tripId = firstNonEmpty(body?.trip_id)
         const departureDate = normalizeDateKey(firstNonEmpty(body?.departure_date, body?.date))
@@ -707,6 +718,7 @@ serve(async (req) => {
         }
 
         const supabase = createClient(supabaseUrl, serviceRoleKey)
+        notificationSupabase = supabase
         console.log("[create-booking] request received", {
             checkout_request_id: checkoutRequestId,
             trip_id: tripId,
@@ -1084,9 +1096,16 @@ serve(async (req) => {
                 { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } },
             )
         }
+        notificationBooking = {
+            ...data,
+            active_payment_attempt_id: paymentAttempt.id,
+            payment_attempt_number: paymentAttempt.attempt_no || 1,
+            payment_provider: paymentAttempt.provider || paymentProvider,
+        }
+        notificationAttempt = paymentAttempt
 
         const bookingsSheetId = firstNonEmpty(
-            Deno.env.get("GOOGLE_SHEET_ID_TRIPS"),
+            Deno.env.get("BOOKING_CALLBACK_SHEET_ID"),
             Deno.env.get("GOOGLE_SHEET_ID")
         )
         const bookingsSheetTab = firstNonEmpty(Deno.env.get("BOOKINGS_SHEET_TAB"), "Bookings")
@@ -1156,7 +1175,41 @@ serve(async (req) => {
             status_token_expires_at: bookingStatusToken?.expiresAt || null,
         }
 
+        const sendBookingCreatedNotification = async (orderId: string) => {
+            if (!notificationBooking || !notificationAttempt) return
+            const bookingForNotification = {
+                ...notificationBooking,
+                payment_provider: activeProvider,
+                payment_gateway_order_or_ref_id: orderId || notificationBooking.payment_gateway_order_or_ref_id,
+                active_payment_attempt_id: notificationAttempt.id,
+                payment_attempt_number: notificationAttempt.attempt_no || 1,
+            }
+            const status = await deliverInternalBookingNotification({
+                supabase,
+                eventType: "booking_created",
+                eventKey: buildInternalNotificationEventKey({
+                    eventType: "booking_created",
+                    bookingId: String(bookingForNotification.id || ""),
+                    attemptId: String(notificationAttempt.id || ""),
+                }),
+                booking: bookingForNotification as PaymentEmailBooking,
+                attempt: notificationAttempt,
+                eventName: "booking.created",
+                eventId: notificationCheckoutRequestId,
+                occurredAt: String(bookingForNotification.created_at || new Date().toISOString()),
+            })
+            if (status === "failed") {
+                console.error("[create-booking] internal booking-created email failed", {
+                    bookingId: bookingForNotification.id,
+                    attemptId: notificationAttempt.id,
+                })
+            }
+        }
+
         if (String(data.payment_status || "").trim().toLowerCase() === "paid") {
+            await sendBookingCreatedNotification(
+                firstNonEmpty(paymentAttempt.provider_order_id, data.payment_gateway_order_or_ref_id),
+            )
             return new Response(JSON.stringify({ ...responsePayload, already_paid: true }), {
                 status: 200,
                 headers: { ...corsHeaders, "Content-Type": "application/json" },
@@ -1166,10 +1219,7 @@ serve(async (req) => {
         if (activeProvider === "razorpay") {
             const credentials = razorpayCredentials()
             if (!credentials.keyId || !credentials.keySecret) {
-                return new Response(
-                    JSON.stringify({ error: "Razorpay payment configuration missing" }),
-                    { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } },
-                )
+                throw new Error("Razorpay payment configuration missing")
             }
 
             let orderId = firstNonEmpty(paymentAttempt.provider_order_id, data.payment_gateway_order_or_ref_id)
@@ -1232,12 +1282,37 @@ serve(async (req) => {
             )
         }
 
+        await sendBookingCreatedNotification(String(responsePayload.razorpay?.order_id || ""))
+
         return new Response(JSON.stringify(responsePayload), {
             status: 200,
             headers: { ...corsHeaders, "Content-Type": "application/json" },
         })
     } catch (err: any) {
         console.error("💥 create-booking error:", err)
+        if (notificationBooking && notificationAttempt) {
+            const setupStatus = await deliverInternalBookingNotification({
+                supabase: notificationSupabase,
+                eventType: "booking_setup_failed",
+                eventKey: buildInternalNotificationEventKey({
+                    eventType: "booking_setup_failed",
+                    bookingId: String(notificationBooking.id || ""),
+                    attemptId: String(notificationAttempt.id || ""),
+                }),
+                booking: notificationBooking,
+                attempt: notificationAttempt,
+                eventName: "booking.setup_failed",
+                eventId: notificationCheckoutRequestId,
+                errorMessage: String(err?.message || "Booking payment setup failed"),
+                occurredAt: new Date().toISOString(),
+            })
+            if (setupStatus === "failed") {
+                console.error("[create-booking] internal booking-setup-failed email failed", {
+                    bookingId: notificationBooking.id,
+                    attemptId: notificationAttempt.id,
+                })
+            }
+        }
         const message = String(err?.message || "Internal server error")
         const status = /pricing|coupon|trip|traveller/i.test(message) ? 400 : 500
         return new Response(
