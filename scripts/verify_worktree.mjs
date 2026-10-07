@@ -39,7 +39,6 @@ let commonGitDir = ""
 try {
     branch = git(["branch", "--show-current"])
     head = git(["rev-parse", "HEAD"])
-    stagingHead = git(["rev-parse", "--verify", "refs/remotes/origin/staging"], true)
     gitDir = absoluteGitPath(git(["rev-parse", "--git-dir"]))
     commonGitDir = absoluteGitPath(git(["rev-parse", "--git-common-dir"]))
 
@@ -54,7 +53,7 @@ try {
         errors.push("The worktree is detached. Create a unique codex/<feature> branch before editing.")
     } else if (branch === "main" || branch === "staging") {
         errors.push(`Protected branch '${branch}' cannot be used for feature work.`)
-    } else if (!branch.startsWith("codex/") || branch.length <= "codex/".length) {
+    } else if (command !== "push" && (!branch.startsWith("codex/") || branch.length <= "codex/".length)) {
         errors.push(`Branch '${branch}' is not a feature branch. Use a unique codex/<feature> branch.`)
     }
 
@@ -69,6 +68,17 @@ try {
     }
 
     if (command === "start") {
+        const remotes = git(["remote"], true).split(/\r?\n/).filter(Boolean)
+        if (!remotes.includes("origin")) {
+            errors.push("The origin remote is unavailable. Fetch the repository before starting work.")
+        } else {
+            try {
+                git(["fetch", "--quiet", "origin", "staging"])
+            } catch (error) {
+                errors.push(`Could not refresh origin/staging before starting work: ${error.message}`)
+            }
+        }
+        stagingHead = git(["rev-parse", "--verify", "refs/remotes/origin/staging"], true)
         if (!stagingHead) {
             errors.push("refs/remotes/origin/staging is unavailable. Fetch the repository before starting work.")
         } else if (head !== stagingHead) {

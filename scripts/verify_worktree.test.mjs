@@ -21,6 +21,7 @@ function createFixture() {
     runGit(root, ["add", "README.md"])
     runGit(root, ["commit", "-qm", "fixture: initial"])
     runGit(root, ["branch", "staging"])
+    runGit(root, ["remote", "add", "origin", root])
     runGit(root, ["update-ref", "refs/remotes/origin/staging", "refs/heads/staging"])
     const linked = path.join(root, "linked")
     runGit(root, ["worktree", "add", "-qb", "codex/fixture", linked, "refs/remotes/origin/staging"])
@@ -83,6 +84,34 @@ test("rejects dirty handoff and accepts it after a wip checkpoint", () => {
         runGit(fixture.linked, ["commit", "-qm", "wip: checkpoint fixture"])
         const cleanResult = runGuard(fixture.linked, "handoff")
         assert.equal(cleanResult.code, 0, cleanResult.output)
+    } finally {
+        rmSync(fixture.root, { recursive: true, force: true })
+    }
+})
+
+test("refreshes origin/staging before accepting a new worktree", () => {
+    const fixture = createFixture()
+    try {
+        runGit(fixture.root, ["switch", "staging"])
+        writeFileSync(path.join(fixture.root, "README.md"), "new staging baseline\n")
+        runGit(fixture.root, ["add", "README.md"])
+        runGit(fixture.root, ["commit", "-qm", "fixture: advance staging"])
+
+        const result = runGuard(fixture.linked, "start")
+        assert.notEqual(result.code, 0)
+        assert.match(result.output, /must start exactly at origin\/staging/)
+    } finally {
+        rmSync(fixture.root, { recursive: true, force: true })
+    }
+})
+
+test("allows a clean non-Codex feature branch to push", () => {
+    const fixture = createFixture()
+    try {
+        runGit(fixture.linked, ["switch", "-C", "fix/ordinary-feature"])
+        const result = runGuard(fixture.linked, "push")
+        assert.equal(result.code, 0, result.output)
+        assert.match(result.output, /PASS push/)
     } finally {
         rmSync(fixture.root, { recursive: true, force: true })
     }
