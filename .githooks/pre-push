@@ -3,6 +3,13 @@ set -euo pipefail
 
 ALLOW_PROTECTED_PUSH="${ALLOW_PROTECTED_PUSH:-}"
 
+repo_root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd -P)"
+if ! command -v node >/dev/null 2>&1; then
+  echo "[pre-push] Node.js is required for the worktree safety check." >&2
+  exit 1
+fi
+node "$repo_root/scripts/verify_worktree.mjs" push
+
 deny_ref() {
   local ref="$1"
   case "$ref" in
