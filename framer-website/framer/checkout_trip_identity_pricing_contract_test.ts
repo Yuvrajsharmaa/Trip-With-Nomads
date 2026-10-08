@@ -37,9 +37,15 @@ Deno.test("checkout links and display pricing are ID-first", () => {
   );
   const display = source.slice(displayStart, displayEnd);
   assertStringIncludes(source, "async function resolveTripDisplayIdentity");
+  assertStringIncludes(source, "const tripDisplayIdentityCache");
+  assertStringIncludes(source, "const tripDisplayIdentityInFlight");
   assertStringIncludes(source, "fetchTripContextById(pageTripId)");
   assertStringIncludes(source, "normalizeSlug(pageContext?.slug) === pathSlug");
   assertStringIncludes(source, "fetchTripIdBySlug(pathSlug)");
+  assertStringIncludes(
+    source,
+    'return tripId ? { tripId, slug: "" } : { tripId: "", slug: pathSlug }',
+  );
   assertStringIncludes(display, "await resolveTripDisplayIdentity");
   assertStringIncludes(display, "fetchTripDisplayPrice(identity)");
   assertStringIncludes(

@@ -177,6 +177,9 @@ const BOOKING_ABANDON_LEAD_PREFIX = "__twn_booking_abandon_lead_v1"
 const bookingAbandonLeadInFlight = new Set<string>()
 const tripDisplayCache = new Map<string, { ts: number; data: any }>()
 const tripDisplayInFlight = new Map<string, Promise<any | null>>()
+type TripDisplayIdentity = { tripId: string; slug: string }
+const tripDisplayIdentityCache = new Map<string, { ts: number; data: TripDisplayIdentity }>()
+const tripDisplayIdentityInFlight = new Map<string, Promise<TripDisplayIdentity>>()
 let forcedTripId = ""
 let forcedTripIdPath = ""
 
@@ -1354,51 +1357,91 @@ function getPageScopedTripId(): string {
     return forcedTripIdPath === currentPath ? normalizeTripId(forcedTripId) : ""
 }
 
+function tripDisplayIdentityKey(params: {
+    pathname: string
+    query: URLSearchParams
+    propTripId: string
+    propSlug: string
+}): string {
+    const pathname = String(params.pathname || "")
+    const pathSlug = normalizeSlug(getTripSlugFromPathname(pathname))
+    const isCheckoutPath = pathname.toLowerCase().startsWith("/checkout")
+    return [
+        pathname,
+        pathSlug,
+        normalizeTripId(params.propTripId),
+        normalizeSlug(params.propSlug),
+        getPageScopedTripId(),
+        isCheckoutPath
+            ? normalizeTripId(params.query.get("tripId") || params.query.get("trip_id"))
+            : "",
+        isCheckoutPath ? normalizeSlug(params.query.get("slug")) : "",
+    ].join("::")
+}
+
 async function resolveTripDisplayIdentity(params: {
     pathname: string
     query: URLSearchParams
     propTripId: string
     propSlug: string
-}): Promise<{ tripId: string; slug: string }> {
-    const pathname = String(params.pathname || "")
-    const pathSlug = normalizeSlug(getTripSlugFromPathname(pathname))
+}): Promise<TripDisplayIdentity> {
+    const cacheKey = tripDisplayIdentityKey(params)
+    const now = Date.now()
+    const cached = tripDisplayIdentityCache.get(cacheKey)
+    if (cached && now - cached.ts < 120000) return cached.data
 
-    if (pathSlug) {
-        const pageTripId = normalizeTripId(params.propTripId || getPageScopedTripId())
-        if (pageTripId) {
-            try {
-                const pageContext = await fetchTripContextById(pageTripId)
-                if (normalizeSlug(pageContext?.slug) === pathSlug) {
-                    return { tripId: pageTripId, slug: "" }
+    const inFlight = tripDisplayIdentityInFlight.get(cacheKey)
+    if (inFlight) return inFlight
+
+    const request = (async (): Promise<TripDisplayIdentity> => {
+        const pathname = String(params.pathname || "")
+        const pathSlug = normalizeSlug(getTripSlugFromPathname(pathname))
+
+        if (pathSlug) {
+            const pageTripId = normalizeTripId(params.propTripId || getPageScopedTripId())
+            if (pageTripId) {
+                try {
+                    const pageContext = await fetchTripContextById(pageTripId)
+                    if (normalizeSlug(pageContext?.slug) === pathSlug) {
+                        return { tripId: pageTripId, slug: "" }
+                    }
+                } catch (_) {
+                    // Resolve the current detail route below when the page ID is stale.
                 }
+            }
+
+            try {
+                const tripId = normalizeTripId(await fetchTripIdBySlug(pathSlug))
+                return tripId ? { tripId, slug: "" } : { tripId: "", slug: pathSlug }
             } catch (_) {
-                // Resolve the current detail route below when the page ID is stale.
+                return { tripId: "", slug: pathSlug }
             }
         }
 
-        try {
-            return {
-                tripId: normalizeTripId(await fetchTripIdBySlug(pathSlug)),
-                slug: "",
-            }
-        } catch (_) {
-            return { tripId: "", slug: "" }
-        }
-    }
+        const isCheckoutPath = pathname.toLowerCase().startsWith("/checkout")
+        const tripId = normalizeTripId(
+            (isCheckoutPath
+                ? params.query.get("tripId") || params.query.get("trip_id")
+                : "") ||
+                params.propTripId ||
+                getPageScopedTripId()
+        )
+        const slug = tripId
+            ? ""
+            : params.propSlug || (isCheckoutPath ? String(params.query.get("slug") || "").trim() : "")
 
-    const isCheckoutPath = pathname.toLowerCase().startsWith("/checkout")
-    const tripId = normalizeTripId(
-        (isCheckoutPath
-            ? params.query.get("tripId") || params.query.get("trip_id")
-            : "") ||
-            params.propTripId ||
-            getPageScopedTripId()
-    )
-    const slug = tripId
-        ? ""
-        : params.propSlug || (isCheckoutPath ? String(params.query.get("slug") || "").trim() : "")
+        return { tripId, slug }
+    })()
+        .then((identity) => {
+            tripDisplayIdentityCache.set(cacheKey, { ts: Date.now(), data: identity })
+            return identity
+        })
+        .finally(() => {
+            tripDisplayIdentityInFlight.delete(cacheKey)
+        })
 
-    return { tripId, slug }
+    tripDisplayIdentityInFlight.set(cacheKey, request)
+    return request
 }
 
 function withTextFromState(getText: (store: any) => string, fallback = "—") {
