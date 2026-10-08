@@ -1140,8 +1140,8 @@ serve(async (req) => {
                 await upsertCurrentRow(
                     bookingsSheetId,
                     bookingsSheetTab,
-                    "Booking ID",
-                    String(data.id),
+                    "Booking Ref",
+                    String(data.booking_ref || data.id || ""),
                     rowValues,
                     BOOKING_HEADERS,
                 )

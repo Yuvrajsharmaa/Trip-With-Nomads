@@ -1,22 +1,16 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2"
-import { appendHistoryRowOnce, sheetsEnabled, upsertCurrentRow } from "../_shared/sheets.ts"
 import {
-    ABANDONED_LEAD_HEADERS,
-    buildAbandonedLeadSheetRow,
-    buildInviteLeadSheetRow,
-    buildLeadSheetRow,
-    buildMasterLeadSheetRow,
-    LEAD_HEADERS,
-    MASTER_LEAD_HEADERS,
-    NTC_INVITE_HEADERS,
-} from "../_shared/lead_sheets.ts"
-import { targetForLead } from "../_shared/lead_routing.ts"
+    projectLeadSheets,
+    projectionConfigurationError,
+} from "../_shared/lead_projection.ts"
 
 const corsHeaders = {
     "Access-Control-Allow-Origin": "*",
     "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
     "Access-Control-Allow-Methods": "POST, OPTIONS",
 }
+
+const LEAD_SHEET_RETRY_FUNCTION = "retry-lead-sheets"
 
 function json(payload: Record<string, unknown>, status = 200) {
     return new Response(JSON.stringify(payload), {
@@ -63,6 +57,8 @@ function normalizeSource(value: unknown): string {
     const source = compact(value).toLowerCase()
     if (source === "waitlist") return "waitlist_popup"
     if (source === "generic_form") return "general_lead"
+    if (source === "corporate" || source === "corporate_enquiry") return "corporate_lead"
+    if (source === "itinerary_download") return "trip_itinerary_download"
     return source || "unknown"
 }
 
@@ -87,6 +83,20 @@ function firstNonEmpty(...values: unknown[]): string {
     return ""
 }
 
+function uniqueTextValues(...values: unknown[]): string[] {
+    const output: string[] = []
+    const seen = new Set<string>()
+    for (const value of values.flatMap((item) => Array.isArray(item) ? item : [item])) {
+        const text = compact(value)
+        if (!text) continue
+        const key = text.toLowerCase()
+        if (seen.has(key)) continue
+        seen.add(key)
+        output.push(text)
+    }
+    return output
+}
+
 function stableObject(value: any): any {
     if (Array.isArray(value)) return value.map(stableObject)
     if (!value || typeof value !== "object") return value
@@ -103,38 +113,6 @@ async function payloadHash(value: any): Promise<string> {
     const bytes = new TextEncoder().encode(JSON.stringify(stableObject(value)))
     const digest = await crypto.subtle.digest("SHA-256", bytes)
     return Array.from(new Uint8Array(digest)).map((byte) => byte.toString(16).padStart(2, "0")).join("")
-}
-
-function routeForLead(
-    source: string,
-    status: string,
-): { sheetId: string; tab: string; note: string } {
-    const route = targetForLead(source, status, {
-        original: Deno.env.get("GOOGLE_SHEET_ID"),
-        ntc: Deno.env.get("GOOGLE_SHEET_ID_NTC"),
-        tripLeads: Deno.env.get("GOOGLE_SHEET_ID_TRIP_LEADS"),
-        custom: Deno.env.get("GOOGLE_SHEET_ID_CUSTOM_TRIPS") ||
-            Deno.env.get("CUSTOM_TRIPS_SHEET_ID"),
-        general: Deno.env.get("GOOGLE_SHEET_ID_GENERAL"),
-        // GOOGLE_SHEET_ID is the existing booking workbook in staging and
-        // production. An explicit override is supported for a future split,
-        // but we do not create or guess another workbook at runtime.
-        booking: Deno.env.get("GOOGLE_SHEET_ID_BOOKINGS") ||
-            Deno.env.get("GOOGLE_SHEET_ID"),
-    })
-    const knownSource = new Set([
-        "waitlist_popup",
-        "booking_invite",
-        "trip_page_lead",
-        "general_lead",
-        "custom_trip_lead",
-        "booking_abandoned",
-    ])
-    return {
-        sheetId: route?.sheetId || "",
-        tab: route?.tab || "",
-        note: knownSource.has(source) ? "" : `unknown_source:${source}`,
-    }
 }
 
 async function findExistingLead(
@@ -315,6 +293,21 @@ async function updateCurrentLead(params: {
     const submissionCount = Number.isFinite(Number(submissionCountLookup.count))
         ? Number(submissionCountLookup.count)
         : Math.max(0, Number(existingLead?.submission_count || 0)) + 1
+    const itineraryName = firstNonEmpty(
+        body?.itinerary_name,
+        body?.trip_name,
+        body?.latest_itinerary_name,
+    )
+    const downloadedItineraries = uniqueTextValues(
+        existingLead?.downloaded_itineraries,
+        itineraryName,
+    )
+    const activity = firstNonEmpty(
+        body?.activity_label,
+        body?.activity,
+        source === "trip_itinerary_download" ? "Downloaded itinerary" : "",
+        existingLead?.latest_activity,
+    )
     const current = {
         id: leadId,
         email: normalizedEmail || compact(existingLead?.email) || null,
@@ -322,12 +315,21 @@ async function updateCurrentLead(params: {
         phone: firstNonEmpty(body?.phone, existingLead?.phone) || null,
         country_code: firstNonEmpty(body?.country_code, existingLead?.country_code) || null,
         instagram_id: firstNonEmpty(body?.instagram_id, existingLead?.instagram_id) || null,
+        company_name: firstNonEmpty(
+            body?.company_name,
+            body?.company,
+            body?.group_name,
+            existingLead?.company_name,
+        ) || null,
         latest_reason: firstNonEmpty(
             body?.reason,
             existingLead?.latest_reason,
             existingLead?.reason,
         ) || null,
         notes: firstNonEmpty(body?.notes, existingLead?.notes) || null,
+        latest_activity: activity || null,
+        latest_itinerary_name: itineraryName || compact(existingLead?.latest_itinerary_name) || null,
+        downloaded_itineraries: downloadedItineraries,
         source,
         latest_source: source,
         page_url: firstNonEmpty(body?.page_url, existingLead?.page_url) || null,
@@ -410,94 +412,6 @@ async function updateCurrentLead(params: {
     return result.data
 }
 
-async function projectLead(params: {
-    lead: any | null
-    submission: any
-    submissionId: string
-    source: string
-    status: string
-    notes: string
-}) {
-    if (!sheetsEnabled()) {
-        return { sheetLogged: false, sheetStatus: "not_required" }
-    }
-    const route = routeForLead(params.source, params.status)
-    if (!route.sheetId) {
-        return { sheetLogged: false, sheetStatus: "not_required" }
-    }
-
-    const isHistoryEvent = params.status === "partial_fill" ||
-        params.source === "booking_abandoned"
-    if (isHistoryEvent) {
-        const values = buildAbandonedLeadSheetRow({
-            submission: {
-                ...params.submission,
-                submission_id: params.submissionId,
-                lead_id: params.lead?.id || "",
-                reason: params.submission.reason || params.status || "partial_fill",
-            },
-        })
-        await appendHistoryRowOnce(
-            route.sheetId,
-            route.tab,
-            "Submission Key",
-            params.submissionId,
-            values,
-            ABANDONED_LEAD_HEADERS,
-        )
-    } else {
-        if (!params.lead) {
-            throw new Error("Current lead row is missing before Sheet projection")
-        }
-        const routeNotes = [route.note, params.notes].filter(Boolean).join(" | ")
-        const isInviteRoute = route.tab === "NTC - Invites"
-        const values = isInviteRoute
-            ? buildInviteLeadSheetRow({
-                lead: params.lead,
-                submission: params.submission,
-                latestSubmissionId: params.submissionId,
-                notes: routeNotes,
-            })
-            : buildLeadSheetRow({
-                lead: params.lead,
-                latestSubmissionId: params.submissionId,
-                latestSubmission: params.submission,
-                notes: routeNotes,
-            })
-        await upsertCurrentRow(
-            route.sheetId,
-            route.tab,
-            "Email",
-            normalizeEmail(params.lead.email),
-            values,
-            isInviteRoute ? NTC_INVITE_HEADERS : LEAD_HEADERS,
-        )
-    }
-    const masterSheetId = compact(Deno.env.get("GOOGLE_SHEET_ID_MASTER"))
-    let masterLogged = false
-    if (masterSheetId && params.lead && params.source !== "booking_abandoned") {
-        await upsertCurrentRow(
-            masterSheetId,
-            "Master Leads",
-            // Master Leads is a current-contact overview. Match it by the
-            // normalized email identity rather than the internal lead UUID so
-            // legacy identity repairs cannot create another visible row.
-            "Email",
-            normalizeEmail(params.lead.email),
-            buildMasterLeadSheetRow({
-                lead: params.lead,
-                status: params.status,
-                latestSubmissionId: params.submissionId,
-                latestSubmission: params.submission,
-            }),
-            MASTER_LEAD_HEADERS,
-        )
-        masterLogged = true
-    }
-
-    return { sheetLogged: true, masterLogged, sheetStatus: "synced" }
-}
-
 Deno.serve(async (req) => {
     if (req.method === "OPTIONS") {
         return new Response("ok", { headers: corsHeaders })
@@ -544,6 +458,11 @@ Deno.serve(async (req) => {
             page_url: compact(body?.page_url),
             trip_id: compact(body?.trip_id),
             trip_slug: inferredTripSlug,
+            trip_name: compact(body?.trip_name),
+            itinerary_name: compact(body?.itinerary_name),
+            activity_type: compact(body?.activity_type),
+            activity_label: compact(body?.activity_label || body?.activity),
+            company_name: compact(body?.company_name || body?.company || body?.group_name),
             utm_source: compact(body?.utm_source),
             utm_medium: compact(body?.utm_medium),
             utm_campaign: compact(body?.utm_campaign),
@@ -551,6 +470,7 @@ Deno.serve(async (req) => {
             utm_content: compact(body?.utm_content),
             reason: compact(body?.reason || (partialFill ? "partial_fill" : "")),
             notes: compact(body?.notes),
+            captured_at: now,
         }
         const hash = await payloadHash(submissionPayload)
 
@@ -599,6 +519,8 @@ Deno.serve(async (req) => {
                     normalized_email: normalizedEmail || null,
                     source,
                     status,
+                    activity_type: compact(body?.activity_type) || null,
+                    itinerary_name: compact(body?.itinerary_name) || null,
                     payload_hash: hash,
                     payload: submissionPayload,
                     sheet_sync_status: "pending",
@@ -660,15 +582,15 @@ Deno.serve(async (req) => {
             }
         }
 
-        const routeNotes = ""
         try {
-            const projection = await projectLead({
+            const projection = await projectLeadSheets({
                 lead,
                 submission: submissionPayload,
                 submissionId,
                 source,
                 status,
-                notes: routeNotes,
+                notes: "",
+                supabase,
             })
             await supabase.from("lead_submissions").update({
                 sheet_sync_status: projection.sheetStatus,
@@ -684,15 +606,20 @@ Deno.serve(async (req) => {
                 replayed: Boolean(existingSubmission.data),
             })
         } catch (sheetError: any) {
+            const sheetStatus = projectionConfigurationError(sheetError?.message || sheetError)
+            const errorCode = sheetStatus === "configuration_missing"
+                ? "SHEET_CONFIGURATION_MISSING"
+                : "SHEET_SYNC_FAILED"
             await supabase.from("lead_submissions").update({
-                sheet_sync_status: "failed",
+                sheet_sync_status: sheetStatus,
                 error_message: compact(sheetError?.message || sheetError).slice(0, 500),
                 updated_at: new Date().toISOString(),
             }).eq("submission_id", submissionId)
             return json({
                 ok: false,
                 error: "Lead saved; Sheet projection failed and can be retried",
-                code: "SHEET_SYNC_FAILED",
+                code: errorCode,
+                retry_function: LEAD_SHEET_RETRY_FUNCTION,
                 lead_id: leadId || null,
                 submission_id: submissionId,
             }, 503)

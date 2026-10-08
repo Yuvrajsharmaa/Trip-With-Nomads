@@ -2,7 +2,6 @@ import { assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts"
 import { configuredLeadLocations, targetForLead } from "./lead_routing.ts"
 
 const env = {
-    original: "original-sheet",
     ntc: "ntc-sheet",
     tripLeads: "trip-leads-sheet",
     trips: "legacy-trip-leads-sheet",
@@ -24,6 +23,10 @@ Deno.test("lead routing preserves existing destinations and partial history", ()
         sheetId: "trip-leads-sheet",
         tab: "Leads",
     })
+    assertEquals(targetForLead("trip_itinerary_download", "submitted", env), {
+        sheetId: "trip-leads-sheet",
+        tab: "Leads",
+    })
     assertEquals(targetForLead("custom_trip_lead", "submitted", env), {
         sheetId: "custom-sheet",
         tab: "Custom Trip Leads",
@@ -39,16 +42,12 @@ Deno.test("lead routing preserves existing destinations and partial history", ()
 })
 
 Deno.test("custom route is not guessed when its workbook is not configured", () => {
-    assertEquals(
-        targetForLead("custom_trip_lead", "submitted", {
-            original: "original-sheet",
-            general: "general-sheet",
-        }),
-        {
-            sheetId: "general-sheet",
-            tab: "Leads",
-        },
-    )
+    assertEquals(targetForLead("custom_trip_lead", "submitted", {
+        general: "general-sheet",
+    }), null)
+    assertEquals(targetForLead("trip_page_lead", "submitted", {
+        general: "general-sheet",
+    }), null)
 })
 
 Deno.test("configured lead locations are unique and never invent tabs", () => {
@@ -62,14 +61,12 @@ Deno.test("configured lead locations are unique and never invent tabs", () => {
         { sheetId: "general-sheet", tab: "Leads" },
         { sheetId: "general-sheet", tab: "Abandoned Leads" },
         { sheetId: "booking-sheet", tab: "Abandoned Bookings" },
-        { sheetId: "original-sheet", tab: "Leads" },
     ])
 })
 
 Deno.test("trip-page leads fall back to the legacy trip-leads alias, never the booking route", () => {
     assertEquals(
         targetForLead("trip_page_lead", "submitted", {
-            original: "booking-sheet",
             trips: "legacy-trip-leads-sheet",
             general: "general-sheet",
         }),

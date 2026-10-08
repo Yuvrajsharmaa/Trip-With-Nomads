@@ -7,7 +7,7 @@ import {
 } from "../_shared/booking_callback_sheets.ts"
 import {
     appendRow,
-    appendHistoryRowOnce,
+    appendHistoryRowOnceByFingerprint,
     sheetsEnabled,
     upsertCurrentRow,
 } from "../_shared/sheets.ts"
@@ -859,8 +859,8 @@ async function syncPaymentSheets(params: {
     await upsertCurrentRow(
         sheetId,
         bookingsTab,
-        "Booking ID",
-        String(params.booking.id),
+        "Booking Ref",
+        String(params.booking.booking_ref || params.booking.id || ""),
         currentRow,
         BOOKING_HEADERS,
     )
@@ -884,13 +884,21 @@ async function syncPaymentSheets(params: {
         reconciliationResult: params.reconciliationResult,
         notes: params.notes,
     })
-    await appendHistoryRowOnce(
+    await appendHistoryRowOnceByFingerprint(
         sheetId,
         historyTab,
-        "Event ID",
-        params.eventId,
         historyRow,
         BOOKING_CALLBACK_HEADERS,
+        [
+            "Payment Date",
+            "Booking Ref",
+            "Trip",
+            "Departure Date",
+            "Email",
+            "Amount Received",
+            "Expected Amount",
+            "Payment Result",
+        ],
     )
     return true
 }

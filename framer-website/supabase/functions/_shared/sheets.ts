@@ -718,6 +718,83 @@ export async function appendHistoryRowOnce(
     throw new Error(`History Sheet row append returned no row for ${tab}`)
 }
 
+export function rowMatchesColumnFingerprint(
+    row: any[],
+    header: string[],
+    values: (string | number | null)[],
+    columns: string[],
+    valuesHeader: string[] = header,
+): boolean {
+    return columns.every((column) => {
+        const index = header.findIndex((cell) =>
+            String(cell || "").trim().toLowerCase() === String(column || "").trim().toLowerCase()
+        )
+        const valueIndex = valuesHeader.findIndex((cell) =>
+            String(cell || "").trim().toLowerCase() === String(column || "").trim().toLowerCase()
+        )
+        if (index < 0 || valueIndex < 0) return false
+        return String(row[index] ?? "").trim() === String(values[valueIndex] ?? "").trim()
+    })
+}
+
+export async function appendHistoryRowOnceByFingerprint(
+    sheetId: string,
+    tab: string,
+    values: (string | number | null)[],
+    headers: string[],
+    fingerprintColumns: string[],
+): Promise<{ row: number | null; appended: boolean }> {
+    if (!Array.isArray(fingerprintColumns) || fingerprintColumns.length === 0) {
+        throw new Error(`History fingerprint is required for ${tab}`)
+    }
+    if (!sheetsEnabled()) return { row: null, appended: false }
+
+    await ensureTab(tab, sheetId)
+    await ensureHeaders(tab, headers, sheetId)
+    const rows = await readTabValues(sheetId, tab, "A1:ZZ10000")
+    const header = Array.isArray(rows[0])
+        ? rows[0].map((cell) => String(cell ?? "").trim())
+        : []
+    const missingColumn = fingerprintColumns.find((column) =>
+        !header.some((cell) => cell.toLowerCase() === String(column).trim().toLowerCase())
+    )
+    if (missingColumn) {
+        throw new Error(`History fingerprint column not found in ${tab}: ${missingColumn}`)
+    }
+
+    const matches: number[] = []
+    for (let index = 1; index < rows.length; index++) {
+        const row = Array.isArray(rows[index]) ? rows[index] : []
+        if (rowMatchesColumnFingerprint(row, header, values, fingerprintColumns, headers)) {
+            matches.push(index + 1)
+        }
+    }
+    if (matches.length > 1) {
+        throw new Error(`Multiple history Sheet rows match fingerprint in ${tab}`)
+    }
+    if (matches.length === 1) return { row: matches[0], appended: false }
+
+    const row = await appendRow(sheetId, tab, values, headers)
+    if (row) return { row, appended: true }
+
+    const rechecked = await readTabValues(sheetId, tab, "A1:ZZ10000")
+    const recheckedHeader = Array.isArray(rechecked[0])
+        ? rechecked[0].map((cell) => String(cell ?? "").trim())
+        : header
+    const recheckedMatches: number[] = []
+    for (let index = 1; index < rechecked.length; index++) {
+        const candidate = Array.isArray(rechecked[index]) ? rechecked[index] : []
+        if (rowMatchesColumnFingerprint(candidate, recheckedHeader, values, fingerprintColumns, headers)) {
+            recheckedMatches.push(index + 1)
+        }
+    }
+    if (recheckedMatches.length > 1) {
+        throw new Error(`Multiple history Sheet rows match fingerprint in ${tab}`)
+    }
+    if (recheckedMatches.length === 1) return { row: recheckedMatches[0], appended: true }
+    throw new Error(`History Sheet row append returned no row for ${tab}`)
+}
+
 export async function safeUpdateRow(
     sheetId: string,
     tab: string,

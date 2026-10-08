@@ -4,7 +4,6 @@ export type LeadLocation = {
 }
 
 export type LeadSheetEnvironment = {
-    original?: string | null
     ntc?: string | null
     tripLeads?: string | null
     // Backward-compatible alias for older callers. New callers should use
@@ -38,14 +37,14 @@ export function targetForLead(
 
     if (normalizedSource === "booking_invite") {
         return location(
-            env.ntc || env.original,
+            env.ntc,
             isPartial ? "Abandoned Leads" : "NTC - Invites",
         )
     }
 
-    if (normalizedSource === "trip_page_lead") {
+    if (normalizedSource === "trip_page_lead" || normalizedSource === "trip_itinerary_download") {
         return location(
-            env.tripLeads || env.trips || env.general || env.original,
+            env.tripLeads || env.trips,
             isPartial ? "Abandoned Leads" : "Leads",
         )
     }
@@ -56,7 +55,7 @@ export function targetForLead(
         return location(env.booking, "Abandoned Bookings")
     }
 
-    if (normalizedSource === "custom_trip_lead" && clean(env.custom)) {
+    if (normalizedSource === "custom_trip_lead") {
         // This route is enabled only when a configured custom workbook exists.
         // The Sheet helper still validates that the existing tab and headers are
         // present; it never creates them.
@@ -67,7 +66,7 @@ export function targetForLead(
     }
 
     return location(
-        env.general || env.original,
+        env.general,
         isPartial ? "Abandoned Leads" : "Leads",
     )
 }
@@ -83,7 +82,6 @@ export function configuredLeadLocations(env: LeadSheetEnvironment): LeadLocation
         location(env.general, "Leads"),
         location(env.general, "Abandoned Leads"),
         location(env.booking, "Abandoned Bookings"),
-        location(env.original, "Leads"),
     ]
     return candidates.filter((candidate, index, all): candidate is LeadLocation =>
         Boolean(candidate) &&
