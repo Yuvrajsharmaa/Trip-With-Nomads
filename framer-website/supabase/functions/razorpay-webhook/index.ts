@@ -3,6 +3,7 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2"
 import { buildBookingSheetRow, BOOKING_HEADERS } from "../_shared/booking_sheets.ts"
 import {
     BOOKING_CALLBACK_HEADERS,
+    resolveBookingPaymentHistoryTab,
     buildBookingCallbackRow,
 } from "../_shared/booking_callback_sheets.ts"
 import {
@@ -877,9 +878,13 @@ async function syncPaymentSheets(params: {
         BOOKING_HEADERS,
     )
 
-    const historyTab = String(params.eventName === "payment.failed"
-        ? firstNonEmpty(Deno.env.get("BOOKING_FAILED_SHEET_TAB"), "Bookings_Failed")
-        : firstNonEmpty(Deno.env.get("BOOKING_SUCCESS_SHEET_TAB"), "Bookings_Success"))
+    const historyTab = resolveBookingPaymentHistoryTab(
+        firstNonEmpty(
+            Deno.env.get("BOOKING_PAYMENT_HISTORY_SHEET_TAB"),
+            Deno.env.get("BOOKING_FAILED_SHEET_TAB"),
+            Deno.env.get("BOOKING_SUCCESS_SHEET_TAB"),
+        ),
+    )
     const historyRow = buildBookingCallbackRow({
         booking: sheetBooking,
         eventId: params.eventId,

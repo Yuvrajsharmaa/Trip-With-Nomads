@@ -1,4 +1,4 @@
-import { assert, assertEquals, assertMatch } from "https://deno.land/std@0.224.0/assert/mod.ts"
+import { assert, assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts"
 import {
     ABANDONED_BOOKING_HEADERS,
     BOOKING_HEADERS,
@@ -54,10 +54,11 @@ Deno.test("booking current-state row keeps money readable and hides provider fie
     })
 
     assertEquals(row.length, BOOKING_HEADERS.length)
-    assertMatch(String(row[0]), /^11 Mar 2026, 6:04 PM IST$/)
+    assertEquals(typeof row[0], "number")
+    assertEquals(row[0] as unknown, 46092.75342592593)
     assertEquals(row[1], "TWN-ABCD1234")
     assertEquals(row[2], "Summer Spiti")
-    assertEquals(row[3], "9 May 2026")
+    assertEquals(row[3] as unknown, 46151)
     assertEquals(row[4], "Yuvraj Sharma")
     assertEquals(row[5], "yuvraj@example.com")
     assertEquals(row[6], "+91 9999999999")
@@ -105,12 +106,13 @@ Deno.test("abandoned booking rows keep checkout context sales-readable", () => {
     })
 
     assertEquals(row.length, ABANDONED_BOOKING_HEADERS.length)
-    assertMatch(String(row[0]), /^8 Oct 2026, 3:30 PM IST$/)
+    assertEquals(typeof row[0], "number")
+    assertEquals(row[0] as unknown, 46303.645833333336)
     assertEquals(row[1], "Guest User")
     assertEquals(row[2], "guest@example.com")
     assertEquals(row[3], "+91 9876543210")
     assertEquals(row[4], "Winter Spiti Expedition")
-    assertEquals(row[5], "20 Dec 2026")
+    assertEquals(row[5] as unknown, 46376)
     assertEquals(row[6], "Guest User (Double · SUV)")
     assertEquals(row[7], "25% deposit")
     assertEquals(row[8], "Checkout abandoned before payment")

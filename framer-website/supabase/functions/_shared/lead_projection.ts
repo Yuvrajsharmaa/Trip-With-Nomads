@@ -1,7 +1,7 @@
 import {
     appendHistoryRowOnceByFingerprint,
     sheetsEnabled,
-    upsertCurrentRow,
+    upsertCurrentRowByAnyKey,
 } from "./sheets.ts"
 import {
     ABANDONED_LEAD_HEADERS,
@@ -13,11 +13,9 @@ import {
     MASTER_LEAD_HEADERS,
     NTC_INVITE_HEADERS,
 } from "./lead_sheets.ts"
-import {
-    ABANDONED_BOOKING_HEADERS,
-    buildAbandonedBookingSheetRow,
-} from "./booking_sheets.ts"
+import { ABANDONED_BOOKING_HEADERS, buildAbandonedBookingSheetRow } from "./booking_sheets.ts"
 import { targetForLead } from "./lead_routing.ts"
+import { runIndependentSheetProjections } from "./projection_execution.ts"
 
 export type LeadProjectionParams = {
     lead: any | null
@@ -32,7 +30,21 @@ export type LeadProjectionParams = {
 export type LeadProjectionResult = {
     sheetLogged: boolean
     masterLogged: boolean
-    sheetStatus: "synced"
+    sheetStatus: "synced" | "failed" | "configuration_missing"
+    errorMessage?: string
+}
+
+export function masterLeadMatchKeys(
+    values: (string | number | null)[],
+): { column: string; value: string }[] {
+    const emailIndex = MASTER_LEAD_HEADERS.indexOf("Email")
+    const phoneIndex = MASTER_LEAD_HEADERS.indexOf("Phone")
+    const email = String(values[emailIndex] ?? "").trim().toLowerCase()
+    const phone = String(values[phoneIndex] ?? "").trim()
+    return [
+        ...(email ? [{ column: "Email", value: email }] : []),
+        ...(phone ? [{ column: "Phone", value: phone }] : []),
+    ]
 }
 
 function compact(value: unknown): string {
@@ -41,6 +53,14 @@ function compact(value: unknown): string {
 
 function normalizeEmail(value: unknown): string {
     return compact(value).toLowerCase()
+}
+
+export function isPhoneOnlyLeadContact(
+    source: string,
+    submission: Record<string, any>,
+): boolean {
+    return !normalizeEmail(submission?.email) && Boolean(compact(submission?.phone)) &&
+        (source === "booking_invite" || source === "trip_itinerary_download")
 }
 
 function routeForLead(source: string, status: string) {
@@ -183,112 +203,147 @@ export async function projectLeadSheets(
         throw new Error("Sheet configuration missing: SHEETS_WRITE_ENABLED is not enabled")
     }
 
-    const route = routeForLead(params.source, params.status)
-    const isHistoryEvent = params.status === "partial_fill" ||
-        params.source === "booking_abandoned"
+    const result = await runIndependentSheetProjections(
+        async () => {
+            const route = routeForLead(params.source, params.status)
+            const isHistoryEvent = params.status === "partial_fill" ||
+                params.source === "booking_abandoned"
 
-    if (isHistoryEvent) {
-        const isBookingAbandonment = params.source === "booking_abandoned"
-        const submission = {
-            ...params.submission,
-            submission_id: params.submissionId,
-            lead_id: params.lead?.id || "",
-            reason: params.submission.reason || params.status || "partial_fill",
-        }
-        const values = isBookingAbandonment
-            ? buildAbandonedBookingSheetRow({ submission })
-            : buildAbandonedLeadSheetRow({ submission })
-        const historyHeaders = isBookingAbandonment
-            ? ABANDONED_BOOKING_HEADERS
-            : ABANDONED_LEAD_HEADERS
-        const fingerprintColumns = isBookingAbandonment
-            ? ["Captured At", "Email", "Phone", "Trip", "Departure Date", "Reason"]
-            : projectionFingerprintColumns()
-        await runProjectionAttempt({
-            projection: params,
-            sheetId: route.sheetId,
-            tab: route.tab,
-            projectionType: "history",
-            projectionKey: params.submissionId,
-            values,
-            action: () => appendHistoryRowOnceByFingerprint(
-                route.sheetId,
-                route.tab,
-                values,
-                historyHeaders,
-                fingerprintColumns,
-            ),
-        })
-    } else {
-        if (!params.lead) {
-            throw new Error("Current lead row is missing before Sheet projection")
-        }
-        const isInviteRoute = route.tab === "NTC - Invites"
-        const values = isInviteRoute
-            ? buildInviteLeadSheetRow({
-                lead: params.lead,
-                submission: params.submission,
-                latestSubmissionId: params.submissionId,
-                notes: params.notes,
-            })
-            : buildLeadSheetRow({
-                lead: params.lead,
-                latestSubmissionId: params.submissionId,
-                latestSubmission: params.submission,
-                notes: params.notes,
-            })
-        await runProjectionAttempt({
-            projection: params,
-            sheetId: route.sheetId,
-            tab: route.tab,
-            projectionType: "current",
-            projectionKey: normalizeEmail(params.lead.email),
-            values,
-            action: () => upsertCurrentRow(
-                route.sheetId,
-                route.tab,
-                "Email",
-                normalizeEmail(params.lead.email),
-                values,
-                isInviteRoute ? NTC_INVITE_HEADERS : LEAD_HEADERS,
-                { moveUpdatedRowToBottom: true },
-            ),
-        })
-    }
+            if (isHistoryEvent) {
+                const isBookingAbandonment = params.source === "booking_abandoned"
+                const submission = {
+                    ...params.submission,
+                    submission_id: params.submissionId,
+                    lead_id: params.lead?.id || "",
+                    reason: params.submission.reason || params.status || "partial_fill",
+                }
+                const values = isBookingAbandonment
+                    ? buildAbandonedBookingSheetRow({ submission })
+                    : buildAbandonedLeadSheetRow({ submission })
+                const historyHeaders = isBookingAbandonment
+                    ? ABANDONED_BOOKING_HEADERS
+                    : ABANDONED_LEAD_HEADERS
+                const fingerprintColumns = isBookingAbandonment
+                    ? ["Captured At", "Email", "Phone", "Trip", "Departure Date", "Reason"]
+                    : projectionFingerprintColumns()
+                await runProjectionAttempt({
+                    projection: params,
+                    sheetId: route.sheetId,
+                    tab: route.tab,
+                    projectionType: "history",
+                    projectionKey: params.submissionId,
+                    values,
+                    action: () =>
+                        appendHistoryRowOnceByFingerprint(
+                            route.sheetId,
+                            route.tab,
+                            values,
+                            historyHeaders,
+                            fingerprintColumns,
+                        ),
+                })
+                return
+            }
 
-    let masterLogged = false
-    const masterSheetId = compact(Deno.env.get("GOOGLE_SHEET_ID_MASTER"))
-    if (params.lead && params.source !== "booking_abandoned") {
-        if (!masterSheetId) {
-            throw new Error("Sheet route configuration missing: GOOGLE_SHEET_ID_MASTER")
-        }
-        const masterValues = buildMasterLeadSheetRow({
-                lead: params.lead,
+            const phoneOnlyContact = isPhoneOnlyLeadContact(
+                params.source,
+                params.submission,
+            )
+            if (!params.lead && !phoneOnlyContact) {
+                throw new Error("Current lead row is missing before Sheet projection")
+            }
+            const lead = params.lead || {}
+            const isInviteRoute = route.tab === "NTC - Invites"
+            const values = isInviteRoute
+                ? buildInviteLeadSheetRow({
+                    lead,
+                    submission: params.submission,
+                    latestSubmissionId: params.submissionId,
+                    notes: params.notes,
+                })
+                : buildLeadSheetRow({
+                    lead,
+                    latestSubmissionId: params.submissionId,
+                    latestSubmission: params.submission,
+                    notes: params.notes,
+                })
+            await runProjectionAttempt({
+                projection: params,
+                sheetId: route.sheetId,
+                tab: route.tab,
+                projectionType: "current",
+                projectionKey: normalizeEmail(lead.email) ||
+                    compact(lead.phone || params.submission.phone),
+                values,
+                action: () =>
+                    upsertCurrentRowByAnyKey(
+                        route.sheetId,
+                        route.tab,
+                        masterLeadMatchKeys(values),
+                        values,
+                        isInviteRoute ? NTC_INVITE_HEADERS : LEAD_HEADERS,
+                        { moveUpdatedRowToBottom: true },
+                    ),
+            })
+        },
+        async () => {
+            const masterSheetId = compact(Deno.env.get("GOOGLE_SHEET_ID_MASTER"))
+            if (!masterSheetId) {
+                throw new Error("Sheet route configuration missing: GOOGLE_SHEET_ID_MASTER")
+            }
+            const masterValues = buildMasterLeadSheetRow({
+                lead: params.lead || {},
                 status: params.status,
                 latestSubmissionId: params.submissionId,
                 latestSubmission: params.submission,
             })
-        await runProjectionAttempt({
-            projection: params,
-            sheetId: masterSheetId,
-            tab: "Master Leads",
-            projectionType: "master",
-            projectionKey: normalizeEmail(params.lead.email),
-            values: masterValues,
-            action: () => upsertCurrentRow(
-                masterSheetId,
-                "Master Leads",
-                "Email",
-                normalizeEmail(params.lead.email),
-                masterValues,
-                MASTER_LEAD_HEADERS,
-                { moveUpdatedRowToBottom: true },
-            ),
-        })
-        masterLogged = true
-    }
+            const masterKeys = masterLeadMatchKeys(masterValues)
+            const masterProjectionKey =
+                masterKeys.map((key) => `${key.column}:${key.value}`).join("|") ||
+                params.submissionId
+            await runProjectionAttempt({
+                projection: params,
+                sheetId: masterSheetId,
+                tab: "Master Leads",
+                projectionType: "master",
+                projectionKey: masterProjectionKey,
+                values: masterValues,
+                action: () =>
+                    masterKeys.length > 0
+                        ? upsertCurrentRowByAnyKey(
+                            masterSheetId,
+                            "Master Leads",
+                            masterKeys,
+                            masterValues,
+                            MASTER_LEAD_HEADERS,
+                            { moveUpdatedRowToBottom: true },
+                        )
+                        : appendHistoryRowOnceByFingerprint(
+                            masterSheetId,
+                            "Master Leads",
+                            masterValues,
+                            MASTER_LEAD_HEADERS,
+                            [
+                                "Captured At",
+                                "Name",
+                                "Trip / Itinerary",
+                                "Reason / Activity",
+                                "Source",
+                            ],
+                        ),
+            })
+        },
+    )
 
-    return { sheetLogged: true, masterLogged, sheetStatus: "synced" }
+    const errorMessage = result.errors.join("; ")
+    return {
+        sheetLogged: result.sheetLogged,
+        masterLogged: result.masterLogged,
+        sheetStatus: result.errors.length === 0
+            ? "synced"
+            : projectionConfigurationError(errorMessage),
+        ...(errorMessage ? { errorMessage } : {}),
+    }
 }
 
 export function projectionConfigurationError(

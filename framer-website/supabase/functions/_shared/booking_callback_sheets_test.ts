@@ -1,5 +1,18 @@
-import { assert, assertEquals, assertMatch } from "https://deno.land/std@0.224.0/assert/mod.ts"
-import { BOOKING_CALLBACK_HEADERS, buildBookingCallbackRow } from "./booking_callback_sheets.ts"
+import { assert, assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts"
+import {
+    BOOKING_CALLBACK_HEADERS,
+    BOOKING_PAYMENT_HISTORY_TAB,
+    buildBookingCallbackRow,
+    resolveBookingPaymentHistoryTab,
+} from "./booking_callback_sheets.ts"
+
+Deno.test("all payment outcomes route to one human-readable history tab", () => {
+    assertEquals(BOOKING_PAYMENT_HISTORY_TAB, "Payment History")
+    assertEquals(resolveBookingPaymentHistoryTab(undefined), "Payment History")
+    assertEquals(resolveBookingPaymentHistoryTab("Payment History"), "Payment History")
+    assertEquals(resolveBookingPaymentHistoryTab("Bookings_Success"), "Payment History")
+    assertEquals(resolveBookingPaymentHistoryTab("Bookings_Failed"), "Payment History")
+})
 
 Deno.test("payment history uses a compact event-oriented contract", () => {
     assertEquals(BOOKING_CALLBACK_HEADERS, [
@@ -40,10 +53,11 @@ Deno.test("payment history row preserves money and omits provider identifiers", 
     })
 
     assertEquals(row.length, BOOKING_CALLBACK_HEADERS.length)
-    assertMatch(String(row[0]), /^11 Mar 2026, 6:04 PM IST$/)
+    assertEquals(typeof row[0], "number")
+    assertEquals(row[0] as unknown, 46092.75342592593)
     assertEquals(row[1], "TWN-2026-00123")
     assertEquals(row[2], "Summer Spiti")
-    assertEquals(row[3], "9 May 2026")
+    assertEquals(row[3] as unknown, 46151)
     assertEquals(row[4], "Guest User")
     assertEquals(row[5], "guest@example.com")
     assertEquals(row[6], 17323.95)

@@ -1,4 +1,4 @@
-const BOOKING_TIMEZONE = "Asia/Kolkata"
+import { dateToSheetSerial, timestampToSheetSerial } from "./sheet_dates.ts"
 
 export const BOOKING_HEADERS = [
     "Last Updated",
@@ -39,37 +39,6 @@ function toNumber(value: any): number {
 
 function compact(value: any): string {
     return String(value ?? "").trim()
-}
-
-function formatTimestampIST(value?: string): string {
-    const date = value ? new Date(value) : new Date()
-    if (Number.isNaN(date.getTime())) return compact(value)
-    const parts = new Intl.DateTimeFormat("en-IN", {
-        timeZone: BOOKING_TIMEZONE,
-        day: "numeric",
-        month: "short",
-        year: "numeric",
-        hour: "numeric",
-        minute: "2-digit",
-        hour12: true,
-    }).formatToParts(date)
-    const get = (type: string) => parts.find((part) => part.type === type)?.value || ""
-    return `${get("day")} ${get("month")} ${get("year")}, ${get("hour")}:${get("minute")} ${get("dayPeriod").toUpperCase()} IST`
-}
-
-function formatDeparture(value: any): string {
-    const raw = compact(value)
-    if (!raw) return ""
-    const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(raw)
-    if (!match) return raw
-    const date = new Date(`${raw}T00:00:00Z`)
-    if (Number.isNaN(date.getTime())) return raw
-    return new Intl.DateTimeFormat("en-IN", {
-        timeZone: BOOKING_TIMEZONE,
-        day: "numeric",
-        month: "short",
-        year: "numeric",
-    }).format(date)
 }
 
 function humanize(value: any): string {
@@ -172,10 +141,10 @@ export function buildBookingSheetRow(params: {
     ].filter(Boolean).join(" | ")
 
     return [
-        formatTimestampIST(params.updatedAt || booking.updated_at || new Date().toISOString()),
+        timestampToSheetSerial(params.updatedAt || booking.updated_at || new Date().toISOString()),
         compact(booking.booking_ref),
         compact(booking.trip_name || booking.trip_title),
-        formatDeparture(booking.departure_date || booking.date),
+        dateToSheetSerial(booking.departure_date || booking.date),
         compact(booking.name || booking.guest_name),
         compact(booking.email).toLowerCase(),
         formatPhone(booking.country_code, booking.phone),
@@ -196,12 +165,12 @@ export function buildAbandonedBookingSheetRow(params: {
 }) {
     const submission = params.submission || {}
     return [
-        formatTimestampIST(params.capturedAt || submission.captured_at || submission.created_at),
+        timestampToSheetSerial(params.capturedAt || submission.captured_at || submission.created_at),
         compact(submission.name),
         compact(submission.email).toLowerCase(),
         formatPhone(submission.country_code, submission.phone),
         compact(submission.trip_name || submission.trip_title || submission.trip_slug),
-        formatDeparture(submission.departure_date || submission.date),
+        dateToSheetSerial(submission.departure_date || submission.date),
         formatTravellerSummary(
             Array.isArray(submission.travellers) ? submission.travellers : [],
             submission.traveller_count || submission.travellers_count,
