@@ -1,8 +1,5 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2"
-import {
-    projectLeadSheets,
-    projectionConfigurationError,
-} from "../_shared/lead_projection.ts"
+import { projectionConfigurationError, projectLeadSheets } from "../_shared/lead_projection.ts"
 
 const corsHeaders = {
     "Access-Control-Allow-Origin": "*",
@@ -28,7 +25,8 @@ function isAuthorized(req: Request): boolean {
     const retrySecret = compact(Deno.env.get("LEAD_SHEET_RETRY_SECRET"))
     return Boolean(
         (serviceRoleKey && authorization === `Bearer ${serviceRoleKey}`) ||
-            (retrySecret && (authorization === `Bearer ${retrySecret}` || suppliedSecret === retrySecret)),
+            (retrySecret &&
+                (authorization === `Bearer ${retrySecret}` || suppliedSecret === retrySecret)),
     )
 }
 
@@ -71,7 +69,8 @@ Deno.serve(async (req) => {
                 let lead: any | null = null
                 const leadId = compact(submission?.lead_id)
                 if (leadId) {
-                    const leadResult = await supabase.from("leads").select("*").eq("id", leadId).maybeSingle()
+                    const leadResult = await supabase.from("leads").select("*").eq("id", leadId)
+                        .maybeSingle()
                     if (leadResult.error) throw leadResult.error
                     lead = leadResult.data
                 }
@@ -111,13 +110,35 @@ Deno.serve(async (req) => {
                 })
                 const updated = await supabase.from("lead_submissions").update({
                     sheet_sync_status: projection.sheetStatus,
-                    sheet_synced_at: new Date().toISOString(),
-                    error_message: null,
+                    sheet_synced_at: projection.sheetStatus === "synced"
+                        ? new Date().toISOString()
+                        : null,
+                    error_message: projection.errorMessage || null,
                     updated_at: new Date().toISOString(),
                 }).eq("submission_id", submissionId)
                 if (updated.error) throw updated.error
-                synced++
-                results.push({ submission_id: submissionId, status: "synced" })
+                if (projection.sheetStatus === "synced") {
+                    synced++
+                    results.push({
+                        submission_id: submissionId,
+                        status: "synced",
+                        sheet_logged: projection.sheetLogged,
+                        master_logged: projection.masterLogged,
+                    })
+                } else {
+                    if (projection.sheetStatus === "configuration_missing") {
+                        configurationMissing++
+                    } else {
+                        failed++
+                    }
+                    results.push({
+                        submission_id: submissionId,
+                        status: projection.sheetStatus,
+                        sheet_logged: projection.sheetLogged,
+                        master_logged: projection.masterLogged,
+                        error: projection.errorMessage || "Sheet projection failed",
+                    })
+                }
             } catch (error: any) {
                 const status = projectionConfigurationError(error?.message || error)
                 if (status === "configuration_missing") configurationMissing++
@@ -128,7 +149,9 @@ Deno.serve(async (req) => {
                     error_message: message,
                     updated_at: new Date().toISOString(),
                 }).eq("submission_id", submissionId)
-                if (updated.error) console.error("[retry-lead-sheets] status update failed", updated.error)
+                if (updated.error) {
+                    console.error("[retry-lead-sheets] status update failed", updated.error)
+                }
                 results.push({ submission_id: submissionId, status, error: message })
             }
         }

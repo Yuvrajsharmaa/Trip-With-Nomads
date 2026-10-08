@@ -1,4 +1,4 @@
-const BOOKING_TIMEZONE = "Asia/Kolkata"
+import { dateToSheetSerial, timestampToSheetSerial } from "./sheet_dates.ts"
 
 export const BOOKING_CALLBACK_HEADERS = [
     "Payment Date",
@@ -14,6 +14,15 @@ export const BOOKING_CALLBACK_HEADERS = [
     "Notes",
 ]
 
+export const BOOKING_PAYMENT_HISTORY_TAB = "Payment History"
+
+// Legacy success/failed tab overrides are deliberately ignored. All verified
+// payment events belong in one event history, where Payment Result separates
+// successful and failed attempts.
+export function resolveBookingPaymentHistoryTab(_legacyConfiguredTab?: string): string {
+    return BOOKING_PAYMENT_HISTORY_TAB
+}
+
 function compact(value: any): string {
     return String(value ?? "").trim()
 }
@@ -21,35 +30,6 @@ function compact(value: any): string {
 function toNumber(value: any): number {
     const parsed = Number(value)
     return Number.isFinite(parsed) ? Math.round(parsed * 100) / 100 : 0
-}
-
-function formatTimestampIST(value?: string): string {
-    const date = value ? new Date(value) : new Date()
-    if (Number.isNaN(date.getTime())) return compact(value)
-    const parts = new Intl.DateTimeFormat("en-IN", {
-        timeZone: BOOKING_TIMEZONE,
-        day: "numeric",
-        month: "short",
-        year: "numeric",
-        hour: "numeric",
-        minute: "2-digit",
-        hour12: true,
-    }).formatToParts(date)
-    const get = (type: string) => parts.find((part) => part.type === type)?.value || ""
-    return `${get("day")} ${get("month")} ${get("year")}, ${get("hour")}:${get("minute")} ${get("dayPeriod").toUpperCase()} IST`
-}
-
-function formatDeparture(value: any): string {
-    const raw = compact(value)
-    if (!raw) return ""
-    const date = new Date(`${raw}T00:00:00Z`)
-    if (Number.isNaN(date.getTime())) return raw
-    return new Intl.DateTimeFormat("en-IN", {
-        timeZone: BOOKING_TIMEZONE,
-        day: "numeric",
-        month: "short",
-        year: "numeric",
-    }).format(date)
 }
 
 function humanize(value: any): string {
@@ -101,10 +81,10 @@ export function buildBookingCallbackRow(params: {
             : "",
     ].filter(Boolean).join(" | ")
     return [
-        formatTimestampIST(params.eventReceivedAt || params.processedAt),
+        timestampToSheetSerial(params.eventReceivedAt || params.processedAt),
         compact(booking.booking_ref),
         compact(booking.trip_name || booking.trip_title),
-        formatDeparture(booking.departure_date || booking.date),
+        dateToSheetSerial(booking.departure_date || booking.date),
         compact(booking.name || booking.guest_name),
         compact(booking.email).toLowerCase(),
         toNumber(params.amountReceived),

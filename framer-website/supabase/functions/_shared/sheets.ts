@@ -1,4 +1,5 @@
 import { importPKCS8, SignJWT } from "https://esm.sh/jose@4.15.4"
+import { formattedSheetDateMatches } from "./sheet_dates.ts"
 
 const TOKEN_URL = "https://oauth2.googleapis.com/token"
 const SHEETS_SCOPE = "https://www.googleapis.com/auth/spreadsheets"
@@ -151,12 +152,16 @@ async function ensureHeaders(tab: string, headers: string[], sheetId: string) {
         throw new Error(`Header check failed: ${check.status} ${text}`)
     }
     const data = await check.json()
-    const actual = Array.isArray(data?.values?.[0]) ? data.values[0].map((cell: any) => String(cell ?? "").trim()) : []
+    const actual = Array.isArray(data?.values?.[0])
+        ? data.values[0].map((cell: any) => String(cell ?? "").trim())
+        : []
     const expected = headers.map((header) => String(header || "").trim())
     const matches = hasExactHeaders(actual, expected)
     if (!matches) {
         throw new Error(
-            `Managed Sheet header drift in ${tab}: expected ${JSON.stringify(expected)}, got ${JSON.stringify(actual)}`,
+            `Managed Sheet header drift in ${tab}: expected ${JSON.stringify(expected)}, got ${
+                JSON.stringify(actual)
+            }`,
         )
     }
     ensuredHeaders.get(sheetId)!.add(tab)
@@ -244,16 +249,22 @@ export async function formatManagedTab(
     ])
     const dateTimeHeaders = new Set([
         "Captured At",
+        "First Seen At",
         "Last Activity",
+        "Last Seen At",
         "Last Updated",
         "Payment Date",
+        "Event Received At",
+        "Processed At",
+        "Last Payment Event At",
     ])
     const dateHeaders = new Set(["Departure Date"])
     const hiddenHeaders = new Set(
         headers.filter((header) =>
             /^utm\s/i.test(header) ||
             /key$/i.test(header) ||
-            /^(event id|booking id|trip id|provider order\/reference|provider payment\/transaction id)$/i.test(header)
+            /^(event id|booking id|trip id|provider order\/reference|provider payment\/transaction id)$/i
+                .test(header)
         ),
     )
     const requests: any[] = [
@@ -506,7 +517,9 @@ export async function appendRow(
     const rowNumber = Math.max(2, lastPopulatedRow + 1)
     const endColumn = columnNumberToName(Math.max(1, values.length))
     const res = await sheetsFetch(
-        `/values/${encodeURIComponent(tab)}!A${rowNumber}:${endColumn}${rowNumber}?valueInputOption=RAW`,
+        `/values/${
+            encodeURIComponent(tab)
+        }!A${rowNumber}:${endColumn}${rowNumber}?valueInputOption=RAW`,
         sheetId,
         {
             method: "PUT",
@@ -585,7 +598,9 @@ export async function findRowByColumnValue(
     )
     if (currentRowAction(matches.length) === "fail") {
         throw new Error(
-            `Multiple current-state Sheet rows match ${columnName}=${String(value || "").trim()} in ${tab}`,
+            `Multiple current-state Sheet rows match ${columnName}=${
+                String(value || "").trim()
+            } in ${tab}`,
         )
     }
     return matches[0] || null
@@ -612,7 +627,9 @@ export async function findRowsByColumnValue(
     if (rows.length === 0) return []
 
     const header = Array.isArray(rows[0]) ? rows[0].map((cell) => String(cell || "").trim()) : []
-    const index = header.findIndex((cell) => cell.toLowerCase() === String(columnName || "").trim().toLowerCase())
+    const index = header.findIndex((cell) =>
+        cell.toLowerCase() === String(columnName || "").trim().toLowerCase()
+    )
     if (index < 0) return []
 
     const matches: number[] = []
@@ -623,6 +640,73 @@ export async function findRowsByColumnValue(
     }
 
     return matches
+}
+
+export type CurrentRowKey = { column: string; value: string }
+
+export function findRowsMatchingAnyKey(
+    rows: any[][],
+    keys: CurrentRowKey[],
+): number[] {
+    if (!Array.isArray(rows) || rows.length < 2 || !Array.isArray(keys)) return []
+    const header = Array.isArray(rows[0])
+        ? rows[0].map((cell) => String(cell ?? "").trim().toLowerCase())
+        : []
+    const columnKeys = keys
+        .map((key) => ({
+            index: header.indexOf(String(key.column || "").trim().toLowerCase()),
+            value: String(key.value || "").trim(),
+        }))
+        .filter((key) => key.index >= 0 && key.value)
+    const matches: number[] = []
+    for (let index = 1; index < rows.length; index++) {
+        const row = Array.isArray(rows[index]) ? rows[index] : []
+        if (columnKeys.some((key) => String(row[key.index] ?? "").trim() === key.value)) {
+            matches.push(index + 1)
+        }
+    }
+    return matches
+}
+
+export async function upsertCurrentRowByAnyKey(
+    sheetId: string,
+    tab: string,
+    keys: CurrentRowKey[],
+    values: (string | number | null)[],
+    headers: string[],
+    options: { moveUpdatedRowToBottom?: boolean } = {},
+): Promise<{ row: number; created: boolean }> {
+    const usableKeys = keys.filter((key) => String(key.value || "").trim())
+    if (usableKeys.length === 0) {
+        throw new Error(`Current-state Sheet key is required for ${tab}`)
+    }
+    await ensureTab(tab, sheetId)
+    await ensureHeaders(tab, headers, sheetId)
+    const existingRows = await readTabValues(sheetId, tab, "A1:ZZ10000")
+    const matches = findRowsMatchingAnyKey(existingRows, usableKeys)
+    if (matches.length > 1) {
+        throw new Error(`Multiple current-state Sheet rows match contact keys in ${tab}`)
+    }
+    if (matches.length === 1) {
+        if (options.moveUpdatedRowToBottom) {
+            const row = await moveRowToBottom(sheetId, tab, matches[0], values)
+            return { row, created: false }
+        }
+        await updateRow(sheetId, tab, matches[0], values, headers)
+        return { row: matches[0], created: false }
+    }
+    const row = await appendRow(sheetId, tab, values, headers)
+    if (row) return { row, created: true }
+
+    const rechecked = await readTabValues(sheetId, tab, "A1:ZZ10000")
+    const recheckedMatches = findRowsMatchingAnyKey(rechecked, usableKeys)
+    if (recheckedMatches.length > 1) {
+        throw new Error(`Multiple current-state Sheet rows match contact keys in ${tab}`)
+    }
+    if (recheckedMatches.length === 1) {
+        return { row: recheckedMatches[0], created: true }
+    }
+    throw new Error(`Current-state Sheet row append returned no row for ${tab}`)
 }
 
 function userEnteredValue(value: string | number | null): Record<string, unknown> {
@@ -721,7 +805,9 @@ export async function upsertCurrentRow(
     )
     if (currentRowAction(matches.length) === "fail") {
         throw new Error(
-            `Multiple current-state Sheet rows match ${keyColumn}=${String(keyValue || "").trim()} in ${tab}`,
+            `Multiple current-state Sheet rows match ${keyColumn}=${
+                String(keyValue || "").trim()
+            } in ${tab}`,
         )
     }
     if (matches.length === 1) {
@@ -752,7 +838,9 @@ export async function upsertCurrentRow(
         )
         if (currentRowAction(rechecked.length) === "fail") {
             throw new Error(
-                `Multiple current-state Sheet rows match ${keyColumn}=${String(keyValue || "").trim()} in ${tab}`,
+                `Multiple current-state Sheet rows match ${keyColumn}=${
+                    String(keyValue || "").trim()
+                } in ${tab}`,
             )
         }
         if (rechecked.length === 1) return { row: rechecked[0], created: true }
@@ -796,7 +884,9 @@ export async function appendHistoryRowOnce(
     )
     if (rechecked.length > 1) {
         throw new Error(
-            `Multiple history Sheet rows match ${eventIdColumn}=${String(eventId || "").trim()} in ${tab}`,
+            `Multiple history Sheet rows match ${eventIdColumn}=${
+                String(eventId || "").trim()
+            } in ${tab}`,
         )
     }
     if (rechecked.length === 1) return { row: rechecked[0], appended: true }
@@ -818,7 +908,12 @@ export function rowMatchesColumnFingerprint(
             String(cell || "").trim().toLowerCase() === String(column || "").trim().toLowerCase()
         )
         if (index < 0 || valueIndex < 0) return false
-        return String(row[index] ?? "").trim() === String(values[valueIndex] ?? "").trim()
+        const expected = values[valueIndex]
+        if (typeof expected === "number") {
+            const dateOnly = String(column).trim().toLowerCase() === "departure date"
+            return formattedSheetDateMatches(row[index], expected, dateOnly)
+        }
+        return String(row[index] ?? "").trim() === String(expected ?? "").trim()
     })
 }
 
@@ -837,9 +932,7 @@ export async function appendHistoryRowOnceByFingerprint(
     await ensureTab(tab, sheetId)
     await ensureHeaders(tab, headers, sheetId)
     const rows = await readTabValues(sheetId, tab, "A1:ZZ10000")
-    const header = Array.isArray(rows[0])
-        ? rows[0].map((cell) => String(cell ?? "").trim())
-        : []
+    const header = Array.isArray(rows[0]) ? rows[0].map((cell) => String(cell ?? "").trim()) : []
     const missingColumn = fingerprintColumns.find((column) =>
         !header.some((cell) => cell.toLowerCase() === String(column).trim().toLowerCase())
     )
@@ -869,7 +962,15 @@ export async function appendHistoryRowOnceByFingerprint(
     const recheckedMatches: number[] = []
     for (let index = 1; index < rechecked.length; index++) {
         const candidate = Array.isArray(rechecked[index]) ? rechecked[index] : []
-        if (rowMatchesColumnFingerprint(candidate, recheckedHeader, values, fingerprintColumns, headers)) {
+        if (
+            rowMatchesColumnFingerprint(
+                candidate,
+                recheckedHeader,
+                values,
+                fingerprintColumns,
+                headers,
+            )
+        ) {
             recheckedMatches.push(index + 1)
         }
     }

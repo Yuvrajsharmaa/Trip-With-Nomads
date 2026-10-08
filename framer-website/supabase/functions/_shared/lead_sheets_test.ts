@@ -9,6 +9,7 @@ import {
     MASTER_LEAD_HEADERS,
     NTC_INVITE_HEADERS,
 } from "./lead_sheets.ts"
+import { findRowsMatchingAnyKey } from "./sheets.ts"
 
 const SALES_LEAD_HEADERS = [
     "Captured At",
@@ -75,14 +76,16 @@ Deno.test("lead rows preserve meaningful fields without technical identifiers", 
             reason: "Wants a small group",
             status: "submitted",
             itinerary_name: "Vietnam",
-            page_url: "https://tripwithnomads.com/upcoming-trips?utm_source=instagram&utm_campaign=test",
+            page_url:
+                "https://tripwithnomads.com/upcoming-trips?utm_source=instagram&utm_campaign=test",
         },
         notes: "Route context",
     })
 
     assertEquals(leadRow.length, LEAD_HEADERS.length)
-    assertEquals(leadRow[0], "1 Mar 2026, 5:30 AM IST")
-    assertEquals(leadRow[1], "2 Mar 2026, 5:30 AM IST")
+    assertEquals(typeof leadRow[0], "number")
+    assertEquals(leadRow[0] as unknown, 46082.229166666664)
+    assertEquals(leadRow[1] as unknown, 46083.229166666664)
     assertEquals(leadRow[2], "Guest")
     assertEquals(leadRow[3], "guest@example.com")
     assertEquals(leadRow[4], "+91 9999999999")
@@ -93,7 +96,9 @@ Deno.test("lead rows preserve meaningful fields without technical identifiers", 
     assertEquals(leadRow[8], "Itinerary download")
     assertEquals(leadRow[9], "Submitted")
     assertEquals(leadRow[10], "Keep this note | Route context")
-    assert(!leadRow.some((value) => /uuid|utm_|https?:\/\/|lead id|submission-1/i.test(String(value))))
+    assert(
+        !leadRow.some((value) => /uuid|utm_|https?:\/\/|lead id|submission-1/i.test(String(value))),
+    )
 
     const abandonedRow = buildAbandonedLeadSheetRow({
         submission: {
@@ -143,9 +148,80 @@ Deno.test("lead rows preserve meaningful fields without technical identifiers", 
     assert(!inviteRow.some((value) => /lead-1|booking_invite/i.test(String(value))))
 
     const masterRow = buildMasterLeadSheetRow({
-        lead: { id: "lead-1", first_seen_at: "2026-03-01T00:00:00.000Z", email: "GUEST@example.com" },
+        lead: {
+            id: "lead-1",
+            first_seen_at: "2026-03-01T00:00:00.000Z",
+            email: "GUEST@example.com",
+        },
         status: "submitted",
     })
     assertEquals(masterRow.length, MASTER_LEAD_HEADERS.length)
     assertEquals(masterRow[3], "guest@example.com")
+
+    const abandonedMasterRow = buildMasterLeadSheetRow({
+        lead: {},
+        status: "partial_fill",
+        latestSubmission: {
+            source: "trip_itinerary_download",
+            status: "partial_fill",
+            captured_at: "2026-03-02T00:00:00.000Z",
+            name: "Guest",
+            phone: "9999999999",
+            country_code: "+91",
+            itinerary_name: "Japan",
+            activity_label: "Started itinerary request",
+        },
+    })
+    assertEquals(abandonedMasterRow[0] as unknown, 46083.229166666664)
+    assertEquals(abandonedMasterRow[1] as unknown, 46083.229166666664)
+    assertEquals(abandonedMasterRow[2], "Guest")
+    assertEquals(abandonedMasterRow[4], "+91 9999999999")
+    assertEquals(abandonedMasterRow[6], "Japan")
+    assertEquals(abandonedMasterRow[9], "Partially filled")
+})
+
+Deno.test("master contact matching uses email and phone and detects duplicate matches", () => {
+    const headers = ["Name", "Email", "Phone"]
+    const rows = [
+        headers,
+        ["One", "one@example.com", "+91 1111111111"],
+        ["Two", "", "+91 2222222222"],
+    ]
+
+    assertEquals(
+        findRowsMatchingAnyKey(rows, [
+            { column: "Email", value: "one@example.com" },
+            { column: "Phone", value: "+91 1111111111" },
+        ]),
+        [2],
+    )
+    assertEquals(
+        findRowsMatchingAnyKey(rows, [
+            { column: "Email", value: "new@example.com" },
+            { column: "Phone", value: "+91 2222222222" },
+        ]),
+        [3],
+    )
+    assertEquals(
+        findRowsMatchingAnyKey(rows, [
+            { column: "Email", value: "one@example.com" },
+            { column: "Phone", value: "+91 2222222222" },
+        ]),
+        [2, 3],
+    )
+})
+
+Deno.test("itinerary and trip labels are deduplicated after humanization", () => {
+    const row = buildLeadSheetRow({
+        lead: {},
+        latestSubmission: {
+            source: "trip_itinerary_download",
+            status: "submitted",
+            itinerary_name: "Vietnam",
+            trip_name: "Vietnam",
+            trip_slug: "vietnam-twn",
+        },
+    })
+
+    assertEquals(row[6], "Vietnam")
 })

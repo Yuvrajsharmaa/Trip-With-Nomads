@@ -152,7 +152,9 @@ function pickSupabaseAnonKey(
 function resolveRuntimeConfig(): RuntimeConfig {
     const env = resolveRuntimeEnv()
     const selected = RUNTIME_CONFIG[env]
-    const runtimeOverride = typeof window !== "undefined" ? (window as any).__TWN_RUNTIME_CONFIG__ || {} : {}
+    const runtimeOverride = typeof window !== "undefined"
+        ? (window as any).__TWN_RUNTIME_CONFIG__ || {}
+        : {}
     const resolvedSupabaseUrl = String(
         runtimeOverride.supabaseUrl || selected.supabaseUrl || "",
     ).trim()
@@ -427,7 +429,8 @@ const useStore = createStore({
     pricingBreakdown: null as PricingBreakdown | null,
     couponMessage: "Enter a coupon code and tap Apply.",
     couponMessageType: "neutral" as "neutral" | "success" | "error",
-    loading: false,
+    loading: true,
+    pricingUnavailable: false,
     submitting: false,
 })
 
@@ -452,6 +455,12 @@ function round2(value: number): number {
 
 function fmtINR(value: number): string {
     return "₹" + toNumber(value).toLocaleString("en-IN")
+}
+
+function formatCheckoutAmount(store: any, value: number): string {
+    if (store?.loading) return "Loading price…"
+    if (store?.pricingUnavailable) return "Price unavailable"
+    return fmtINR(value)
 }
 
 function formatNextBatchDate(value: any): string {
@@ -679,7 +688,9 @@ function getCheapestPricingRow(
     )
     if (byDate.length === 0) return null
 
-    const byTransport = transport ? byDate.filter((row: any) => getTransportValue(row) === transport) : byDate
+    const byTransport = transport
+        ? byDate.filter((row: any) => getTransportValue(row) === transport)
+        : byDate
     const bestMatch = pickBestPricingRow(byTransport)
     if (bestMatch) return bestMatch
 
@@ -826,7 +837,9 @@ function computeEarlyBirdDiscountForRow(row: any, unitPrice: number): number {
     if (value <= 0) return 0
 
     let discount = type === "percent" ? unitPrice * (value / 100) : value
-    const maxDiscount = row?.early_bird_max_discount != null ? toNumber(row.early_bird_max_discount) : null
+    const maxDiscount = row?.early_bird_max_discount != null
+        ? toNumber(row.early_bird_max_discount)
+        : null
     if (maxDiscount != null && maxDiscount > 0) {
         discount = Math.min(discount, maxDiscount)
     }
@@ -876,7 +889,9 @@ function buildLocalPricingBreakdown(store: any): PricingBreakdown {
         : couponType === "fixed"
         ? couponValue
         : toNumber(coupon?.discount_amount)
-    const couponDiscount = meetsCouponMinSubtotal ? round2(Math.max(0, Math.min(couponRaw, subtotal))) : 0
+    const couponDiscount = meetsCouponMinSubtotal
+        ? round2(Math.max(0, Math.min(couponRaw, subtotal)))
+        : 0
     const earlyDiscount = round2(
         Math.max(0, Math.min(earlyBirdDiscount, subtotal)),
     )
@@ -899,7 +914,9 @@ function buildLocalPricingBreakdown(store: any): PricingBreakdown {
         early_bird_discount_amount: appliedSource === "early_bird" ? discountTotal : earlyDiscount,
         coupon_discount_amount: couponDiscount,
         applied_discount_source: appliedSource,
-        applied_discount_code: couponDiscount > 0 ? String(coupon?.code || "").trim().toUpperCase() || null : null,
+        applied_discount_code: couponDiscount > 0
+            ? String(coupon?.code || "").trim().toUpperCase() || null
+            : null,
         discount_amount_total: round2(discountTotal),
         taxable_amount: taxable,
         tax_amount: tax,
@@ -993,7 +1010,9 @@ function computeTotals(store: any) {
             : 0,
     )
     const taxableSubtotal = round2(
-        pricingBreakdown.taxable_amount > 0 ? pricingBreakdown.taxable_amount : Math.max(0, subtotal - discount),
+        pricingBreakdown.taxable_amount > 0
+            ? pricingBreakdown.taxable_amount
+            : Math.max(0, subtotal - discount),
     )
     const computedTaxFromTaxable = round2(taxableSubtotal * TAX_RATE)
     const taxFromServerTotal = round2(
@@ -1007,9 +1026,10 @@ function computeTotals(store: any) {
     const total = round2(pricingBreakdown.total_amount) > 0
         ? round2(pricingBreakdown.total_amount)
         : round2(taxableSubtotal + tax)
-    const paymentMode: PaymentMode = String(store?.paymentMode || "").trim().toLowerCase() === "partial_25"
-        ? "partial_25"
-        : "full"
+    const paymentMode: PaymentMode =
+        String(store?.paymentMode || "").trim().toLowerCase() === "partial_25"
+            ? "partial_25"
+            : "full"
     // Deposit is computed from final payable amount (after discount + tax).
     const partialDeposit = round2(total * 0.25)
     const payableNow = paymentMode === "partial_25"
@@ -1270,9 +1290,7 @@ async function postBookingAbandonLead(store: any): Promise<boolean> {
         trip_name: firstNonEmpty(store?.tripName, params.get("trip_name")),
         departure_date: firstNonEmpty(store?.date, params.get("date")),
         travellers: Array.isArray(store?.travellers) ? store.travellers : [],
-        traveller_count: Array.isArray(store?.travellers)
-            ? store.travellers.length
-            : null,
+        traveller_count: Array.isArray(store?.travellers) ? store.travellers.length : null,
         payment_mode: firstNonEmpty(store?.paymentMode, "full"),
         utm_source: params.get("utm_source"),
         utm_medium: params.get("utm_medium"),
@@ -1334,7 +1352,9 @@ async function fetchTripContextBySlug(
     if (!cleanSlug) return null
 
     const res = await fetch(
-        `${SUPABASE_URL}/rest/v1/trips?slug=eq.${encodeURIComponent(cleanSlug)}&select=id,slug,title&limit=1`,
+        `${SUPABASE_URL}/rest/v1/trips?slug=eq.${
+            encodeURIComponent(cleanSlug)
+        }&select=id,slug,title&limit=1`,
         {
             priority: "high",
             headers: {
@@ -1660,13 +1680,21 @@ export function withCheckoutBootstrap(Component): ComponentType {
 
             const run = async () => {
                 const ctx = readCheckoutRouteContext()
-                if (!ctx.tripId && !ctx.slug) return
+                if (!ctx.tripId && !ctx.slug) {
+                    setStore({
+                        loading: false,
+                        pricingUnavailable: true,
+                        pricingData: [],
+                    })
+                    return
+                }
 
                 if (bootKeyRef.current === routeKey) return
                 bootKeyRef.current = routeKey
 
                 setStore({
                     loading: true,
+                    pricingUnavailable: false,
                     pricingData: [],
                     pricingBreakdown: null,
                     date: "",
@@ -1704,10 +1732,13 @@ export function withCheckoutBootstrap(Component): ComponentType {
                 }
 
                 if (!tripId) {
-                    const message = "We couldn't find this trip. Please go back and choose it again."
+                    const message =
+                        "We couldn't find this trip. Please go back and choose it again."
                     if (!disposed) {
                         setStore({
                             loading: false,
+                            pricingUnavailable: true,
+                            pricingData: [],
                             couponMessageType: "error",
                             couponMessage: message,
                         })
@@ -1726,6 +1757,8 @@ export function withCheckoutBootstrap(Component): ComponentType {
                 if (ctx.tripId && !tripContext) {
                     setStore({
                         loading: false,
+                        pricingUnavailable: true,
+                        pricingData: [],
                         couponMessageType: "error",
                         couponMessage: "Trip not found. Please reopen checkout from the trip page.",
                     })
@@ -1752,6 +1785,7 @@ export function withCheckoutBootstrap(Component): ComponentType {
                             transport: "",
                             pricingBreakdown: null,
                             loading: false,
+                            pricingUnavailable: true,
                             couponMessageType: "error",
                             couponMessage: message,
                         })
@@ -1769,7 +1803,8 @@ export function withCheckoutBootstrap(Component): ComponentType {
                 const inviteOnly = isInviteOnlyTrip(pricing)
                 const dates = getDateOptions(pricing)
                 if (!dates.length && !inviteOnly) {
-                    const message = "This trip has no upcoming departure dates available for online booking."
+                    const message =
+                        "This trip has no upcoming departure dates available for online booking."
                     if (!disposed) {
                         setStore({
                             tripId,
@@ -1780,6 +1815,7 @@ export function withCheckoutBootstrap(Component): ComponentType {
                             transport: "",
                             pricingBreakdown: null,
                             loading: false,
+                            pricingUnavailable: true,
                             couponMessageType: "error",
                             couponMessage: message,
                         })
@@ -1790,7 +1826,9 @@ export function withCheckoutBootstrap(Component): ComponentType {
                 const draft = readCheckoutDraft()
                 const draftMatchesTrip = !draft?.tripId ||
                     String(draft.tripId) === String(tripId)
-                const preferredDate = draftMatchesTrip ? String(draft?.date || ctx.date || "") : ctx.date
+                const preferredDate = draftMatchesTrip
+                    ? String(draft?.date || ctx.date || "")
+                    : ctx.date
                 const date = dates.includes(preferredDate) ? preferredDate : dates[0] || ""
                 const preferredTransport = draftMatchesTrip
                     ? String(draft?.transport || ctx.transport || "")
@@ -1835,6 +1873,7 @@ export function withCheckoutBootstrap(Component): ComponentType {
                         : store.paymentMode,
                     inviteOnly,
                     loading: false,
+                    pricingUnavailable: false,
                 }
                 const pricingBreakdown = buildLocalPricingBreakdown(nextState)
 
@@ -1853,6 +1892,7 @@ export function withCheckoutBootstrap(Component): ComponentType {
                     inviteOnly,
                     pricingBreakdown,
                     loading: false,
+                    pricingUnavailable: false,
                 })
 
                 console.log("[Checkout] Opened", {
@@ -1869,6 +1909,8 @@ export function withCheckoutBootstrap(Component): ComponentType {
                 if (!disposed) {
                     setStore({
                         loading: false,
+                        pricingUnavailable: true,
+                        pricingData: [],
                         couponMessageType: "error",
                         couponMessage: "Could not initialize checkout",
                     })
@@ -1906,7 +1948,8 @@ export function withBookNowToCheckout(Component): ComponentType {
             e?.stopPropagation?.()
 
             const currentSlug = normalizeSlug(getTripSlugFromPathname(window.location.pathname))
-            const slug = currentSlug || readTripSlugCandidate(props) || String(store.slug || "").trim()
+            const slug = currentSlug || readTripSlugCandidate(props) ||
+                String(store.slug || "").trim()
             let tripId = ""
 
             if (currentSlug) {
@@ -2724,13 +2767,14 @@ export function withCheckoutSummaryLineLabel(Component): ComponentType {
 export function withCheckoutSummaryLineAmount(Component): ComponentType {
     return (props: any) => {
         const row = useContext(SummaryLineContext)
-        const text = fmtINR(toNumber(row?.amount || 0))
+        const [store] = useStore()
+        const text = formatCheckoutAmount(store, toNumber(row?.amount || 0))
         return <Component {...props} text={text} />
     }
 }
 
 export function withCheckoutSubtotal(Component): ComponentType {
-    return withTextFromState((store) => fmtINR(computeTotals(store).subtotal))(
+    return withTextFromState((store) => formatCheckoutAmount(store, computeTotals(store).subtotal))(
         Component,
     )
 }
@@ -2749,7 +2793,8 @@ export function withCheckoutDiscount(Component): ComponentType {
             : totals.couponDiscount > 0
             ? totals.couponDiscount
             : totals.discount
-        return `- ${fmtINR(primaryDiscount)}`
+        const amount = formatCheckoutAmount(store, primaryDiscount)
+        return amount.startsWith("₹") ? `- ${amount}` : amount
     })(Component)
 }
 
@@ -2783,7 +2828,7 @@ export function withCheckoutCouponCode(Component): ComponentType {
 }
 
 export function withCheckoutTax(Component): ComponentType {
-    return withTextFromState((store) => fmtINR(computeTotals(store).tax))(
+    return withTextFromState((store) => formatCheckoutAmount(store, computeTotals(store).tax))(
         Component,
     )
 }
@@ -2793,14 +2838,16 @@ export function withCheckoutTaxLabel(Component): ComponentType {
 }
 
 export function withCheckoutTaxValue(Component): ComponentType {
-    return withTextFromState((store) => fmtINR(computeTotals(store).tax))(
+    return withTextFromState((store) => formatCheckoutAmount(store, computeTotals(store).tax))(
         Component,
     )
 }
 
 export function withCheckoutTotal(Component): ComponentType {
     // Checkout summary total should reflect amount payable now.
-    return withTextFromState((store) => fmtINR(computeTotals(store).payableNow))(
+    return withTextFromState((store) =>
+        formatCheckoutAmount(store, computeTotals(store).payableNow)
+    )(
         Component,
     )
 }
@@ -2812,7 +2859,7 @@ export function withCheckoutGrandTotalLabel(Component): ComponentType {
 }
 
 export function withCheckoutGrandTotal(Component): ComponentType {
-    return withTextFromState((store) => fmtINR(computeTotals(store).subtotal))(
+    return withTextFromState((store) => formatCheckoutAmount(store, computeTotals(store).subtotal))(
         Component,
     )
 }
@@ -2997,13 +3044,17 @@ export function withCheckoutPaymentMode(Component): ComponentType {
 }
 
 export function withCheckoutPayableNow(Component): ComponentType {
-    return withTextFromState((store) => fmtINR(computeTotals(store).payableNow))(
+    return withTextFromState((store) =>
+        formatCheckoutAmount(store, computeTotals(store).payableNow)
+    )(
         Component,
     )
 }
 
 export function withCheckoutDueAmount(Component): ComponentType {
-    return withTextFromState((store) => fmtINR(computeTotals(store).dueAmount))(
+    return withTextFromState((store) =>
+        formatCheckoutAmount(store, computeTotals(store).dueAmount)
+    )(
         Component,
     )
 }
@@ -3080,7 +3131,9 @@ export function withCheckoutPayButton(Component): ComponentType {
         const paymentStartedRef = useRef(false)
         const totals = computeTotals(store)
         const errors = getValidationErrors(store)
-        const isValid = errors.length === 0
+        const isPricingReady = !store?.loading && !store?.pricingUnavailable &&
+            Array.isArray(store?.pricingData) && store.pricingData.length > 0
+        const isValid = errors.length === 0 && isPricingReady
 
         useEffect(() => {
             latestStoreRef.current = store
@@ -3097,6 +3150,17 @@ export function withCheckoutPayButton(Component): ComponentType {
         }, [])
 
         const submit = async () => {
+            if (store?.loading) {
+                showInlineError("Trip pricing is still loading. Please wait a moment.")
+                return
+            }
+            if (store?.pricingUnavailable || !isPricingReady) {
+                showInlineError(
+                    store?.couponMessage ||
+                        "Pricing is unavailable for this trip. Please choose another departure.",
+                )
+                return
+            }
             if (!isValid || store.submitting || submitLockRef.current) return
 
             if (store?.inviteOnly) {
@@ -3343,7 +3407,13 @@ export function withCheckoutPayButton(Component): ComponentType {
             <div style={{ position: "relative", width: "100%" }}>
                 <Component
                     {...props}
-                    text={store?.submitting ? "Processing..." : `Pay ${fmtINR(totals.payableNow)} now`}
+                    text={store?.submitting
+                        ? "Processing..."
+                        : store?.loading
+                        ? "Loading price…"
+                        : store?.pricingUnavailable || !isPricingReady
+                        ? "Price unavailable"
+                        : `Pay ${fmtINR(totals.payableNow)} now`}
                     onClick={submit}
                     style={{
                         ...(props.style || {}),
@@ -3357,7 +3427,20 @@ export function withCheckoutPayButton(Component): ComponentType {
                         onClick={(e: any) => {
                             e?.preventDefault?.()
                             e?.stopPropagation?.()
-                            showInlineError(errors)
+                            if (store?.loading) {
+                                showInlineError(
+                                    "Trip pricing is still loading. Please wait a moment.",
+                                )
+                            } else if (
+                                store?.pricingUnavailable || !isPricingReady
+                            ) {
+                                showInlineError(
+                                    store?.couponMessage ||
+                                        "Pricing is unavailable for this trip. Please choose another departure.",
+                                )
+                            } else {
+                                showInlineError(errors)
+                            }
                         }}
                         style={{
                             position: "absolute",
@@ -3447,7 +3530,10 @@ export function withTripIdSource(Component): ComponentType {
 }
 
 function useTripDisplayData(props?: any) {
-    const [data, setData] = useState<any>(null)
+    const [state, setState] = useState<{ data: any; status: "loading" | "ready" | "unavailable" }>({
+        data: null,
+        status: "loading",
+    })
     const [locationKey, setLocationKey] = useState(() => readBrowserLocationKey())
     const propTripId = readTripIdCandidate(props)
     const propSlug = readTripSlugCandidate(props)
@@ -3470,6 +3556,7 @@ function useTripDisplayData(props?: any) {
 
     useEffect(() => {
         let disposed = false
+        setState({ data: null, status: "loading" })
         const query = new URLSearchParams(window.location.search)
         const slugFromPath = getTripSlugFromPathname(window.location.pathname)
         const tripId = normalizeTripId(
@@ -3483,11 +3570,12 @@ function useTripDisplayData(props?: any) {
         fetchTripDisplayPrice({ slug, tripId })
             .then((payload) => {
                 if (disposed) return
-                setData(payload || null)
+                const available = toNumber(payload?.display_summary?.payable_price) > 0
+                setState({ data: payload || null, status: available ? "ready" : "unavailable" })
             })
             .catch(() => {
                 if (disposed) return
-                setData(null)
+                setState({ data: null, status: "unavailable" })
             })
 
         return () => {
@@ -3495,22 +3583,27 @@ function useTripDisplayData(props?: any) {
         }
     }, [propTripId, propSlug, locationKey])
 
-    return data
+    return state
 }
 
 export function withTripPrimaryPrice(Component): ComponentType {
     return (props: any) => {
-        const tripData = useTripDisplayData(props)
+        const priceState = useTripDisplayData(props)
+        const tripData = priceState.data
         const summary = tripData?.display_summary
         const value = toNumber(summary?.payable_price)
-        const text = value > 0 ? fmtINR(value) : "₹0"
+        const text = priceState.status === "loading"
+            ? "Loading price…"
+            : priceState.status !== "ready" || value <= 0
+            ? "Price unavailable"
+            : fmtINR(value)
         return <Component {...props} text={text} />
     }
 }
 
 export function withTripStrikePrice(Component): ComponentType {
     return (props: any) => {
-        const tripData = useTripDisplayData(props)
+        const tripData = useTripDisplayData(props).data
         const summary = tripData?.display_summary
         const base = toNumber(summary?.base_price)
         const payable = toNumber(summary?.payable_price)
@@ -3537,7 +3630,7 @@ export function withTripStrikePrice(Component): ComponentType {
 
 export function withTripSaveBadge(Component): ComponentType {
     return (props: any) => {
-        const tripData = useTripDisplayData(props)
+        const tripData = useTripDisplayData(props).data
         const summary = tripData?.display_summary
         const save = toNumber(summary?.save_amount)
         const hasDiscount = Boolean(summary?.has_discount) && save > 0
@@ -3561,7 +3654,7 @@ export function withTripSaveBadge(Component): ComponentType {
 
 export function withTripHideWhenNoDiscount(Component): ComponentType {
     return (props: any) => {
-        const tripData = useTripDisplayData(props)
+        const tripData = useTripDisplayData(props).data
         const summary = tripData?.display_summary
         const hasDiscount = Boolean(summary?.has_discount) &&
             toNumber(summary?.save_amount) > 0
@@ -3590,7 +3683,7 @@ export function withTripStartsFromText(Component): ComponentType {
 
 export function withTripNextBatchText(Component): ComponentType {
     return (props: any) => {
-        const tripData = useTripDisplayData(props)
+        const tripData = useTripDisplayData(props).data
         const nextBatchLabel = formatNextBatchDate(tripData?.next_batch_date)
         if (!nextBatchLabel) {
             return <Component {...props} text="" visible={false} />

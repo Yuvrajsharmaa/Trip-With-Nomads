@@ -1,8 +1,5 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2"
-import {
-    projectLeadSheets,
-    projectionConfigurationError,
-} from "../_shared/lead_projection.ts"
+import { projectionConfigurationError, projectLeadSheets } from "../_shared/lead_projection.ts"
 
 const corsHeaders = {
     "Access-Control-Allow-Origin": "*",
@@ -121,7 +118,8 @@ function stableObject(value: any): any {
 async function payloadHash(value: any): Promise<string> {
     const bytes = new TextEncoder().encode(JSON.stringify(stableObject(value)))
     const digest = await crypto.subtle.digest("SHA-256", bytes)
-    return Array.from(new Uint8Array(digest)).map((byte) => byte.toString(16).padStart(2, "0")).join("")
+    return Array.from(new Uint8Array(digest)).map((byte) => byte.toString(16).padStart(2, "0"))
+        .join("")
 }
 
 const IDEMPOTENCY_FIELDS = [
@@ -412,7 +410,8 @@ async function updateCurrentLead(params: {
         ) || null,
         notes: firstNonEmpty(body?.notes, existingLead?.notes) || null,
         latest_activity: activity || null,
-        latest_itinerary_name: itineraryName || compact(existingLead?.latest_itinerary_name) || null,
+        latest_itinerary_name: itineraryName || compact(existingLead?.latest_itinerary_name) ||
+            null,
         downloaded_itineraries: downloadedItineraries,
         source,
         latest_source: source,
@@ -525,19 +524,26 @@ async function projectAndMarkSubmission(params: {
             notes: "",
             supabase,
         })
-        const syncedAt = new Date().toISOString()
+        const syncedAt = projection.sheetStatus === "synced" ? new Date().toISOString() : null
         const updated = await supabase.from("lead_submissions").update({
             sheet_sync_status: projection.sheetStatus,
             sheet_synced_at: syncedAt,
-            error_message: null,
-            updated_at: syncedAt,
+            error_message: projection.errorMessage || null,
+            updated_at: new Date().toISOString(),
         }).eq("submission_id", submissionId)
         if (updated.error) throw updated.error
+        const errorCode = projection.sheetStatus === "synced"
+            ? undefined
+            : projection.sheetStatus === "configuration_missing"
+            ? "SHEET_CONFIGURATION_MISSING"
+            : "SHEET_SYNC_FAILED"
         return {
-            ok: true,
+            ok: projection.sheetStatus === "synced",
             sheetLogged: projection.sheetLogged,
             masterLogged: projection.masterLogged,
             sheetStatus: projection.sheetStatus,
+            errorCode,
+            errorMessage: projection.errorMessage,
         }
     } catch (sheetError: any) {
         const sheetStatus = projectionConfigurationError(sheetError?.message || sheetError)
@@ -596,15 +602,31 @@ Deno.serve(async (req) => {
 
         const status = compact(body?.status || "submitted").toLowerCase()
         const partialFill = status === "partial_fill"
+        const source = normalizeSource(body?.source)
         const normalizedEmail = normalizeEmail(body?.email)
-        if (!normalizedEmail && !partialFill) {
+        const phone = compact(body?.phone)
+        if (source === "booking_invite" && !partialFill && !phone) {
+            return json({ error: "Phone is required for NTC invites", code: "PHONE_REQUIRED" }, 400)
+        }
+        const phoneOnlyInvite = source === "booking_invite" &&
+            !normalizedEmail && Boolean(phone)
+        if (source === "trip_itinerary_download" && !normalizedEmail && !partialFill && !phone) {
+            return json({
+                error: "Phone is required for itinerary downloads without an email",
+            }, 400)
+        }
+        const itineraryWithoutEmail = source === "trip_itinerary_download" &&
+            !partialFill && Boolean(phone)
+        if (!normalizedEmail && !partialFill && !phoneOnlyInvite && !itineraryWithoutEmail) {
             return json({ error: "Email is required" }, 400)
         }
         if (normalizedEmail && !isValidEmail(normalizedEmail)) {
             return json({ error: "Email is invalid" }, 400)
         }
+        if (source === "booking_invite" && !partialFill && !compact(body?.reason)) {
+            return json({ error: "NTC invite reason is required", code: "REASON_REQUIRED" }, 400)
+        }
 
-        const source = normalizeSource(body?.source)
         const now = new Date().toISOString()
         // Trip-page forms do not always receive the CMS trip metadata as URL
         // parameters. Recover the stable slug from the submitted page URL so
@@ -686,7 +708,7 @@ Deno.serve(async (req) => {
         if (leadId && !isUuid(leadId)) {
             return json({ error: "lead_id must be a UUID" }, 400)
         }
-        if (!partialFill || normalizedEmail) {
+        if (normalizedEmail) {
             const identity = await resolveLeadIdentity({
                 supabase,
                 normalizedEmail,
@@ -720,7 +742,7 @@ Deno.serve(async (req) => {
             if (inserted.error) throw inserted.error
         }
 
-        if (!partialFill || normalizedEmail) {
+        if (normalizedEmail) {
             if (existingSubmission.data) {
                 const existing = await supabase.from("leads").select("*").eq(
                     "id",
@@ -779,7 +801,8 @@ Deno.serve(async (req) => {
             source: projectionSource,
             status: projectionStatus,
         }
-        const existingSheetStatus = compact(existingSubmission.data?.sheet_sync_status).toLowerCase()
+        const existingSheetStatus = compact(existingSubmission.data?.sheet_sync_status)
+            .toLowerCase()
 
         // A replay of an already synchronized submission is complete. Returning
         // without another Sheet read also prevents duplicate concurrent retries.
@@ -861,8 +884,9 @@ Deno.serve(async (req) => {
     } catch (err: any) {
         console.error("[record-lead] error", err)
         const message = compact(err?.message || err)
-        const conflict = /conflict|duplicate|different normalized email|does not belong|repair required/i
-            .test(message)
+        const conflict =
+            /conflict|duplicate|different normalized email|does not belong|repair required/i
+                .test(message)
         return json(
             conflict
                 ? {

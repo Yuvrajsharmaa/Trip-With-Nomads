@@ -9,8 +9,8 @@ Deno.test("trip itinerary downloads use the existing lead flow and remain idempo
 
     assertStringIncludes(source, "withTripItineraryDownloadTracking")
     assertStringIncludes(source, "withTripItineraryFormTracking")
-    assertStringIncludes(source, 'trip_itinerary_download')
-    assertStringIncludes(source, 'Downloaded itinerary')
+    assertStringIncludes(source, "trip_itinerary_download")
+    assertStringIncludes(source, "Downloaded itinerary")
     assertStringIncludes(source, "itinerary_name")
     assertStringIncludes(source, "activity_type")
     assertStringIncludes(source, "activity_label")
@@ -20,6 +20,15 @@ Deno.test("trip itinerary downloads use the existing lead flow and remain idempo
     assertStringIncludes(source, '":partial"')
     assertStringIncludes(source, "submission_id")
     assertStringIncludes(source, "onSubmit={undefined}")
+    assertStringIncludes(source, "resolveFormFromEvent")
+    assertStringIncludes(
+        source,
+        '"trip_itinerary_download",\n                            "submitted"',
+    )
+    assertStringIncludes(source, "form.requestSubmit")
+    assertStringIncludes(source, "MAX_LEAD_REQUEST_ATTEMPTS")
+    assertStringIncludes(source, "fetchLeadWithRetry")
+    assertStringIncludes(source, "IDEMPOTENT_RETRY_DELAY_MS")
 })
 
 Deno.test("record-lead hashes a stable submission payload without request timestamps", async () => {

@@ -16,6 +16,8 @@ const SUBMIT_LOCK_KEY = "__twn_popup_submit_lock"
 
 const PROD_PROJECT_REF = "jxozzvwvprmnhvafmpsa"
 const STAGING_PROJECT_REF = "ieuwiinbvbdvjrdqqzlb"
+const MAX_LEAD_REQUEST_ATTEMPTS = 3
+const IDEMPOTENT_RETRY_DELAY_MS = 300
 
 type PopupState = {
     submitted?: boolean
@@ -95,7 +97,8 @@ function getSubmissionId(
         "-",
     )
     const suffix = normalizedSuffix ? `:${normalizedSuffix}` : ""
-    const key = `__twn_lead_submission_v1:${source}:${window.location.pathname}:${formIdentity}${suffix}`
+    const key =
+        `__twn_lead_submission_v1:${source}:${window.location.pathname}:${formIdentity}${suffix}`
     try {
         const existing = sessionStorage.getItem(key)
         if (existing && /^[0-9a-f-]{36}$/i.test(existing)) {
@@ -135,6 +138,35 @@ function findInputValue(root: ParentNode | null, selectors: string[]): string {
         }
     }
     return ""
+}
+
+function resolveFormFromEvent(event: any): HTMLFormElement | null {
+    const current = event?.currentTarget
+    if (current instanceof HTMLFormElement) return current
+    const target = event?.target instanceof Element ? event.target : null
+    const fromTarget = target?.closest("form")
+    if (fromTarget instanceof HTMLFormElement) return fromTarget
+    const nestedForm = current?.querySelector?.("form")
+    return nestedForm instanceof HTMLFormElement ? nestedForm : null
+}
+
+function replayFormSubmit(form: HTMLFormElement | null, event: any) {
+    if (!form) return
+    const target = event?.target instanceof Element ? event.target : null
+    const submitter = target?.closest("button, input[type='submit']")
+    const formSubmitter = submitter && form.contains(submitter)
+        ? submitter as HTMLButtonElement | HTMLInputElement
+        : undefined
+    form.requestSubmit(formSubmitter)
+}
+
+function isFormSubmitClick(event: any, form: HTMLFormElement | null): boolean {
+    if (!form) return false
+    const target = event?.target instanceof Element ? event.target : null
+    const control = target?.closest("button, input[type='submit'], input[type='image']")
+    if (!control || !form.contains(control)) return false
+    const type = String(control.getAttribute("type") || "submit").toLowerCase()
+    return type === "submit" || type === "image"
 }
 
 type LeadActivityContext = {
@@ -181,9 +213,7 @@ function getItineraryName(props: any, target: any): string {
     const title = String(document.title || "")
         .replace(/\s*[|–—-]\s*Trip With Nomads.*$/i, "")
         .trim()
-    return title && !/download itinerary|download|itinerary/i.test(title)
-        ? title
-        : ""
+    return title && !/download itinerary|download|itinerary/i.test(title) ? title : ""
 }
 
 function getProjectRefFromHost(): string {
@@ -194,11 +224,43 @@ function getProjectRefFromHost(): string {
     return PROD_PROJECT_REF
 }
 
+async function fetchLeadWithRetry(
+    endpoint: string,
+    request: RequestInit,
+): Promise<Response> {
+    let lastNetworkError: unknown
+    for (let attempt = 1; attempt <= MAX_LEAD_REQUEST_ATTEMPTS; attempt += 1) {
+        try {
+            const response = await fetch(endpoint, request)
+            if (
+                attempt === MAX_LEAD_REQUEST_ATTEMPTS ||
+                (response.status < 500 && response.status !== 429)
+            ) return response
+        } catch (error) {
+            lastNetworkError = error
+            if (attempt === MAX_LEAD_REQUEST_ATTEMPTS) throw error
+        }
+
+        // Reuse the same submission_id and payload: the server makes this
+        // retry idempotent even if the first response was lost after commit.
+        await new Promise((resolve) =>
+            window.setTimeout(resolve, IDEMPOTENT_RETRY_DELAY_MS * attempt)
+        )
+    }
+
+    if (lastNetworkError instanceof Error) throw lastNetworkError
+    throw new Error("Lead request failed after retrying")
+}
+
 async function postLead(
     form: HTMLFormElement | null,
     statusOverride?: string,
 ): Promise<boolean> {
-    const root = form ?? document
+    if (!form) {
+        console.warn("[Popup] Could not find the submitted form")
+        return false
+    }
+    const root = form
     const email = normalizeEmail(
         findInputValue(root, [
             'input[type="email"]',
@@ -261,7 +323,7 @@ async function postLead(
     const submission = getSubmissionId("waitlist_popup", form)
 
     try {
-        const response = await fetch(endpoint, {
+        const response = await fetchLeadWithRetry(endpoint, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
@@ -433,7 +495,9 @@ export function withPopupOverlay(Component: ComponentType): ComponentType {
                             position: "fixed",
                             inset: 0,
                             background: "rgba(0, 0, 0, 0.6)",
-                            animation: `${isClosing ? "twnOverlayOut" : "twnOverlayIn"} 0.3s ease forwards`,
+                            animation: `${
+                                isClosing ? "twnOverlayOut" : "twnOverlayIn"
+                            } 0.3s ease forwards`,
                         }}
                     />
                     <div
@@ -497,6 +561,11 @@ export function withPopupSubmitted(Component: ComponentType): ComponentType {
             <Component
                 {...props}
                 onClick={async (event: any) => {
+                    const form = resolveFormFromEvent(event)
+                    if (!isFormSubmitClick(event, form)) {
+                        props.onClick?.(event)
+                        return
+                    }
                     event?.preventDefault?.()
                     event?.stopPropagation?.()
                     const w = window as any
@@ -504,7 +573,7 @@ export function withPopupSubmitted(Component: ComponentType): ComponentType {
                     w[SUBMIT_LOCK_KEY] = true
 
                     try {
-                        const form = event?.currentTarget?.closest?.("form") || null
+                        const form = resolveFormFromEvent(event)
                         const ok = await postLead(
                             form,
                             props?.status === "partial_fill" ? "partial_fill" : undefined,
@@ -541,9 +610,7 @@ export function withPopupFormSubmit(Component: ComponentType): ComponentType {
                     w[SUBMIT_LOCK_KEY] = true
 
                     try {
-                        const form = event?.currentTarget?.tagName === "FORM"
-                            ? event.currentTarget
-                            : event?.currentTarget?.closest?.("form") || null
+                        const form = resolveFormFromEvent(event)
                         const ok = await postLead(
                             form,
                             props?.status === "partial_fill" ? "partial_fill" : undefined,
@@ -579,7 +646,11 @@ async function postLeadWithSource(
     statusOverride?: string,
     activity: LeadActivityContext = {},
 ): Promise<boolean> {
-    const root = form ?? document
+    if (!form) {
+        console.warn(`[LeadTracking:${source}] Could not find the submitted form`)
+        return false
+    }
+    const root = form
     const email = normalizeEmail(
         findInputValue(root, [
             'input[type="email"]',
@@ -588,20 +659,6 @@ async function postLeadWithSource(
             'input[placeholder*="email" i]',
         ]),
     )
-    // The live trip-page form labels email as optional. An omitted email is
-    // therefore an explicit partial form submission, while other submitted
-    // routes still require a valid email.
-    const inferredPartialFill = !email && (
-        source === "trip_page_lead" || source === "trip_itinerary_download"
-    )
-    const effectiveStatus = statusOverride ||
-        (inferredPartialFill ? "partial_fill" : "submitted")
-    const isPartialFill = effectiveStatus === "partial_fill"
-    if ((!email && !isPartialFill) || (email && !isValidEmail(email))) {
-        console.warn(`[LeadTracking:${source}] Invalid email; skipping`)
-        return false
-    }
-
     const name = findInputValue(root, [
         'input[name="name"]',
         'input[name*="name" i]',
@@ -613,6 +670,38 @@ async function postLeadWithSource(
         'input[name*="phone" i]',
         'input[placeholder*="phone" i]',
     ])
+    // Completed itinerary requests can use a phone number as their contact;
+    // partial requests on other trip forms remain explicitly marked.
+    const inferredPartialFill = !email && source === "trip_page_lead"
+    const effectiveStatus = statusOverride ||
+        (inferredPartialFill ? "partial_fill" : "submitted")
+    const isPartialFill = effectiveStatus === "partial_fill"
+    const phoneOnlyContact = source === "booking_invite" && !email && Boolean(phone)
+    if (isPartialFill && !name && !email && !phone) {
+        console.warn(`[LeadTracking:${source}] Partial submission has no contact details`)
+        return false
+    }
+    if (
+        (!email && !isPartialFill && source !== "trip_itinerary_download" &&
+            !phoneOnlyContact) ||
+        (email && !isValidEmail(email))
+    ) {
+        console.warn(`[LeadTracking:${source}] Invalid email; skipping`)
+        return false
+    }
+    if (
+        source === "trip_itinerary_download" && !email && !isPartialFill &&
+        !phone
+    ) {
+        form.reportValidity?.()
+        console.warn(`[LeadTracking:${source}] Phone is required when email is omitted`)
+        return false
+    }
+    if (source === "booking_invite" && !isPartialFill && !phone) {
+        form.reportValidity?.()
+        console.warn(`[LeadTracking:${source}] Phone is required when email is omitted`)
+        return false
+    }
     const country_code = findInputValue(root, [
         'select[name*="country" i]',
         'input[name="country_code"]',
@@ -637,6 +726,15 @@ async function postLeadWithSource(
         'textarea[placeholder*="why" i]',
         'input[placeholder*="why" i]',
     ])
+    if (source === "booking_invite" && !isPartialFill && !reason) {
+        const reasonInput = root.querySelector(
+            'textarea[name*="reason" i], input[name*="reason" i], textarea[name*="why" i], input[name*="why" i]',
+        ) as HTMLInputElement | HTMLTextAreaElement | null
+        reasonInput?.focus?.()
+        form.reportValidity?.()
+        console.warn(`[LeadTracking:${source}] A travel reason is required`)
+        return false
+    }
     const companyName = findInputValue(root, [
         'input[name="company_name"]',
         'input[name*="company" i]',
@@ -653,7 +751,7 @@ async function postLeadWithSource(
     )
 
     try {
-        const response = await fetch(endpoint, {
+        const response = await fetchLeadWithRetry(endpoint, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
@@ -714,16 +812,28 @@ function createLeadTrackingOverride(source: string, statusOverride?: string) {
             return (
                 <Component
                     {...props}
+                    data-twn-lead-source={source}
                     onClick={async (event: any) => {
+                        const form = resolveFormFromEvent(event)
+                        if (!isFormSubmitClick(event, form)) {
+                            props.onClick?.(event)
+                            return
+                        }
                         event?.preventDefault?.()
                         event?.stopPropagation?.()
                         const w = window as any
                         if (w[SUBMIT_LOCK_KEY]) return
                         w[SUBMIT_LOCK_KEY] = true
-                        const form = event?.currentTarget?.closest?.("form") || null
                         try {
+                            if (!form?.checkValidity?.()) {
+                                form?.reportValidity?.()
+                                return
+                            }
                             const ok = await postLeadWithSource(form, source, statusOverride)
-                            if (ok) props.onClick?.(event)
+                            if (ok) {
+                                if (form) replayFormSubmit(form, event)
+                                else props.onClick?.(event)
+                            }
                         } finally {
                             window.setTimeout(() => {
                                 w[SUBMIT_LOCK_KEY] = false
@@ -748,18 +858,29 @@ export function withCustomTripTracking(
                 {...props}
                 data-twn-lead-source="custom_trip_lead"
                 onClick={async (event: any) => {
+                    const form = resolveFormFromEvent(event)
+                    if (!isFormSubmitClick(event, form)) {
+                        props.onClick?.(event)
+                        return
+                    }
                     event?.preventDefault?.()
                     event?.stopPropagation?.()
                     const w = window as any
                     if (w[SUBMIT_LOCK_KEY]) return
                     w[SUBMIT_LOCK_KEY] = true
-                    const form = event?.currentTarget?.closest?.("form") || null
                     try {
+                        if (!form?.checkValidity?.()) {
+                            form?.reportValidity?.()
+                            return
+                        }
                         const ok = await postLeadWithSource(
                             form,
                             "custom_trip_lead",
                         )
-                        if (ok) props.onClick?.(event)
+                        if (ok) {
+                            if (form) replayFormSubmit(form, event)
+                            else props.onClick?.(event)
+                        }
                     } finally {
                         window.setTimeout(() => {
                             w[SUBMIT_LOCK_KEY] = false
@@ -807,30 +928,65 @@ export function withBookingInviteTracking(
     Component: ComponentType,
 ): ComponentType {
     return function BookingInviteTracking(props: any) {
-        return (
-            <Component
-                {...props}
-                onClick={async (event: any) => {
-                    event?.preventDefault?.()
-                    event?.stopPropagation?.()
-                    const w = window as any
-                    if (w[SUBMIT_LOCK_KEY]) return
-                    w[SUBMIT_LOCK_KEY] = true
-                    const form = event?.currentTarget?.closest?.("form") || null
+        useEffect(() => {
+            const submitHandler = (event: Event) => {
+                const form = event.target instanceof HTMLFormElement
+                    ? event.target
+                    : null
+                if (!form) return
+
+                const sourceNode = form.closest("[data-twn-lead-source]") ||
+                    form.querySelector("[data-twn-lead-source]")
+                const source = String(
+                    sourceNode?.getAttribute("data-twn-lead-source") || "",
+                ).trim().toLowerCase()
+                if (source !== "booking_invite") return
+
+                const w = window as any
+                if (w.__twn_replaying_booking_invite_submit) return
+                event.preventDefault()
+                event.stopImmediatePropagation()
+                if (w[SUBMIT_LOCK_KEY]) return
+                w[SUBMIT_LOCK_KEY] = true
+
+                void (async () => {
                     try {
+                        if (!form.checkValidity()) {
+                            form.reportValidity()
+                            return
+                        }
                         const ok = await postLeadWithSource(
                             form,
                             "booking_invite",
-                            props?.status === "partial_fill" ? "partial_fill" : undefined,
+                            props?.status === "partial_fill"
+                                ? "partial_fill"
+                                : undefined,
                         )
-                        if (ok) props.onClick?.(event)
+                        if (!ok) return
+
+                        // Preserve Framer's native success state after the
+                        // server has accepted the lead. The replay guard keeps
+                        // this form submit from creating a second lead event.
+                        w.__twn_replaying_booking_invite_submit = true
+                        form.requestSubmit()
+                        w.__twn_replaying_booking_invite_submit = false
                     } finally {
                         window.setTimeout(() => {
+                            w.__twn_replaying_booking_invite_submit = false
                             w[SUBMIT_LOCK_KEY] = false
                         }, 700)
                     }
-                }}
-                onSubmit={undefined}
+                })()
+            }
+
+            document.addEventListener("submit", submitHandler, true)
+            return () => document.removeEventListener("submit", submitHandler, true)
+        }, [])
+
+        return (
+            <Component
+                {...props}
+                data-twn-lead-source="booking_invite"
             />
         )
     }
@@ -845,35 +1001,36 @@ export function withTripPageLeadTracking(
     Component: ComponentType,
 ): ComponentType {
     return function TripPageLeadTracking(props: any) {
+        const getExplicitFormSource = (form: HTMLFormElement | null): string => {
+            const marked = form?.closest?.("[data-twn-lead-source]") ||
+                form?.querySelector?.("[data-twn-lead-source]")
+            return String(marked?.getAttribute?.("data-twn-lead-source") || "")
+                .trim()
+                .toLowerCase()
+        }
+
+        const isBookingInviteForm = (form: HTMLFormElement | null): boolean =>
+            getExplicitFormSource(form) === "booking_invite"
+
         const isCustomTripForm = (form: HTMLFormElement | null): boolean =>
-            Boolean(
-                form?.matches?.('[data-twn-lead-source="custom_trip_lead"]') ||
-                    form?.querySelector?.(
-                        '[data-twn-lead-source="custom_trip_lead"]',
-                    ) ||
-                    /can't decide\?|we'll reach out to you soon/i.test(
-                        String(
-                            form?.parentElement?.parentElement?.parentElement
-                                ?.textContent || form?.textContent || "",
-                        ),
-                    ),
-            )
+            getExplicitFormSource(form) === "custom_trip_lead"
 
         useEffect(() => {
-            const isTripLeadForm = (form: HTMLFormElement | null): boolean =>
-                Boolean(form) &&
-                    Boolean(
-                        form?.querySelector(
-                            'input[placeholder*="What would you like us to call you?" i]',
-                        ),
-                    )
+            const isTripLeadForm = (form: HTMLFormElement | null): boolean => {
+                const explicitSource = getExplicitFormSource(form)
+                if (explicitSource) return explicitSource === "trip_page_lead"
+                return Boolean(
+                    form?.querySelector(
+                        'input[placeholder*="What would you like us to call you?" i]',
+                    ),
+                )
+            }
 
             const captureTripLead = (
                 event: Event,
                 form: HTMLFormElement,
                 replay: () => void,
-                source: "trip_page_lead" | "custom_trip_lead" =
-                    "trip_page_lead",
+                source: "trip_page_lead" | "custom_trip_lead" = "trip_page_lead",
             ) => {
                 const w = window as any
                 if (w.__twn_replaying_trip_lead_submit) return
@@ -906,10 +1063,9 @@ export function withTripPageLeadTracking(
             }
 
             const submitHandler = (event: Event) => {
-                const form = event.target instanceof HTMLFormElement
-                    ? event.target
-                    : null
+                const form = event.target instanceof HTMLFormElement ? event.target : null
                 if (!form) return
+                if (isBookingInviteForm(form)) return
                 if (isCustomTripForm(form)) {
                     captureTripLead(
                         event,
@@ -928,6 +1084,8 @@ export function withTripPageLeadTracking(
                 const button = element?.closest("button") as HTMLButtonElement | null
                 const form = button?.closest("form") as HTMLFormElement | null
                 if (!button || !form) return
+                if (isBookingInviteForm(form)) return
+                if (!isFormSubmitClick(event, form)) return
 
                 // Framer's reusable lead component can handle its submit
                 // button through a component click path that bypasses the
@@ -956,6 +1114,7 @@ export function withTripPageLeadTracking(
         return (
             <Component
                 {...props}
+                data-twn-lead-source="trip_page_lead"
             />
         )
     }
@@ -974,6 +1133,11 @@ export function withTripItineraryDownloadTracking(
             <Component
                 {...props}
                 onClick={async (event: any) => {
+                    const form = resolveFormFromEvent(event)
+                    if (!isFormSubmitClick(event, form)) {
+                        props.onClick?.(event)
+                        return
+                    }
                     event?.preventDefault?.()
                     event?.stopPropagation?.()
                     event?.persist?.()
@@ -982,7 +1146,11 @@ export function withTripItineraryDownloadTracking(
                     w[SUBMIT_LOCK_KEY] = true
 
                     const target = event?.currentTarget
-                    const form = target?.closest?.("form") || null
+                    if (form && !form.checkValidity()) {
+                        form.reportValidity()
+                        w[SUBMIT_LOCK_KEY] = false
+                        return
+                    }
                     const itineraryName = getItineraryName(props, target)
                     const params = new URLSearchParams(window.location.search)
                     const submissionIdentity = firstNonEmptyText(
@@ -1001,25 +1169,27 @@ export function withTripItineraryDownloadTracking(
                         const ok = await postLeadWithSource(
                             form,
                             "trip_itinerary_download",
-                            undefined,
+                            "submitted",
                             {
                                 itineraryName,
                                 activityType: "itinerary_download",
                                 activityLabel: "Downloaded itinerary",
                                 submissionIdentity,
-                                retainSubmissionId: true,
                             },
                         )
                         if (!ok) return
 
-                        if (typeof props.onClick === "function") {
-                            props.onClick(event)
-                        } else if (href) {
+                        if (form) form.dataset.twnItinerarySubmitted = "true"
+                        if (href) {
                             if (linkTarget === "_blank") {
                                 window.open(href, "_blank", "noopener,noreferrer")
                             } else {
                                 window.location.assign(href)
                             }
+                        } else if (form) {
+                            replayFormSubmit(form, event)
+                        } else if (typeof props.onClick === "function") {
+                            props.onClick(event)
                         }
                     } finally {
                         window.setTimeout(() => {
@@ -1045,42 +1215,70 @@ export function withTripItineraryFormTracking(
         return (
             <Component
                 {...props}
-                onClick={async (event: any) => {
-                    const w = window as any
-                    if (w[SUBMIT_LOCK_KEY]) return
-                    w[SUBMIT_LOCK_KEY] = true
-                    const form = event?.currentTarget?.tagName === "FORM"
-                        ? event.currentTarget
-                        : event?.currentTarget?.closest?.("form") || null
-                    const itineraryName = getItineraryName(props, form)
-                    const params = new URLSearchParams(window.location.search)
-                    const submissionIdentity = firstNonEmptyText(
-                        props?.itinerarySlug,
-                        props?.tripSlug,
-                        props?.["data-itinerary-slug"],
-                        params.get("tripId"),
-                        params.get("slug"),
-                        itineraryName,
-                        "default",
-                    ) + ":partial"
-                    try {
-                        await postLeadWithSource(
-                            form,
-                            "trip_itinerary_download",
-                            undefined,
-                            {
-                                itineraryName,
-                                activityType: "itinerary_download",
-                                activityLabel: "Started itinerary request",
-                                submissionIdentity,
-                                retainSubmissionId: true,
-                            },
-                        )
-                    } finally {
-                        window.setTimeout(() => {
-                            w[SUBMIT_LOCK_KEY] = false
-                        }, 700)
-                    }
+                data-twn-lead-source="trip_itinerary_download"
+                onBlur={(event: any) => {
+                    props.onBlur?.(event)
+                    const form = resolveFormFromEvent(event)
+                    const next = event?.relatedTarget
+                    if (!form || (next instanceof Node && form.contains(next))) return
+
+                    window.setTimeout(() => {
+                        if (
+                            !form.isConnected ||
+                            form.contains(document.activeElement) ||
+                            form.dataset.twnItinerarySubmitted === "true" ||
+                            (form.dataset.twnItineraryPartialCaptured &&
+                                form.dataset.twnItineraryPartialCaptured !== "false")
+                        ) return
+                        form.dataset.twnItineraryPartialCaptured = "pending"
+                        const hasContact = findInputValue(form, [
+                            'input[type="email"]',
+                            'input[type="tel"]',
+                            'input[name*="name" i]',
+                        ])
+                        if (!hasContact) {
+                            form.dataset.twnItineraryPartialCaptured = "false"
+                            return
+                        }
+                        const itineraryName = getItineraryName(props, form)
+                        const params = new URLSearchParams(window.location.search)
+                        const submissionIdentity = firstNonEmptyText(
+                            props?.itinerarySlug,
+                            props?.tripSlug,
+                            props?.["data-itinerary-slug"],
+                            params.get("tripId"),
+                            params.get("slug"),
+                            itineraryName,
+                            "default",
+                        ) + ":partial"
+                        const submitPartial = async () => {
+                            const w = window as any
+                            if (w[SUBMIT_LOCK_KEY]) {
+                                form.dataset.twnItineraryPartialCaptured = "false"
+                                return
+                            }
+                            w[SUBMIT_LOCK_KEY] = true
+                            try {
+                                const ok = await postLeadWithSource(
+                                    form,
+                                    "trip_itinerary_download",
+                                    "partial_fill",
+                                    {
+                                        itineraryName,
+                                        activityType: "itinerary_download",
+                                        activityLabel: "Started itinerary request",
+                                        submissionIdentity,
+                                    },
+                                )
+                                form.dataset.twnItineraryPartialCaptured = ok ? "true" : "false"
+                            } finally {
+                                window.setTimeout(() => {
+                                    w[SUBMIT_LOCK_KEY] = false
+                                }, 700)
+                            }
+                        }
+                        void submitPartial()
+                    }, 500)
                 }}
                 onSubmit={undefined}
             />
@@ -1101,6 +1299,11 @@ export function withPartialFillTracking(
             <Component
                 {...props}
                 onClick={async (event: any) => {
+                    const form = resolveFormFromEvent(event)
+                    if (!isFormSubmitClick(event, form)) {
+                        props.onClick?.(event)
+                        return
+                    }
                     event?.preventDefault?.()
                     event?.stopPropagation?.()
                     const w = window as any
@@ -1109,7 +1312,6 @@ export function withPartialFillTracking(
                     const source = String(
                         props?.leadSource || props?.["data-source"] || "general_lead",
                     ).trim()
-                    const form = event?.currentTarget?.closest?.("form") || null
                     try {
                         const ok = await postLeadWithSource(form, source, "partial_fill")
                         if (ok) props.onClick?.(event)

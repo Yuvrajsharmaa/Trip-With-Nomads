@@ -1,5 +1,9 @@
 import { assert, assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts"
-import { currentRowAction, hasExactHeaders } from "./sheets.ts"
+import {
+    currentRowAction,
+    hasExactHeaders,
+    rowMatchesColumnFingerprint,
+} from "./sheets.ts"
 
 Deno.test("current-state Sheet projection has explicit zero/one/multiple behavior", () => {
     assertEquals(currentRowAction(0), "append")
@@ -12,6 +16,19 @@ Deno.test("header validation compares the complete row", () => {
     assert(hasExactHeaders(["Booking ID", "Payment Status", "Notes"], expected))
     assert(!hasExactHeaders(["Booking ID"], expected))
     assert(!hasExactHeaders(["Booking ID", "Payment Status", "Old Notes"], expected))
+})
+
+Deno.test("history fingerprints match existing formatted dates after numeric writes", () => {
+    const headers = ["Captured At", "Email", "Departure Date"]
+    assert(
+        rowMatchesColumnFingerprint(
+            ["1 Mar 2026, 5:30 AM", "guest@example.com", "9 May 2026"],
+            headers,
+            [46082.229166666664, "guest@example.com", 46151],
+            headers,
+            headers,
+        ),
+    )
 })
 
 Deno.test("application Sheet helper never creates missing managed tabs", async () => {

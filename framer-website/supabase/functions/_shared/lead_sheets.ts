@@ -1,4 +1,4 @@
-const LEAD_TIMEZONE = "Asia/Kolkata"
+import { timestampToSheetSerial } from "./sheet_dates.ts"
 
 export const LEAD_HEADERS = [
     "Captured At",
@@ -65,23 +65,6 @@ function uniqueStrings(values: unknown[]): string[] {
         output.push(text)
     }
     return output
-}
-
-function formatTimestampIST(value?: string): string {
-    if (!compact(value)) return ""
-    const date = new Date(value as string)
-    if (Number.isNaN(date.getTime())) return compact(value)
-    const parts = new Intl.DateTimeFormat("en-IN", {
-        timeZone: LEAD_TIMEZONE,
-        day: "numeric",
-        month: "short",
-        year: "numeric",
-        hour: "numeric",
-        minute: "2-digit",
-        hour12: true,
-    }).formatToParts(date)
-    const get = (type: string) => parts.find((part) => part.type === type)?.value || ""
-    return `${get("day")} ${get("month")} ${get("year")}, ${get("hour")}:${get("minute")} ${get("dayPeriod").toUpperCase()} IST`
 }
 
 function humanize(value: unknown, fallback = ""): string {
@@ -175,7 +158,9 @@ function companyName(lead: Record<string, any>, submission: Record<string, any>)
 function itineraryNames(lead: Record<string, any>, submission: Record<string, any>): string {
     const arrayValues = [
         ...(Array.isArray(lead.downloaded_itineraries) ? lead.downloaded_itineraries : []),
-        ...(Array.isArray(submission.downloaded_itineraries) ? submission.downloaded_itineraries : []),
+        ...(Array.isArray(submission.downloaded_itineraries)
+            ? submission.downloaded_itineraries
+            : []),
     ]
     const values = uniqueStrings([
         ...arrayValues,
@@ -187,7 +172,7 @@ function itineraryNames(lead: Record<string, any>, submission: Record<string, an
         lead.trip_slug,
         submission.trip_slug,
     ])
-    return values.map((value) => humanizeTrip(value)).filter(Boolean).join(", ")
+    return uniqueStrings(values.map(humanizeTrip)).join(", ")
 }
 
 function activityText(lead: Record<string, any>, submission: Record<string, any>): string {
@@ -239,8 +224,19 @@ function leadFields(params: {
     )
 
     return {
-        capturedAt: formatTimestampIST(firstNonEmpty(lead.first_seen_at, lead.created_at)),
-        lastActivity: formatTimestampIST(firstNonEmpty(lead.last_seen_at, lead.updated_at, lead.created_at)),
+        capturedAt: timestampToSheetSerial(firstNonEmpty(
+            lead.first_seen_at,
+            lead.created_at,
+            submission.captured_at,
+            submission.created_at,
+        )),
+        lastActivity: timestampToSheetSerial(firstNonEmpty(
+            lead.last_seen_at,
+            lead.updated_at,
+            lead.created_at,
+            submission.captured_at,
+            submission.created_at,
+        )),
         name: firstNonEmpty(lead.name, submission.name),
         email: firstNonEmpty(lead.email, submission.email).toLowerCase(),
         phone: formatPhone(
@@ -289,13 +285,16 @@ export function buildAbandonedLeadSheetRow(params: {
         latestSubmission: submission,
     })
     return [
-        formatTimestampIST(params.capturedAt || submission.captured_at || submission.created_at),
+        timestampToSheetSerial(params.capturedAt || submission.captured_at || submission.created_at),
         fields.name,
         fields.email,
         fields.phone,
         fields.trip,
         fields.source,
-        fields.activity || (sourceKey === "booking_abandoned" ? "Checkout abandoned before payment" : "Partially filled form"),
+        fields.activity ||
+        (sourceKey === "booking_abandoned"
+            ? "Checkout abandoned before payment"
+            : "Partially filled form"),
         humanizeLeadStatus(submission.status || "partial_fill"),
         fields.notes,
     ]
@@ -339,7 +338,7 @@ export function buildMasterLeadSheetRow(params: {
         latestSubmissionId: params.latestSubmissionId,
         latestSubmission: params.latestSubmission,
         notes: params.notes,
-    }).map((value, index) => index === 9 && params.status
-        ? humanizeLeadStatus(params.status)
-        : value)
+    }).map((value, index) =>
+        index === 9 && params.status ? humanizeLeadStatus(params.status) : value
+    )
 }
