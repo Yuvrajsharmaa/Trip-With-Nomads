@@ -251,6 +251,34 @@ let _subs: Array<() => void> = []
 let _pendingCountdown = 0
 let _errorMessage = ""
 
+type StatusTextOptions = {
+    loadingText: string
+    errorText: string
+    readyText?: string
+    fallbackText: string
+}
+
+function statusTextForState(state: LoadState, options: StatusTextOptions): string {
+    if (state === "loading") return options.loadingText
+    if (state === "error") return options.errorText
+    return options.readyText ?? options.fallbackText
+}
+
+type StatusIconState = "checking" | "unavailable" | "failed" | "pending" | "success"
+
+function statusIconForState(state: LoadState, paymentStatus?: string): StatusIconState {
+    if (state === "loading") return "checking"
+    if (state === "error") return "unavailable"
+    if (paymentStatus === "failed") return "failed"
+    if (paymentStatus === "pending") return "pending"
+    if (paymentStatus === "paid") return "success"
+    return "unavailable"
+}
+
+function shouldShowPaymentSummary(state: LoadState, paymentStatus?: string): boolean {
+    return state === "ready" && paymentStatus !== "failed"
+}
+
 function notify() { _subs.forEach((fn) => fn()) }
 
 function useBooking(): [BookingData | null, LoadState] {
@@ -585,7 +613,12 @@ export function withBookingStatus(Component): ComponentType {
 //    component and replaces its textContent.
 // ═════════════════════════════════════════════════════════════
 
-function textOverride(getter: (d: BookingData) => string, fallback = "—") {
+function textOverride(
+    getter: (d: BookingData) => string,
+    fallback = "—",
+    loadingText = "Loading…",
+    errorText = fallback,
+) {
     return function (Component: ComponentType): ComponentType {
         return (props: any) => {
             const [data, state] = useBooking()
@@ -596,20 +629,14 @@ function textOverride(getter: (d: BookingData) => string, fallback = "—") {
                 const el = ref.current.querySelector("p, span, h1, h2, h3, h4, h5, h6")
                 if (!el) return
 
-                if (state === "loading") {
-                    ; (el as HTMLElement).style.opacity = "0.4"
-                    return
-                }
-
-                ; (el as HTMLElement).style.opacity = "1"
-
-                if (state === "error") {
-                    ; (el as HTMLElement).textContent = _errorMessage || "We couldn't load your booking status. Please try again."
-                } else if (state === "ready" && data) {
-                    ; (el as HTMLElement).textContent = getter(data)
-                } else {
-                    ; (el as HTMLElement).textContent = fallback
-                }
+                const text = statusTextForState(state, {
+                    loadingText,
+                    errorText,
+                    readyText: data ? getter(data) : undefined,
+                    fallbackText: fallback,
+                })
+                ; (el as HTMLElement).style.opacity = state === "loading" ? "0.72" : "1"
+                ; (el as HTMLElement).textContent = text
             }, [data, state])
 
             return (
@@ -933,7 +960,9 @@ export function withHeadingText(Component): ComponentType {
             if (d.payment_status === "failed") return "Payment Failed"
             return "Processing…"
         },
-        "Loading…"
+        "We couldn't verify this booking.",
+        "Checking payment status…",
+        "We couldn't verify this booking.",
     )(Component)
     return Wrapped
 }
@@ -956,7 +985,9 @@ export function withSubheadingText(Component): ComponentType {
             }
             return "We're confirming your payment…"
         },
-        ""
+        "Refresh this page or contact us if the issue continues.",
+        "Loading your booking details securely…",
+        "Your payment status could not be verified. Please refresh or contact us.",
     )(Component)
     return Wrapped
 }
@@ -966,19 +997,42 @@ export function withStatusIcon(Component): ComponentType {
     return (props: any) => {
         const [data, state] = useBooking()
         const ref = useRef<HTMLDivElement>(null)
+        const originalIconMarkup = useRef<string | null>(null)
 
         useEffect(() => {
-            if (!ref.current || state !== "ready" || !data) return
+            if (!ref.current) return
 
             const el = ref.current
-            const isFailed = data.payment_status === "failed"
-            const isPending = data.payment_status === "pending"
+            if (originalIconMarkup.current === null) {
+                originalIconMarkup.current = el.innerHTML
+            }
+            const iconState = statusIconForState(state, data?.payment_status)
 
-            // Try to find an SVG or img inside
-            const svg = el.querySelector("svg")
-            const img = el.querySelector("img")
+            if (iconState === "checking") {
+                el.innerHTML = `
+                    <div role="status" aria-label="Checking payment status" style="
+                        width: 64px; height: 64px; border-radius: 50%;
+                        background: #e5e7eb; color: #475569; display: flex;
+                        align-items: center; justify-content: center;
+                        margin: 0 auto; font-size: 30px; font-weight: 600;
+                    ">…</div>
+                `
+                return
+            }
 
-            if (isFailed) {
+            if (iconState === "unavailable") {
+                el.innerHTML = `
+                    <div role="status" aria-label="Booking status unavailable" style="
+                        width: 64px; height: 64px; border-radius: 50%;
+                        background: #f59e0b; color: white; display: flex;
+                        align-items: center; justify-content: center;
+                        margin: 0 auto; font-size: 30px; font-weight: 600;
+                    ">!</div>
+                `
+                return
+            }
+
+            if (iconState === "failed") {
                 // Replace content with a red ✗ circle
                 el.innerHTML = `
                     <div style="
@@ -993,7 +1047,7 @@ export function withStatusIcon(Component): ComponentType {
                         </svg>
                     </div>
                 `
-            } else if (isPending) {
+            } else if (iconState === "pending") {
                 el.innerHTML = `
                     <div style="
                         width: 64px; height: 64px; border-radius: 50%;
@@ -1007,8 +1061,11 @@ export function withStatusIcon(Component): ComponentType {
                         </svg>
                     </div>
                 `
+            } else if (iconState === "success") {
+                // Restore the original Framer success icon only after the
+                // signed status endpoint confirms the booking is paid.
+                el.innerHTML = originalIconMarkup.current || ""
             }
-            // On "paid", leave the original ✅ icon from Framer
         }, [data, state])
 
         return (
@@ -1168,7 +1225,7 @@ export function withHideOnFailure(Component): ComponentType {
     return (props: any) => {
         const [data, state] = useBooking()
 
-        if (state === "ready" && data && data.payment_status === "failed") {
+        if (!shouldShowPaymentSummary(state, data?.payment_status)) {
             return <Component {...props} style={{ ...props.style, display: "none" }} />
         }
 
