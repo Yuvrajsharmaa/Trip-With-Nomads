@@ -5,52 +5,53 @@ import path from "node:path"
 
 export const MANAGED_TABS = {
   Bookings: {
-    key: "Booking Key",
+    key: "Booking Ref",
     headers: [
-      "Last Updated", "Booking Reference", "Trip", "Departure", "Guest Name", "Email", "Phone",
-      "Traveller Count", "Traveller Details", "Coupon", "Payment Plan", "Subtotal", "Discount", "GST",
-      "Trip Total", "Payable Now", "Paid", "Balance Due", "Payment Status", "Settlement Status",
-      "Payment Provider", "Payment Attempt", "Last Payment Event", "Last Payment Event At", "Notes",
-      "Booking Key", "Trip Key", "Provider Order", "Provider Payment",
+      "Last Updated", "Booking Ref", "Trip", "Departure Date", "Guest Name", "Email", "Phone",
+      "Travellers", "Payment Plan", "Trip Total", "Paid", "Balance Due", "Payment Status",
+      "Settlement Status", "Notes",
     ],
   },
-  Bookings_Success: { key: "Event Key", history: true, headers: [
-    "Event Received", "Booking Reference", "Trip", "Departure", "Guest Name", "Email", "Payment Provider",
-    "Payment Event", "Payment Result", "Settlement Status", "Amount Received", "Expected Amount",
-    "Processed At", "Reconciliation", "Notes", "Event Key", "Booking Key", "Payment Attempt",
-    "Provider Order", "Provider Payment",
+  Bookings_Success: { history: true, fingerprint: [
+    "Payment Date", "Booking Ref", "Trip", "Departure Date", "Email", "Amount Received",
+    "Expected Amount", "Payment Result",
+  ], headers: [
+    "Payment Date", "Booking Ref", "Trip", "Departure Date", "Guest Name", "Email",
+    "Amount Received", "Expected Amount", "Payment Result", "Settlement Status", "Notes",
   ] },
-  Bookings_Failed: { key: "Event Key", history: true, headers: [
-    "Event Received", "Booking Reference", "Trip", "Departure", "Guest Name", "Email", "Payment Provider",
-    "Payment Event", "Payment Result", "Settlement Status", "Amount Received", "Expected Amount",
-    "Processed At", "Reconciliation", "Notes", "Event Key", "Booking Key", "Payment Attempt",
-    "Provider Order", "Provider Payment",
+  Bookings_Failed: { history: true, fingerprint: [
+    "Payment Date", "Booking Ref", "Trip", "Departure Date", "Email", "Amount Received",
+    "Expected Amount", "Payment Result",
+  ], headers: [
+    "Payment Date", "Booking Ref", "Trip", "Departure Date", "Guest Name", "Email",
+    "Amount Received", "Expected Amount", "Payment Result", "Settlement Status", "Notes",
   ] },
   Leads: { key: "Email", headers: [
-    "First Seen", "Last Seen", "Name", "Email", "Phone", "Country Code", "Instagram", "Source", "Page",
-    "Trip", "Reason", "Submissions", "Status", "Notes", "Lead Key", "Latest Submission Key", "Trip Key",
-    "Source Key", "Status Key", "UTM Source", "UTM Medium", "UTM Campaign", "UTM Term", "UTM Content",
+    "Captured At", "Last Activity", "Name", "Email", "Phone", "Company / Group", "Trip / Itinerary",
+    "Reason / Activity", "Source", "Status", "Notes",
   ] },
   "Custom Trip Leads": { key: "Email", headers: [
-    "First Seen", "Last Seen", "Name", "Email", "Phone", "Country Code", "Instagram", "Source", "Page",
-    "Trip", "Reason", "Submissions", "Status", "Notes", "Lead Key", "Latest Submission Key", "Trip Key",
-    "Source Key", "Status Key", "UTM Source", "UTM Medium", "UTM Campaign", "UTM Term", "UTM Content",
+    "Captured At", "Last Activity", "Name", "Email", "Phone", "Company / Group", "Trip / Itinerary",
+    "Reason / Activity", "Source", "Status", "Notes",
   ] },
-  "Abandoned Leads": { key: "Submission Key", history: true, headers: [
-    "Captured At", "Name", "Email", "Phone", "Country Code", "Instagram", "Source", "Page", "Trip",
-    "Status", "Reason", "Notes", "Submission Key", "Lead Key", "Trip Key", "Source Key", "Status Key",
-    "UTM Source", "UTM Medium", "UTM Campaign", "UTM Term", "UTM Content",
+  "Abandoned Leads": { history: true, fingerprint: [
+    "Captured At", "Email", "Phone", "Trip / Itinerary", "Source", "Reason / Activity",
+  ], headers: [
+    "Captured At", "Name", "Email", "Phone", "Trip / Itinerary", "Source", "Reason / Activity", "Status", "Notes",
+  ] },
+  "Abandoned Bookings": { history: true, fingerprint: [
+    "Captured At", "Email", "Phone", "Trip", "Departure Date", "Reason",
+  ], headers: [
+    "Captured At", "Name", "Email", "Phone", "Trip", "Departure Date", "Travellers", "Payment Plan",
+    "Reason", "Status", "Notes",
   ] },
   "NTC - Invites": { key: "Email", headers: [
-    "First Seen", "Last Seen", "Name", "Email", "Phone", "Country Code", "Instagram",
-    "Why They Want To Travel", "Source", "Page", "Trip", "Submissions", "Status", "Notes", "Lead Key",
-    "Latest Submission Key", "Trip Key", "Source Key", "Status Key", "UTM Source", "UTM Medium", "UTM Campaign",
-    "UTM Term", "UTM Content",
+    "Captured At", "Last Activity", "Name", "Email", "Phone", "Instagram", "Why They Want To Travel",
+    "Trip / Itinerary", "Status", "Notes",
   ] },
   "Master Leads": { key: "Email", headers: [
-    "First Seen", "Last Seen", "Name", "Email", "Phone", "Country Code", "Instagram", "Source", "Page",
-    "Trip", "Reason", "Submissions", "Status", "Notes", "Lead Key", "Latest Submission Key", "Trip Key",
-    "Source Key", "Status Key", "UTM Source", "UTM Medium", "UTM Campaign", "UTM Term", "UTM Content",
+    "Captured At", "Last Activity", "Name", "Email", "Phone", "Company / Group", "Trip / Itinerary",
+    "Reason / Activity", "Source", "Status", "Notes",
   ] },
 }
 
@@ -85,15 +86,23 @@ export function analyzeTab(tabName, values) {
   const expectedHeaders = config.headers
   const headerDrift = expectedHeaders.length > 0 && JSON.stringify(actualHeaders) !== JSON.stringify(expectedHeaders)
   const headers = indexHeaders(rows[0] || [])
-  const keyPosition = headers.get(config.key.toLowerCase())
+  const keyPosition = config.key ? headers.get(config.key.toLowerCase()) : null
+  const fingerprintPositions = (config.fingerprint || []).map((header) => headers.get(header.toLowerCase()))
+  const recordKey = (row) => {
+    if (config.history) {
+      if (fingerprintPositions.some((position) => position == null)) return ""
+      return fingerprintPositions.map((position) => normalize(row[position])).join("\u001f")
+    }
+    return keyPosition == null ? "" : normalize(row[keyPosition])
+  }
   const records = rows.slice(1).map((row, offset) => ({
     rowNumber: offset + 2,
     values: Array.isArray(row) ? row : [],
-    key: keyPosition == null ? "" : normalize(row[keyPosition]),
+    key: recordKey(Array.isArray(row) ? row : []),
   }))
   const groups = new Map()
   for (const record of records) {
-    const key = config.key.toLowerCase() === "email" ? normalizeEmail(record.key) : record.key
+    const key = config.key?.toLowerCase() === "email" ? normalizeEmail(record.key) : record.key
     if (!key) continue
     if (!groups.has(key)) groups.set(key, [])
     groups.get(key).push(record.rowNumber)

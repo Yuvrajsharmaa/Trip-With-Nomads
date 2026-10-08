@@ -1267,6 +1267,13 @@ async function postBookingAbandonLead(store: any): Promise<boolean> {
         page_url: typeof window !== "undefined" ? window.location.href : null,
         trip_id: tripId,
         trip_slug: params.get("slug") || params.get("trip_slug"),
+        trip_name: firstNonEmpty(store?.tripName, params.get("trip_name")),
+        departure_date: firstNonEmpty(store?.date, params.get("date")),
+        travellers: Array.isArray(store?.travellers) ? store.travellers : [],
+        traveller_count: Array.isArray(store?.travellers)
+            ? store.travellers.length
+            : null,
+        payment_mode: firstNonEmpty(store?.paymentMode, "full"),
         utm_source: params.get("utm_source"),
         utm_medium: params.get("utm_medium"),
         utm_campaign: params.get("utm_campaign"),

@@ -18,6 +18,20 @@ export const BOOKING_HEADERS = [
     "Notes",
 ]
 
+export const ABANDONED_BOOKING_HEADERS = [
+    "Captured At",
+    "Name",
+    "Email",
+    "Phone",
+    "Trip",
+    "Departure Date",
+    "Travellers",
+    "Payment Plan",
+    "Reason",
+    "Status",
+    "Notes",
+]
+
 function toNumber(value: any): number {
     const parsed = Number(value)
     return Number.isFinite(parsed) ? Math.round(parsed * 100) / 100 : 0
@@ -130,6 +144,20 @@ function paymentPlan(value: any): string {
     return compact(value).toLowerCase() === "partial_25" ? "25% deposit" : "Full payment"
 }
 
+function humanizeAbandonmentReason(value: any): string {
+    const raw = compact(value).toLowerCase()
+    if (raw === "checkout_abandoned_before_payment") {
+        return "Checkout abandoned before payment"
+    }
+    return humanize(value)
+}
+
+function humanizeAbandonmentStatus(value: any): string {
+    const raw = compact(value).toLowerCase()
+    if (raw === "abandoned_booking") return "Checkout abandoned"
+    return humanize(value)
+}
+
 export function buildBookingSheetRow(params: {
     booking: Record<string, any>
     eventStage?: string
@@ -159,5 +187,28 @@ export function buildBookingSheetRow(params: {
         humanizePaymentStatus(booking.payment_status || "pending"),
         humanizeSettlementStatus(booking.settlement_status || "pending"),
         notes,
+    ]
+}
+
+export function buildAbandonedBookingSheetRow(params: {
+    submission: Record<string, any>
+    capturedAt?: string
+}) {
+    const submission = params.submission || {}
+    return [
+        formatTimestampIST(params.capturedAt || submission.captured_at || submission.created_at),
+        compact(submission.name),
+        compact(submission.email).toLowerCase(),
+        formatPhone(submission.country_code, submission.phone),
+        compact(submission.trip_name || submission.trip_title || submission.trip_slug),
+        formatDeparture(submission.departure_date || submission.date),
+        formatTravellerSummary(
+            Array.isArray(submission.travellers) ? submission.travellers : [],
+            submission.traveller_count || submission.travellers_count,
+        ),
+        paymentPlan(submission.payment_mode),
+        humanizeAbandonmentReason(submission.reason),
+        humanizeAbandonmentStatus(submission.status),
+        compact(submission.notes),
     ]
 }

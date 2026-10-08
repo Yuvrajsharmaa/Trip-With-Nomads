@@ -13,6 +13,10 @@ import {
     MASTER_LEAD_HEADERS,
     NTC_INVITE_HEADERS,
 } from "./lead_sheets.ts"
+import {
+    ABANDONED_BOOKING_HEADERS,
+    buildAbandonedBookingSheetRow,
+} from "./booking_sheets.ts"
 import { targetForLead } from "./lead_routing.ts"
 
 export type LeadProjectionParams = {
@@ -184,14 +188,22 @@ export async function projectLeadSheets(
         params.source === "booking_abandoned"
 
     if (isHistoryEvent) {
-        const values = buildAbandonedLeadSheetRow({
-            submission: {
-                ...params.submission,
-                submission_id: params.submissionId,
-                lead_id: params.lead?.id || "",
-                reason: params.submission.reason || params.status || "partial_fill",
-            },
-        })
+        const isBookingAbandonment = params.source === "booking_abandoned"
+        const submission = {
+            ...params.submission,
+            submission_id: params.submissionId,
+            lead_id: params.lead?.id || "",
+            reason: params.submission.reason || params.status || "partial_fill",
+        }
+        const values = isBookingAbandonment
+            ? buildAbandonedBookingSheetRow({ submission })
+            : buildAbandonedLeadSheetRow({ submission })
+        const historyHeaders = isBookingAbandonment
+            ? ABANDONED_BOOKING_HEADERS
+            : ABANDONED_LEAD_HEADERS
+        const fingerprintColumns = isBookingAbandonment
+            ? ["Captured At", "Email", "Phone", "Trip", "Departure Date", "Reason"]
+            : projectionFingerprintColumns()
         await runProjectionAttempt({
             projection: params,
             sheetId: route.sheetId,
@@ -203,8 +215,8 @@ export async function projectLeadSheets(
                 route.sheetId,
                 route.tab,
                 values,
-                ABANDONED_LEAD_HEADERS,
-                projectionFingerprintColumns(),
+                historyHeaders,
+                fingerprintColumns,
             ),
         })
     } else {

@@ -460,6 +460,12 @@ Deno.serve(async (req) => {
             trip_slug: inferredTripSlug,
             trip_name: compact(body?.trip_name),
             itinerary_name: compact(body?.itinerary_name),
+            departure_date: compact(body?.departure_date || body?.date),
+            travellers: Array.isArray(body?.travellers) ? body.travellers : [],
+            traveller_count: Number.isFinite(Number(body?.traveller_count))
+                ? Number(body.traveller_count)
+                : (Array.isArray(body?.travellers) ? body.travellers.length : null),
+            payment_mode: compact(body?.payment_mode || body?.paymentMode),
             activity_type: compact(body?.activity_type),
             activity_label: compact(body?.activity_label || body?.activity),
             company_name: compact(body?.company_name || body?.company || body?.group_name),
