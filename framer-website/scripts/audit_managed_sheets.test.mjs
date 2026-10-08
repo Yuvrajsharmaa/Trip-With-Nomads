@@ -4,7 +4,7 @@ import { analyzeTab, buildDryRunRepairPlan, MANAGED_TABS } from "./audit_managed
 
 test("managed Sheet audit finds duplicate current rows, orphan rows, and gateway drift", () => {
   const audit = analyzeTab("Bookings", [
-    ["Booking Key", "PayU TxnID"],
+    ["Booking Ref", "PayU TxnID"],
     ["booking-1", "txn-1"],
     ["booking-1", "txn-2"],
     ["", "txn-3"],
@@ -48,4 +48,21 @@ test("master leads are audited as one normalized current contact per email", () 
   ])
   assert.deepEqual(audit.duplicateKeys, [{ key: "guest@example.com", rows: [2, 3] }])
   assert.equal(buildDryRunRepairPlan({ tabs: [audit] })[0].action, "merge_current_rows_dry_run")
+})
+
+test("payment history and abandoned bookings use visible fingerprints", () => {
+  const success = analyzeTab("Bookings_Success", [
+    MANAGED_TABS.Bookings_Success.headers,
+    ["8 Oct 2026, 3:30 PM IST", "TWN-1", "Trip", "20 Dec 2026", "Guest", "guest@example.com", 100, 100, "Paid", "Fully paid", ""],
+    ["8 Oct 2026, 3:30 PM IST", "TWN-1", "Trip", "20 Dec 2026", "Guest", "guest@example.com", 100, 100, "Paid", "Fully paid", ""],
+  ])
+  assert.equal(success.headerDrift, false)
+  assert.deepEqual(success.exactHistoryDuplicates, [{ key: "8 Oct 2026, 3:30 PM IST\u001fTWN-1\u001fTrip\u001f20 Dec 2026\u001fguest@example.com\u001f100\u001f100\u001fPaid", rows: [2, 3] }])
+
+  const abandoned = analyzeTab("Abandoned Bookings", [
+    MANAGED_TABS["Abandoned Bookings"].headers,
+    ["8 Oct 2026, 3:30 PM IST", "Guest", "guest@example.com", "+91 9876543210", "Trip", "20 Dec 2026", "Guest (Double)", "25% deposit", "Checkout abandoned before payment", "Checkout abandoned", ""],
+  ])
+  assert.equal(abandoned.headerDrift, false)
+  assert.deepEqual(abandoned.orphanRows, [])
 })

@@ -29,3 +29,17 @@ Deno.test("lead display migration preserves the latest invite reason", async () 
     )
     assertStringIncludes(source, "add column if not exists latest_reason text")
 })
+
+Deno.test("lead projection state supports retries and itinerary activity", async () => {
+    const files: string[] = []
+    for await (const entry of Deno.readDir(new URL(".", import.meta.url))) {
+        if (!entry.isFile || !entry.name.endsWith(".sql")) continue
+        files.push(await Deno.readTextFile(new URL(entry.name, import.meta.url)))
+    }
+    const source = files.join("\n")
+    assertStringIncludes(source, "configuration_missing")
+    assertStringIncludes(source, "company_name")
+    assertStringIncludes(source, "latest_activity")
+    assertStringIncludes(source, "downloaded_itineraries")
+    assertStringIncludes(source, "lead_sheet_projection_attempts")
+})

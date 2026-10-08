@@ -31,6 +31,9 @@ Deno.test("canonical checkout uses stable request ids, the active Razorpay gatew
     assertStringIncludes(source, "BOOKING_ABANDON_LEAD_SOURCE")
     assertStringIncludes(source, "checkout_abandoned_before_payment")
     assertStringIncludes(source, "getStableBookingAbandonId")
+    assertStringIncludes(source, "departure_date")
+    assertStringIncludes(source, "travellers")
+    assertStringIncludes(source, "payment_mode")
     assertStringIncludes(source, "pagehide")
 })
 
@@ -71,6 +74,8 @@ Deno.test("all legacy lead routes remain exported and use one guarded submission
             "withFormTracking",
             "withBookingInviteTracking",
             "withTripPageLeadTracking",
+            "withTripItineraryFormTracking",
+            "withTripItineraryDownloadTracking",
             "withPartialFillTracking",
         ]
     ) {

@@ -7,7 +7,7 @@ import {
 } from "../_shared/booking_callback_sheets.ts"
 import {
     appendRow,
-    appendHistoryRowOnce,
+    appendHistoryRowOnceByFingerprint,
     sheetsEnabled,
     upsertCurrentRow,
 } from "../_shared/sheets.ts"
@@ -56,6 +56,10 @@ class InvalidWebhookError extends Error {
 
 class GatewayUnavailableError extends Error {
     code = "GATEWAY_UNAVAILABLE"
+}
+
+class SheetConfigurationError extends Error {
+    code = "SHEET_CONFIGURATION_MISSING"
 }
 
 function firstNonEmpty(...values: unknown[]): string {
@@ -372,7 +376,7 @@ async function claimPaymentEvent(supabase: any, row: any): Promise<"process" | "
     const sheet = String(row?.sheet_sync_status || "").toLowerCase()
     if (processing === "ignored") return "done"
     if (processing === "applied") {
-        if (sheet !== "synced" && sheet !== "not_required") return "sheet"
+        if (sheet !== "synced") return "sheet"
         return "email"
     }
     // A worker can terminate after marking an event as processing. Reclaim it
@@ -395,7 +399,7 @@ async function claimPaymentEvent(supabase: any, row: any): Promise<"process" | "
     const latestProcessing = String(latest.data?.processing_status || "").toLowerCase()
     const latestSheet = String(latest.data?.sheet_sync_status || "").toLowerCase()
     if (latestProcessing === "applied") {
-        if (latestSheet !== "synced" && latestSheet !== "not_required") return "sheet"
+        if (latestSheet !== "synced") return "sheet"
         return "email"
     }
     if (latestProcessing === "ignored") return "done"
@@ -829,9 +833,17 @@ async function syncPaymentSheets(params: {
     paymentId?: string
     reconciliationResult?: string
 }): Promise<boolean> {
-    if (!isTruthy(Deno.env.get("BOOKING_SHEETS_WRITE_ENABLED")) || !sheetsEnabled()) return false
+    if (!isTruthy(Deno.env.get("BOOKING_SHEETS_WRITE_ENABLED")) || !sheetsEnabled()) {
+        throw new SheetConfigurationError(
+            "Booking Sheet projection configuration is missing or disabled",
+        )
+    }
     const sheetId = bookingSheetId()
-    if (!sheetId) throw new Error("Booking Sheets are enabled but no booking spreadsheet is configured")
+    if (!sheetId) {
+        throw new SheetConfigurationError(
+            "Booking Sheets are enabled but no booking spreadsheet is configured",
+        )
+    }
 
     const bookingsTab = firstNonEmpty(Deno.env.get("BOOKINGS_SHEET_TAB"), "Bookings")
     // The bookings table stores the trip foreign key rather than a readable
@@ -859,8 +871,8 @@ async function syncPaymentSheets(params: {
     await upsertCurrentRow(
         sheetId,
         bookingsTab,
-        "Booking ID",
-        String(params.booking.id),
+        "Booking Ref",
+        String(params.booking.booking_ref || params.booking.id || ""),
         currentRow,
         BOOKING_HEADERS,
     )
@@ -884,15 +896,29 @@ async function syncPaymentSheets(params: {
         reconciliationResult: params.reconciliationResult,
         notes: params.notes,
     })
-    await appendHistoryRowOnce(
+    await appendHistoryRowOnceByFingerprint(
         sheetId,
         historyTab,
-        "Event ID",
-        params.eventId,
         historyRow,
         BOOKING_CALLBACK_HEADERS,
+        [
+            "Payment Date",
+            "Booking Ref",
+            "Trip",
+            "Departure Date",
+            "Email",
+            "Amount Received",
+            "Expected Amount",
+            "Payment Result",
+        ],
     )
     return true
+}
+
+function sheetSyncStatusForError(error: unknown): "failed" | "configuration_missing" {
+    return (error as any)?.code === "SHEET_CONFIGURATION_MISSING"
+        ? "configuration_missing"
+        : "failed"
 }
 
 serve(async (req) => {
@@ -963,9 +989,8 @@ serve(async (req) => {
                 if (attemptLookup.error) throw attemptLookup.error
                 attempt = attemptLookup.data
             }
-            let synced = false
             try {
-                synced = await syncPaymentSheets({
+                await syncPaymentSheets({
                     supabase,
                     booking,
                     attempt,
@@ -981,13 +1006,13 @@ serve(async (req) => {
                     reconciliationResult: eventRow.reconciliation_result,
                 })
                 eventRow = await updatePaymentEvent(supabase, eventRow.id, {
-                    sheet_sync_status: synced ? "synced" : "not_required",
-                    sheet_synced_at: synced ? new Date().toISOString() : null,
+                    sheet_sync_status: "synced",
+                    sheet_synced_at: new Date().toISOString(),
                     error_message: null,
                 })
             } catch (sheetError: any) {
                 await updatePaymentEvent(supabase, eventRow.id, {
-                    sheet_sync_status: "failed",
+                    sheet_sync_status: sheetSyncStatusForError(sheetError),
                     error_message: String(sheetError?.message || sheetError).slice(0, 500),
                 })
                 return jsonResponse({ error: "Payment applied; Sheet projection failed" }, 500)
@@ -1117,7 +1142,7 @@ serve(async (req) => {
         })
 
         try {
-            const synced = await syncPaymentSheets({
+            await syncPaymentSheets({
                 supabase,
                 booking: reconciliation.booking,
                 attempt,
@@ -1133,13 +1158,13 @@ serve(async (req) => {
                 reconciliationResult: reconciliation.reconciliationResult,
             })
             eventRow = await updatePaymentEvent(supabase, eventRow.id, {
-                sheet_sync_status: synced ? "synced" : "not_required",
-                sheet_synced_at: synced ? new Date().toISOString() : null,
+                sheet_sync_status: "synced",
+                sheet_synced_at: new Date().toISOString(),
                 error_message: null,
             })
         } catch (sheetError: any) {
             await updatePaymentEvent(supabase, eventRow.id, {
-                sheet_sync_status: "failed",
+                sheet_sync_status: sheetSyncStatusForError(sheetError),
                 error_message: String(sheetError?.message || sheetError).slice(0, 500),
             })
             return jsonResponse({ error: "Payment applied; Sheet projection failed" }, 500)
@@ -1163,6 +1188,7 @@ serve(async (req) => {
         const message = String(error?.message || error || "Webhook processing failed")
         const invalid = error instanceof InvalidWebhookError || error?.code === "INVALID_WEBHOOK"
         const retryable = error instanceof GatewayUnavailableError || error?.code === "GATEWAY_UNAVAILABLE"
+        const sheetConfigurationMissing = error?.code === "SHEET_CONFIGURATION_MISSING"
         console.error("[razorpay-webhook] processing failed", {
             eventId,
             eventName,
@@ -1174,7 +1200,9 @@ serve(async (req) => {
             eventRow = await updatePaymentEvent(supabase, eventRow.id, {
                 verification_status: invalid ? "invalid" : eventRow.verification_status || "received",
                 processing_status: paymentApplied ? "applied" : invalid ? "ignored" : "failed",
-                sheet_sync_status: paymentApplied ? "failed" : "not_required",
+                sheet_sync_status: paymentApplied
+                    ? (sheetConfigurationMissing ? "configuration_missing" : "failed")
+                    : "not_required",
                 error_message: message.slice(0, 500),
                 processed_at: invalid ? new Date().toISOString() : null,
             })

@@ -226,18 +226,29 @@ export async function formatManagedTab(
         "Payable Now",
         "Paid Amount",
         "Balance Due",
+        "Paid",
         "Amount Received",
         "Expected Amount",
     ])
     const wrapHeaders = new Set([
         "Traveller Summary",
+        "Travellers",
+        "Trip / Itinerary",
+        "Reason / Activity",
+        "Company / Group",
         "Notes",
         "Reason",
         "Why They Want To Travel",
-        "Page",
         "Reconciliation",
         "Reconciliation Result",
     ])
+    const dateTimeHeaders = new Set([
+        "Captured At",
+        "Last Activity",
+        "Last Updated",
+        "Payment Date",
+    ])
+    const dateHeaders = new Set(["Departure Date"])
     const hiddenHeaders = new Set(
         headers.filter((header) =>
             /^utm\s/i.test(header) ||
@@ -290,7 +301,7 @@ export async function formatManagedTab(
             ? 120
             : wrapHeaders.has(header)
             ? 280
-            : /^last (updated|seen)|^first seen|^captured at|^event received|^processed at|^last payment event at/i
+            : /^last (updated|seen|activity)|^first seen|^captured at|^payment date|^event received|^processed at|^last payment event at/i
                     .test(header)
             ? 205
             : /url|page/i.test(header)
@@ -323,6 +334,42 @@ export async function formatManagedTab(
                     cell: {
                         userEnteredFormat: {
                             numberFormat: { type: "NUMBER", pattern: "₹#,##0.00" },
+                        },
+                    },
+                    fields: "userEnteredFormat.numberFormat",
+                },
+            })
+        }
+        if (dateTimeHeaders.has(header)) {
+            requests.push({
+                repeatCell: {
+                    range: {
+                        sheetId: target.sheetId,
+                        startRowIndex: 1,
+                        startColumnIndex: index,
+                        endColumnIndex: index + 1,
+                    },
+                    cell: {
+                        userEnteredFormat: {
+                            numberFormat: { type: "DATE_TIME", pattern: "d mmm yyyy, h:mm AM/PM" },
+                        },
+                    },
+                    fields: "userEnteredFormat.numberFormat",
+                },
+            })
+        }
+        if (dateHeaders.has(header)) {
+            requests.push({
+                repeatCell: {
+                    range: {
+                        sheetId: target.sheetId,
+                        startRowIndex: 1,
+                        startColumnIndex: index,
+                        endColumnIndex: index + 1,
+                    },
+                    cell: {
+                        userEnteredFormat: {
+                            numberFormat: { type: "DATE", pattern: "d mmm yyyy" },
                         },
                     },
                     fields: "userEnteredFormat.numberFormat",
@@ -578,6 +625,81 @@ export async function findRowsByColumnValue(
     return matches
 }
 
+function userEnteredValue(value: string | number | null): Record<string, unknown> {
+    if (value === null || value === undefined) return {}
+    if (typeof value === "number" && Number.isFinite(value)) {
+        return { numberValue: value }
+    }
+    return { stringValue: String(value) }
+}
+
+async function moveRowToBottom(
+    sheetId: string,
+    tab: string,
+    rowNumber: number,
+    values: (string | number | null)[],
+): Promise<number> {
+    const existingRows = await readTabValues(sheetId, tab, "A1:ZZ10000")
+    let lastPopulatedRow = 0
+    for (let index = 0; index < existingRows.length; index++) {
+        const row = Array.isArray(existingRows[index]) ? existingRows[index] : []
+        if (row.some((cell) => String(cell ?? "").trim() !== "")) {
+            lastPopulatedRow = index + 1
+        }
+    }
+
+    if (rowNumber < 2 || rowNumber >= lastPopulatedRow) {
+        await updateRow(sheetId, tab, rowNumber, values)
+        return rowNumber
+    }
+
+    // Write the refreshed current-state row at the end and delete its old
+    // position in the same Sheets batch. This keeps one row per key while
+    // making the newest activity visibly land at the bottom.
+    const destinationRow = lastPopulatedRow + 1
+    const tabs = await getSpreadsheetTabs(sheetId)
+    const target = tabs.find((item) => item.title === tab)
+    if (!target) throw new Error(`Managed Sheet tab not found: ${tab}`)
+
+    const res = await sheetsFetch(":batchUpdate", sheetId, {
+        method: "POST",
+        body: JSON.stringify({
+            requests: [
+                {
+                    updateCells: {
+                        start: {
+                            sheetId: target.sheetId,
+                            rowIndex: destinationRow - 1,
+                            columnIndex: 0,
+                        },
+                        rows: [{
+                            values: values.map((value) => ({
+                                userEnteredValue: userEnteredValue(value),
+                            })),
+                        }],
+                        fields: "userEnteredValue",
+                    },
+                },
+                {
+                    deleteDimension: {
+                        range: {
+                            sheetId: target.sheetId,
+                            dimension: "ROWS",
+                            startIndex: rowNumber - 1,
+                            endIndex: rowNumber,
+                        },
+                    },
+                },
+            ],
+        }),
+    })
+    if (!res.ok) {
+        const text = await res.text()
+        throw new Error(`Move current Sheet row failed: ${res.status} ${text}`)
+    }
+    return destinationRow - 1
+}
+
 export async function upsertCurrentRow(
     sheetId: string,
     tab: string,
@@ -585,6 +707,7 @@ export async function upsertCurrentRow(
     keyValue: string,
     values: (string | number | null)[],
     headers?: string[],
+    options: { moveUpdatedRowToBottom?: boolean } = {},
 ): Promise<{ row: number; created: boolean }> {
     if (!String(keyValue || "").trim()) {
         throw new Error(`Current-state Sheet key is required for ${tab}`)
@@ -602,6 +725,15 @@ export async function upsertCurrentRow(
         )
     }
     if (matches.length === 1) {
+        if (options.moveUpdatedRowToBottom) {
+            const row = await moveRowToBottom(
+                sheetId,
+                tab,
+                matches[0],
+                values,
+            )
+            return { row, created: false }
+        }
         await updateRow(sheetId, tab, matches[0], values, headers)
         return { row: matches[0], created: false }
     }
@@ -668,6 +800,83 @@ export async function appendHistoryRowOnce(
         )
     }
     if (rechecked.length === 1) return { row: rechecked[0], appended: true }
+    throw new Error(`History Sheet row append returned no row for ${tab}`)
+}
+
+export function rowMatchesColumnFingerprint(
+    row: any[],
+    header: string[],
+    values: (string | number | null)[],
+    columns: string[],
+    valuesHeader: string[] = header,
+): boolean {
+    return columns.every((column) => {
+        const index = header.findIndex((cell) =>
+            String(cell || "").trim().toLowerCase() === String(column || "").trim().toLowerCase()
+        )
+        const valueIndex = valuesHeader.findIndex((cell) =>
+            String(cell || "").trim().toLowerCase() === String(column || "").trim().toLowerCase()
+        )
+        if (index < 0 || valueIndex < 0) return false
+        return String(row[index] ?? "").trim() === String(values[valueIndex] ?? "").trim()
+    })
+}
+
+export async function appendHistoryRowOnceByFingerprint(
+    sheetId: string,
+    tab: string,
+    values: (string | number | null)[],
+    headers: string[],
+    fingerprintColumns: string[],
+): Promise<{ row: number | null; appended: boolean }> {
+    if (!Array.isArray(fingerprintColumns) || fingerprintColumns.length === 0) {
+        throw new Error(`History fingerprint is required for ${tab}`)
+    }
+    if (!sheetsEnabled()) return { row: null, appended: false }
+
+    await ensureTab(tab, sheetId)
+    await ensureHeaders(tab, headers, sheetId)
+    const rows = await readTabValues(sheetId, tab, "A1:ZZ10000")
+    const header = Array.isArray(rows[0])
+        ? rows[0].map((cell) => String(cell ?? "").trim())
+        : []
+    const missingColumn = fingerprintColumns.find((column) =>
+        !header.some((cell) => cell.toLowerCase() === String(column).trim().toLowerCase())
+    )
+    if (missingColumn) {
+        throw new Error(`History fingerprint column not found in ${tab}: ${missingColumn}`)
+    }
+
+    const matches: number[] = []
+    for (let index = 1; index < rows.length; index++) {
+        const row = Array.isArray(rows[index]) ? rows[index] : []
+        if (rowMatchesColumnFingerprint(row, header, values, fingerprintColumns, headers)) {
+            matches.push(index + 1)
+        }
+    }
+    if (matches.length > 1) {
+        throw new Error(`Multiple history Sheet rows match fingerprint in ${tab}`)
+    }
+    if (matches.length === 1) return { row: matches[0], appended: false }
+
+    const row = await appendRow(sheetId, tab, values, headers)
+    if (row) return { row, appended: true }
+
+    const rechecked = await readTabValues(sheetId, tab, "A1:ZZ10000")
+    const recheckedHeader = Array.isArray(rechecked[0])
+        ? rechecked[0].map((cell) => String(cell ?? "").trim())
+        : header
+    const recheckedMatches: number[] = []
+    for (let index = 1; index < rechecked.length; index++) {
+        const candidate = Array.isArray(rechecked[index]) ? rechecked[index] : []
+        if (rowMatchesColumnFingerprint(candidate, recheckedHeader, values, fingerprintColumns, headers)) {
+            recheckedMatches.push(index + 1)
+        }
+    }
+    if (recheckedMatches.length > 1) {
+        throw new Error(`Multiple history Sheet rows match fingerprint in ${tab}`)
+    }
+    if (recheckedMatches.length === 1) return { row: recheckedMatches[0], appended: true }
     throw new Error(`History Sheet row append returned no row for ${tab}`)
 }
 

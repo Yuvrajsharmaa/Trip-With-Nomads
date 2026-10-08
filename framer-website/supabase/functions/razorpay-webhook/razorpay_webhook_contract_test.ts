@@ -9,6 +9,9 @@ Deno.test("Razorpay webhook verifies raw payloads and persists generic payment e
     assertStringIncludes(source, "from(\"payment_events\")")
     assertStringIncludes(source, "provider_event_id")
     assertStringIncludes(source, "sheet_sync_status")
+    assertStringIncludes(source, "configuration_missing")
+    assertStringIncludes(source, "SHEET_CONFIGURATION_MISSING")
+    assertStringIncludes(source, "Booking Sheet projection configuration is missing or disabled")
     assertStringIncludes(source, "email_sync_status")
     assertStringIncludes(source, "email_payload")
     assertStringIncludes(source, "email_attempts")
@@ -25,5 +28,6 @@ Deno.test("Razorpay webhook verifies raw payloads and persists generic payment e
         throw new Error("razorpay-webhook must never use the trip-lead workbook as a booking Sheet fallback")
     }
     assert(!source.includes("callback_orphan"))
+    assert(!source.includes('sheet_sync_status: synced ? "synced" : "not_required"'))
     assertNotEquals(source.indexOf("await req.text()"), -1)
 })

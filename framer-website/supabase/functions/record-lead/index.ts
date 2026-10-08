@@ -1,21 +1,24 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2"
-import { appendHistoryRowOnce, sheetsEnabled, upsertCurrentRow } from "../_shared/sheets.ts"
 import {
-    ABANDONED_LEAD_HEADERS,
-    buildAbandonedLeadSheetRow,
-    buildInviteLeadSheetRow,
-    buildLeadSheetRow,
-    buildMasterLeadSheetRow,
-    LEAD_HEADERS,
-    MASTER_LEAD_HEADERS,
-    NTC_INVITE_HEADERS,
-} from "../_shared/lead_sheets.ts"
-import { targetForLead } from "../_shared/lead_routing.ts"
+    projectLeadSheets,
+    projectionConfigurationError,
+} from "../_shared/lead_projection.ts"
 
 const corsHeaders = {
     "Access-Control-Allow-Origin": "*",
     "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
     "Access-Control-Allow-Methods": "POST, OPTIONS",
+}
+
+const LEAD_SHEET_RETRY_FUNCTION = "retry-lead-sheets"
+
+type ProjectionOutcome = {
+    ok: boolean
+    sheetLogged: boolean
+    masterLogged: boolean
+    sheetStatus: "synced" | "failed" | "configuration_missing"
+    errorCode?: string
+    errorMessage?: string
 }
 
 function json(payload: Record<string, unknown>, status = 200) {
@@ -63,6 +66,8 @@ function normalizeSource(value: unknown): string {
     const source = compact(value).toLowerCase()
     if (source === "waitlist") return "waitlist_popup"
     if (source === "generic_form") return "general_lead"
+    if (source === "corporate" || source === "corporate_enquiry") return "corporate_lead"
+    if (source === "itinerary_download") return "trip_itinerary_download"
     return source || "unknown"
 }
 
@@ -87,6 +92,20 @@ function firstNonEmpty(...values: unknown[]): string {
     return ""
 }
 
+function uniqueTextValues(...values: unknown[]): string[] {
+    const output: string[] = []
+    const seen = new Set<string>()
+    for (const value of values.flatMap((item) => Array.isArray(item) ? item : [item])) {
+        const text = compact(value)
+        if (!text) continue
+        const key = text.toLowerCase()
+        if (seen.has(key)) continue
+        seen.add(key)
+        output.push(text)
+    }
+    return output
+}
+
 function stableObject(value: any): any {
     if (Array.isArray(value)) return value.map(stableObject)
     if (!value || typeof value !== "object") return value
@@ -105,36 +124,79 @@ async function payloadHash(value: any): Promise<string> {
     return Array.from(new Uint8Array(digest)).map((byte) => byte.toString(16).padStart(2, "0")).join("")
 }
 
-function routeForLead(
-    source: string,
-    status: string,
-): { sheetId: string; tab: string; note: string } {
-    const route = targetForLead(source, status, {
-        original: Deno.env.get("GOOGLE_SHEET_ID"),
-        ntc: Deno.env.get("GOOGLE_SHEET_ID_NTC"),
-        tripLeads: Deno.env.get("GOOGLE_SHEET_ID_TRIP_LEADS"),
-        custom: Deno.env.get("GOOGLE_SHEET_ID_CUSTOM_TRIPS") ||
-            Deno.env.get("CUSTOM_TRIPS_SHEET_ID"),
-        general: Deno.env.get("GOOGLE_SHEET_ID_GENERAL"),
-        // GOOGLE_SHEET_ID is the existing booking workbook in staging and
-        // production. An explicit override is supported for a future split,
-        // but we do not create or guess another workbook at runtime.
-        booking: Deno.env.get("GOOGLE_SHEET_ID_BOOKINGS") ||
-            Deno.env.get("GOOGLE_SHEET_ID"),
-    })
-    const knownSource = new Set([
-        "waitlist_popup",
-        "booking_invite",
-        "trip_page_lead",
-        "general_lead",
-        "custom_trip_lead",
-        "booking_abandoned",
-    ])
-    return {
-        sheetId: route?.sheetId || "",
-        tab: route?.tab || "",
-        note: knownSource.has(source) ? "" : `unknown_source:${source}`,
+const IDEMPOTENCY_FIELDS = [
+    "submission_id",
+    "lead_id",
+    "normalized_email",
+    "source",
+    "status",
+    "name",
+    "email",
+    "phone",
+    "country_code",
+    "instagram_id",
+    "page_url",
+    "trip_id",
+    "trip_slug",
+    "trip_name",
+    "itinerary_name",
+    "departure_date",
+    "travellers",
+    "traveller_count",
+    "payment_mode",
+    "activity_type",
+    "activity_label",
+    "company_name",
+    "utm_source",
+    "utm_medium",
+    "utm_campaign",
+    "utm_term",
+    "utm_content",
+    "reason",
+    "notes",
+]
+
+function canonicalIdempotencyPayload(value: any): Record<string, any> {
+    const input = value && typeof value === "object" ? value : {}
+    const output: Record<string, any> = {}
+    for (const field of IDEMPOTENCY_FIELDS) {
+        const raw = input[field]
+        if (field === "travellers") {
+            output[field] = Array.isArray(raw) ? raw : []
+            continue
+        }
+        if (field === "traveller_count") {
+            const count = Number(raw)
+            output[field] = Number.isFinite(count) ? count : ""
+            continue
+        }
+        if (field === "source") {
+            output[field] = normalizeSource(raw)
+            continue
+        }
+        if (field === "status") {
+            output[field] = compact(raw).toLowerCase() || "submitted"
+            continue
+        }
+        if (field === "email") {
+            output[field] = normalizeEmail(raw)
+            continue
+        }
+        if (field === "normalized_email") {
+            output[field] = normalizeEmail(raw || input.email)
+            continue
+        }
+        if (field === "trip_slug") {
+            // A slug inferred from page_url is server-derived metadata. It
+            // must not make a replay of an older submission look different.
+            const slug = compact(raw)
+            const inferred = inferTripSlug(input.page_url)
+            output[field] = slug && slug !== inferred ? slug : ""
+            continue
+        }
+        output[field] = raw === null || raw === undefined ? "" : raw
     }
+    return output
 }
 
 async function findExistingLead(
@@ -315,6 +377,21 @@ async function updateCurrentLead(params: {
     const submissionCount = Number.isFinite(Number(submissionCountLookup.count))
         ? Number(submissionCountLookup.count)
         : Math.max(0, Number(existingLead?.submission_count || 0)) + 1
+    const itineraryName = firstNonEmpty(
+        body?.itinerary_name,
+        body?.trip_name,
+        body?.latest_itinerary_name,
+    )
+    const downloadedItineraries = uniqueTextValues(
+        existingLead?.downloaded_itineraries,
+        itineraryName,
+    )
+    const activity = firstNonEmpty(
+        body?.activity_label,
+        body?.activity,
+        source === "trip_itinerary_download" ? "Downloaded itinerary" : "",
+        existingLead?.latest_activity,
+    )
     const current = {
         id: leadId,
         email: normalizedEmail || compact(existingLead?.email) || null,
@@ -322,12 +399,21 @@ async function updateCurrentLead(params: {
         phone: firstNonEmpty(body?.phone, existingLead?.phone) || null,
         country_code: firstNonEmpty(body?.country_code, existingLead?.country_code) || null,
         instagram_id: firstNonEmpty(body?.instagram_id, existingLead?.instagram_id) || null,
+        company_name: firstNonEmpty(
+            body?.company_name,
+            body?.company,
+            body?.group_name,
+            existingLead?.company_name,
+        ) || null,
         latest_reason: firstNonEmpty(
             body?.reason,
             existingLead?.latest_reason,
             existingLead?.reason,
         ) || null,
         notes: firstNonEmpty(body?.notes, existingLead?.notes) || null,
+        latest_activity: activity || null,
+        latest_itinerary_name: itineraryName || compact(existingLead?.latest_itinerary_name) || null,
+        downloaded_itineraries: downloadedItineraries,
         source,
         latest_source: source,
         page_url: firstNonEmpty(body?.page_url, existingLead?.page_url) || null,
@@ -410,92 +496,89 @@ async function updateCurrentLead(params: {
     return result.data
 }
 
-async function projectLead(params: {
+async function projectAndMarkSubmission(params: {
+    supabase: any
     lead: any | null
+    leadId: string
     submission: any
     submissionId: string
     source: string
     status: string
-    notes: string
-}) {
-    if (!sheetsEnabled()) {
-        return { sheetLogged: false, sheetStatus: "not_required" }
-    }
-    const route = routeForLead(params.source, params.status)
-    if (!route.sheetId) {
-        return { sheetLogged: false, sheetStatus: "not_required" }
-    }
+}): Promise<ProjectionOutcome> {
+    const {
+        supabase,
+        lead,
+        leadId,
+        submission,
+        submissionId,
+        source,
+        status,
+    } = params
 
-    const isHistoryEvent = params.status === "partial_fill" ||
-        params.source === "booking_abandoned"
-    if (isHistoryEvent) {
-        const values = buildAbandonedLeadSheetRow({
-            submission: {
-                ...params.submission,
-                submission_id: params.submissionId,
-                lead_id: params.lead?.id || "",
-                reason: params.submission.reason || params.status || "partial_fill",
-            },
+    try {
+        const projection = await projectLeadSheets({
+            lead,
+            submission,
+            submissionId,
+            source,
+            status,
+            notes: "",
+            supabase,
         })
-        await appendHistoryRowOnce(
-            route.sheetId,
-            route.tab,
-            "Submission Key",
-            params.submissionId,
-            values,
-            ABANDONED_LEAD_HEADERS,
-        )
-    } else {
-        if (!params.lead) {
-            throw new Error("Current lead row is missing before Sheet projection")
+        const syncedAt = new Date().toISOString()
+        const updated = await supabase.from("lead_submissions").update({
+            sheet_sync_status: projection.sheetStatus,
+            sheet_synced_at: syncedAt,
+            error_message: null,
+            updated_at: syncedAt,
+        }).eq("submission_id", submissionId)
+        if (updated.error) throw updated.error
+        return {
+            ok: true,
+            sheetLogged: projection.sheetLogged,
+            masterLogged: projection.masterLogged,
+            sheetStatus: projection.sheetStatus,
         }
-        const routeNotes = [route.note, params.notes].filter(Boolean).join(" | ")
-        const isInviteRoute = route.tab === "NTC - Invites"
-        const values = isInviteRoute
-            ? buildInviteLeadSheetRow({
-                lead: params.lead,
-                submission: params.submission,
-                latestSubmissionId: params.submissionId,
-                notes: routeNotes,
+    } catch (sheetError: any) {
+        const sheetStatus = projectionConfigurationError(sheetError?.message || sheetError)
+        const errorCode = sheetStatus === "configuration_missing"
+            ? "SHEET_CONFIGURATION_MISSING"
+            : "SHEET_SYNC_FAILED"
+        const errorMessage = compact(sheetError?.message || sheetError).slice(0, 500)
+        const updated = await supabase.from("lead_submissions").update({
+            sheet_sync_status: sheetStatus,
+            error_message: errorMessage,
+            updated_at: new Date().toISOString(),
+        }).eq("submission_id", submissionId)
+        if (updated.error) {
+            console.error("[record-lead] Sheet projection status update failed", {
+                submissionId,
+                error: updated.error,
             })
-            : buildLeadSheetRow({
-                lead: params.lead,
-                latestSubmissionId: params.submissionId,
-                latestSubmission: params.submission,
-                notes: routeNotes,
-            })
-        await upsertCurrentRow(
-            route.sheetId,
-            route.tab,
-            "Email",
-            normalizeEmail(params.lead.email),
-            values,
-            isInviteRoute ? NTC_INVITE_HEADERS : LEAD_HEADERS,
-        )
+        }
+        console.error("[record-lead] Sheet projection failed", {
+            submissionId,
+            leadId,
+            source,
+            status,
+            error: errorMessage,
+        })
+        return {
+            ok: false,
+            sheetLogged: false,
+            masterLogged: false,
+            sheetStatus,
+            errorCode,
+            errorMessage,
+        }
     }
-    const masterSheetId = compact(Deno.env.get("GOOGLE_SHEET_ID_MASTER"))
-    let masterLogged = false
-    if (masterSheetId && params.lead && params.source !== "booking_abandoned") {
-        await upsertCurrentRow(
-            masterSheetId,
-            "Master Leads",
-            // Master Leads is a current-contact overview. Match it by the
-            // normalized email identity rather than the internal lead UUID so
-            // legacy identity repairs cannot create another visible row.
-            "Email",
-            normalizeEmail(params.lead.email),
-            buildMasterLeadSheetRow({
-                lead: params.lead,
-                status: params.status,
-                latestSubmissionId: params.submissionId,
-                latestSubmission: params.submission,
-            }),
-            MASTER_LEAD_HEADERS,
-        )
-        masterLogged = true
-    }
+}
 
-    return { sheetLogged: true, masterLogged, sheetStatus: "synced" }
+function scheduleProjection(task: Promise<ProjectionOutcome>): boolean {
+    const runtime = (globalThis as any).EdgeRuntime
+    if (!runtime || typeof runtime.waitUntil !== "function") return false
+    runtime.waitUntil(task)
+    return true
 }
 
 Deno.serve(async (req) => {
@@ -544,6 +627,17 @@ Deno.serve(async (req) => {
             page_url: compact(body?.page_url),
             trip_id: compact(body?.trip_id),
             trip_slug: inferredTripSlug,
+            trip_name: compact(body?.trip_name),
+            itinerary_name: compact(body?.itinerary_name),
+            departure_date: compact(body?.departure_date || body?.date),
+            travellers: Array.isArray(body?.travellers) ? body.travellers : [],
+            traveller_count: Number.isFinite(Number(body?.traveller_count))
+                ? Number(body.traveller_count)
+                : (Array.isArray(body?.travellers) ? body.travellers.length : null),
+            payment_mode: compact(body?.payment_mode || body?.paymentMode),
+            activity_type: compact(body?.activity_type),
+            activity_label: compact(body?.activity_label || body?.activity),
+            company_name: compact(body?.company_name || body?.company || body?.group_name),
             utm_source: compact(body?.utm_source),
             utm_medium: compact(body?.utm_medium),
             utm_campaign: compact(body?.utm_campaign),
@@ -551,8 +645,12 @@ Deno.serve(async (req) => {
             utm_content: compact(body?.utm_content),
             reason: compact(body?.reason || (partialFill ? "partial_fill" : "")),
             notes: compact(body?.notes),
+            captured_at: now,
         }
-        const hash = await payloadHash(submissionPayload)
+        // The submission timestamp is server-generated metadata, not lead
+        // input. Excluding it keeps a replay with the same submission_id
+        // idempotent after a timeout or repeated click.
+        const hash = await payloadHash(canonicalIdempotencyPayload(body))
 
         const supabaseUrl = compact(Deno.env.get("SUPABASE_URL"))
         const serviceRoleKey = compact(Deno.env.get("SUPABASE_SERVICE_ROLE_KEY"))
@@ -567,8 +665,15 @@ Deno.serve(async (req) => {
             .eq("submission_id", submissionId)
             .maybeSingle()
         if (existingSubmission.error) throw existingSubmission.error
+        const existingPayloadHash = existingSubmission.data?.payload
+            ? await payloadHash(
+                canonicalIdempotencyPayload(existingSubmission.data.payload),
+            )
+            : ""
         if (
-            existingSubmission.data && existingSubmission.data.payload_hash !== hash
+            existingSubmission.data &&
+            existingSubmission.data.payload_hash !== hash &&
+            existingPayloadHash !== hash
         ) {
             return json({
                 error: "submission_id was already used with different lead data",
@@ -599,6 +704,8 @@ Deno.serve(async (req) => {
                     normalized_email: normalizedEmail || null,
                     source,
                     status,
+                    activity_type: compact(body?.activity_type) || null,
+                    itinerary_name: compact(body?.itinerary_name) || null,
                     payload_hash: hash,
                     payload: submissionPayload,
                     sheet_sync_status: "pending",
@@ -660,43 +767,97 @@ Deno.serve(async (req) => {
             }
         }
 
-        const routeNotes = ""
-        try {
-            const projection = await projectLead({
-                lead,
-                submission: submissionPayload,
-                submissionId,
-                source,
-                status,
-                notes: routeNotes,
+        const projectionSource = compact(existingSubmission.data?.source) || source
+        const projectionStatus = compact(existingSubmission.data?.status) || status
+        const storedProjectionPayload = existingSubmission.data?.payload ||
+            submissionPayload
+        const projectionSubmission = {
+            ...storedProjectionPayload,
+            submission_id: submissionId,
+            captured_at: storedProjectionPayload.captured_at ||
+                existingSubmission.data?.created_at || now,
+            source: projectionSource,
+            status: projectionStatus,
+        }
+        const existingSheetStatus = compact(existingSubmission.data?.sheet_sync_status).toLowerCase()
+
+        // A replay of an already synchronized submission is complete. Returning
+        // without another Sheet read also prevents duplicate concurrent retries.
+        if (existingSubmission.data && existingSheetStatus === "synced") {
+            return json({
+                ok: true,
+                lead_id: leadId || null,
+                submission_id: submissionId,
+                sheet_logged: true,
+                sheet_sync_status: "synced",
+                replayed: true,
             })
-            await supabase.from("lead_submissions").update({
-                sheet_sync_status: projection.sheetStatus,
-                sheet_synced_at: projection.sheetStatus === "synced" ? new Date().toISOString() : null,
-                error_message: null,
-                updated_at: new Date().toISOString(),
-            }).eq("submission_id", submissionId)
+        }
+
+        // A pending submission may still have an in-flight background
+        // projection from the original request. Let the protected retry path
+        // handle genuinely stale pending rows rather than starting a second
+        // concurrent append.
+        if (existingSubmission.data && existingSheetStatus === "pending") {
+            return json({
+                ok: true,
+                lead_id: leadId || null,
+                submission_id: submissionId,
+                sheet_logged: false,
+                sheet_sync_status: "pending",
+                replayed: true,
+            })
+        }
+
+        const projectionTask = projectAndMarkSubmission({
+            supabase,
+            lead,
+            leadId,
+            submission: projectionSubmission,
+            submissionId,
+            source: projectionSource,
+            status: projectionStatus,
+        })
+
+        // Google Sheets is an operational projection, not part of the browser
+        // acknowledgement path. Supabase EdgeRuntime keeps this task alive
+        // after the response so Framer can finish the user's form immediately.
+        if (scheduleProjection(projectionTask)) {
+            return json({
+                ok: true,
+                lead_id: leadId || null,
+                submission_id: submissionId,
+                sheet_logged: false,
+                sheet_sync_status: "pending",
+                projection: "background",
+                retry_function: LEAD_SHEET_RETRY_FUNCTION,
+                replayed: Boolean(existingSubmission.data),
+            })
+        }
+
+        // Local/test runtimes do not expose EdgeRuntime.waitUntil. Keep the
+        // synchronous fallback there so unit and smoke tests still exercise
+        // the complete projection contract.
+        const projection = await projectionTask
+        if (projection.ok) {
             return json({
                 ok: true,
                 lead_id: leadId || null,
                 submission_id: submissionId,
                 sheet_logged: projection.sheetLogged,
+                sheet_sync_status: projection.sheetStatus,
                 replayed: Boolean(existingSubmission.data),
             })
-        } catch (sheetError: any) {
-            await supabase.from("lead_submissions").update({
-                sheet_sync_status: "failed",
-                error_message: compact(sheetError?.message || sheetError).slice(0, 500),
-                updated_at: new Date().toISOString(),
-            }).eq("submission_id", submissionId)
-            return json({
-                ok: false,
-                error: "Lead saved; Sheet projection failed and can be retried",
-                code: "SHEET_SYNC_FAILED",
-                lead_id: leadId || null,
-                submission_id: submissionId,
-            }, 503)
         }
+        return json({
+            ok: false,
+            error: "Lead saved; Sheet projection failed and can be retried",
+            code: projection.errorCode,
+            retry_function: LEAD_SHEET_RETRY_FUNCTION,
+            lead_id: leadId || null,
+            submission_id: submissionId,
+            sheet_sync_status: projection.sheetStatus,
+        }, 503)
     } catch (err: any) {
         console.error("[record-lead] error", err)
         const message = compact(err?.message || err)
