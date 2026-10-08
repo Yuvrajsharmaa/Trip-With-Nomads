@@ -251,6 +251,7 @@ export async function projectLeadSheets(
                 normalizeEmail(params.lead.email),
                 values,
                 isInviteRoute ? NTC_INVITE_HEADERS : LEAD_HEADERS,
+                { moveUpdatedRowToBottom: true },
             ),
         })
     }
@@ -281,6 +282,7 @@ export async function projectLeadSheets(
                 normalizeEmail(params.lead.email),
                 masterValues,
                 MASTER_LEAD_HEADERS,
+                { moveUpdatedRowToBottom: true },
             ),
         })
         masterLogged = true

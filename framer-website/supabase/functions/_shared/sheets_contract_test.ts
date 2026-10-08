@@ -29,6 +29,9 @@ Deno.test("application Sheet helper never creates missing managed tabs", async (
     assert(source.includes("History Sheet row append returned no row"))
     assert(source.includes('readTabValues(sheetId, tab, "A1:ZZ10000")'))
     assert(!source.includes('readTabValues(sheetId, tab, "A1:ZZ")'))
+    assert(source.includes("moveUpdatedRowToBottom"))
+    assert(source.includes("newest activity visibly land at the bottom"))
+    assert(source.includes("deleteDimension"))
 })
 
 Deno.test("managed tab formatting supports the sales-facing contracts", async () => {

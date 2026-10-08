@@ -78,6 +78,22 @@ Deno.serve(async (req) => {
                 const payload = submission?.payload && typeof submission.payload === "object"
                     ? submission.payload
                     : {}
+                if (!lead && compact(payload?.email)) {
+                    const normalizedEmail = compact(
+                        submission?.normalized_email || payload.email,
+                    ).toLowerCase()
+                    const leadResult = await supabase
+                        .from("leads")
+                        .select("*")
+                        .eq("normalized_email", normalizedEmail)
+                    if (leadResult.error) throw leadResult.error
+                    if ((leadResult.data || []).length > 1) {
+                        throw new Error(
+                            `Multiple lead rows match normalized email ${normalizedEmail}; repair required`,
+                        )
+                    }
+                    lead = leadResult.data?.[0] || null
+                }
                 const projection = await projectLeadSheets({
                     lead,
                     submission: {

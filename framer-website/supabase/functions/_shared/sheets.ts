@@ -625,6 +625,81 @@ export async function findRowsByColumnValue(
     return matches
 }
 
+function userEnteredValue(value: string | number | null): Record<string, unknown> {
+    if (value === null || value === undefined) return {}
+    if (typeof value === "number" && Number.isFinite(value)) {
+        return { numberValue: value }
+    }
+    return { stringValue: String(value) }
+}
+
+async function moveRowToBottom(
+    sheetId: string,
+    tab: string,
+    rowNumber: number,
+    values: (string | number | null)[],
+): Promise<number> {
+    const existingRows = await readTabValues(sheetId, tab, "A1:ZZ10000")
+    let lastPopulatedRow = 0
+    for (let index = 0; index < existingRows.length; index++) {
+        const row = Array.isArray(existingRows[index]) ? existingRows[index] : []
+        if (row.some((cell) => String(cell ?? "").trim() !== "")) {
+            lastPopulatedRow = index + 1
+        }
+    }
+
+    if (rowNumber < 2 || rowNumber >= lastPopulatedRow) {
+        await updateRow(sheetId, tab, rowNumber, values)
+        return rowNumber
+    }
+
+    // Write the refreshed current-state row at the end and delete its old
+    // position in the same Sheets batch. This keeps one row per key while
+    // making the newest activity visibly land at the bottom.
+    const destinationRow = lastPopulatedRow + 1
+    const tabs = await getSpreadsheetTabs(sheetId)
+    const target = tabs.find((item) => item.title === tab)
+    if (!target) throw new Error(`Managed Sheet tab not found: ${tab}`)
+
+    const res = await sheetsFetch(":batchUpdate", sheetId, {
+        method: "POST",
+        body: JSON.stringify({
+            requests: [
+                {
+                    updateCells: {
+                        start: {
+                            sheetId: target.sheetId,
+                            rowIndex: destinationRow - 1,
+                            columnIndex: 0,
+                        },
+                        rows: [{
+                            values: values.map((value) => ({
+                                userEnteredValue: userEnteredValue(value),
+                            })),
+                        }],
+                        fields: "userEnteredValue",
+                    },
+                },
+                {
+                    deleteDimension: {
+                        range: {
+                            sheetId: target.sheetId,
+                            dimension: "ROWS",
+                            startIndex: rowNumber - 1,
+                            endIndex: rowNumber,
+                        },
+                    },
+                },
+            ],
+        }),
+    })
+    if (!res.ok) {
+        const text = await res.text()
+        throw new Error(`Move current Sheet row failed: ${res.status} ${text}`)
+    }
+    return destinationRow - 1
+}
+
 export async function upsertCurrentRow(
     sheetId: string,
     tab: string,
@@ -632,6 +707,7 @@ export async function upsertCurrentRow(
     keyValue: string,
     values: (string | number | null)[],
     headers?: string[],
+    options: { moveUpdatedRowToBottom?: boolean } = {},
 ): Promise<{ row: number; created: boolean }> {
     if (!String(keyValue || "").trim()) {
         throw new Error(`Current-state Sheet key is required for ${tab}`)
@@ -649,6 +725,15 @@ export async function upsertCurrentRow(
         )
     }
     if (matches.length === 1) {
+        if (options.moveUpdatedRowToBottom) {
+            const row = await moveRowToBottom(
+                sheetId,
+                tab,
+                matches[0],
+                values,
+            )
+            return { row, created: false }
+        }
         await updateRow(sheetId, tab, matches[0], values, headers)
         return { row: matches[0], created: false }
     }

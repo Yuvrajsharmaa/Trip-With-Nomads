@@ -284,7 +284,6 @@ async function postLead(
                 utm_term: params.get("utm_term"),
                 utm_content: params.get("utm_content"),
             }),
-            keepalive: true,
         })
 
         const payload = await response.json().catch(() => ({}))
@@ -682,7 +681,6 @@ async function postLeadWithSource(
                 utm_term: params.get("utm_term"),
                 utm_content: params.get("utm_content"),
             }),
-            keepalive: true,
         })
 
         const payload = await response.json().catch(() => ({}))
@@ -744,7 +742,34 @@ function createLeadTrackingOverride(source: string, statusOverride?: string) {
 export function withCustomTripTracking(
     Component: ComponentType,
 ): ComponentType {
-    return createLeadTrackingOverride("custom_trip_lead")(Component)
+    return function CustomTripTracking(props: any) {
+        return (
+            <Component
+                {...props}
+                data-twn-lead-source="custom_trip_lead"
+                onClick={async (event: any) => {
+                    event?.preventDefault?.()
+                    event?.stopPropagation?.()
+                    const w = window as any
+                    if (w[SUBMIT_LOCK_KEY]) return
+                    w[SUBMIT_LOCK_KEY] = true
+                    const form = event?.currentTarget?.closest?.("form") || null
+                    try {
+                        const ok = await postLeadWithSource(
+                            form,
+                            "custom_trip_lead",
+                        )
+                        if (ok) props.onClick?.(event)
+                    } finally {
+                        window.setTimeout(() => {
+                            w[SUBMIT_LOCK_KEY] = false
+                        }, 700)
+                    }
+                }}
+                onSubmit={undefined}
+            />
+        )
+    }
 }
 
 export function withWaitlistTracking(Component: ComponentType): ComponentType {
@@ -820,30 +845,117 @@ export function withTripPageLeadTracking(
     Component: ComponentType,
 ): ComponentType {
     return function TripPageLeadTracking(props: any) {
-        return (
-            <Component
-                {...props}
-                onClick={async (event: any) => {
-                    event?.preventDefault?.()
-                    event?.stopPropagation?.()
-                    const w = window as any
-                    if (w[SUBMIT_LOCK_KEY]) return
-                    w[SUBMIT_LOCK_KEY] = true
-                    const form = event?.currentTarget?.closest?.("form") || null
+        const isCustomTripForm = (form: HTMLFormElement | null): boolean =>
+            Boolean(
+                form?.matches?.('[data-twn-lead-source="custom_trip_lead"]') ||
+                    form?.querySelector?.(
+                        '[data-twn-lead-source="custom_trip_lead"]',
+                    ) ||
+                    /can't decide\?|we'll reach out to you soon/i.test(
+                        String(
+                            form?.parentElement?.parentElement?.parentElement
+                                ?.textContent || form?.textContent || "",
+                        ),
+                    ),
+            )
+
+        useEffect(() => {
+            const isTripLeadForm = (form: HTMLFormElement | null): boolean =>
+                Boolean(form) &&
+                    Boolean(
+                        form?.querySelector(
+                            'input[placeholder*="What would you like us to call you?" i]',
+                        ),
+                    )
+
+            const captureTripLead = (
+                event: Event,
+                form: HTMLFormElement,
+                replay: () => void,
+                source: "trip_page_lead" | "custom_trip_lead" =
+                    "trip_page_lead",
+            ) => {
+                const w = window as any
+                if (w.__twn_replaying_trip_lead_submit) return
+                event.preventDefault()
+                event.stopImmediatePropagation()
+                if (w[SUBMIT_LOCK_KEY]) return
+                w[SUBMIT_LOCK_KEY] = true
+
+                void (async () => {
                     try {
                         const ok = await postLeadWithSource(
                             form,
-                            "trip_page_lead",
-                            props?.status === "partial_fill" ? "partial_fill" : undefined,
+                            source,
+                            undefined,
                         )
-                        if (ok) props.onClick?.(event)
+                        if (!ok) return
+
+                        // Let Framer render its normal success state only after
+                        // the server has accepted the lead. The replay guard
+                        // prevents a second record-lead request.
+                        w.__twn_replaying_trip_lead_submit = true
+                        replay()
+                        w.__twn_replaying_trip_lead_submit = false
                     } finally {
                         window.setTimeout(() => {
                             w[SUBMIT_LOCK_KEY] = false
                         }, 700)
                     }
-                }}
-                onSubmit={undefined}
+                })()
+            }
+
+            const submitHandler = (event: Event) => {
+                const form = event.target instanceof HTMLFormElement
+                    ? event.target
+                    : null
+                if (!form) return
+                if (isCustomTripForm(form)) {
+                    captureTripLead(
+                        event,
+                        form,
+                        () => form.requestSubmit(),
+                        "custom_trip_lead",
+                    )
+                } else if (isTripLeadForm(form)) {
+                    captureTripLead(event, form, () => form.requestSubmit())
+                }
+            }
+
+            const clickHandler = (event: Event) => {
+                const target = event.target
+                const element = target instanceof Element ? target : null
+                const button = element?.closest("button") as HTMLButtonElement | null
+                const form = button?.closest("form") as HTMLFormElement | null
+                if (!button || !form) return
+
+                // Framer's reusable lead component can handle its submit
+                // button through a component click path that bypasses the
+                // browser submit event. Capture that path before Framer sees
+                // it, then replay the click after the server acknowledgement.
+                if (isCustomTripForm(form)) {
+                    captureTripLead(
+                        event,
+                        form,
+                        () => button.click(),
+                        "custom_trip_lead",
+                    )
+                } else if (isTripLeadForm(form)) {
+                    captureTripLead(event, form, () => button.click())
+                }
+            }
+
+            document.addEventListener("submit", submitHandler, true)
+            document.addEventListener("click", clickHandler, true)
+            return () => {
+                document.removeEventListener("submit", submitHandler, true)
+                document.removeEventListener("click", clickHandler, true)
+            }
+        }, [])
+
+        return (
+            <Component
+                {...props}
             />
         )
     }

@@ -12,6 +12,15 @@ const corsHeaders = {
 
 const LEAD_SHEET_RETRY_FUNCTION = "retry-lead-sheets"
 
+type ProjectionOutcome = {
+    ok: boolean
+    sheetLogged: boolean
+    masterLogged: boolean
+    sheetStatus: "synced" | "failed" | "configuration_missing"
+    errorCode?: string
+    errorMessage?: string
+}
+
 function json(payload: Record<string, unknown>, status = 200) {
     return new Response(JSON.stringify(payload), {
         status,
@@ -113,6 +122,81 @@ async function payloadHash(value: any): Promise<string> {
     const bytes = new TextEncoder().encode(JSON.stringify(stableObject(value)))
     const digest = await crypto.subtle.digest("SHA-256", bytes)
     return Array.from(new Uint8Array(digest)).map((byte) => byte.toString(16).padStart(2, "0")).join("")
+}
+
+const IDEMPOTENCY_FIELDS = [
+    "submission_id",
+    "lead_id",
+    "normalized_email",
+    "source",
+    "status",
+    "name",
+    "email",
+    "phone",
+    "country_code",
+    "instagram_id",
+    "page_url",
+    "trip_id",
+    "trip_slug",
+    "trip_name",
+    "itinerary_name",
+    "departure_date",
+    "travellers",
+    "traveller_count",
+    "payment_mode",
+    "activity_type",
+    "activity_label",
+    "company_name",
+    "utm_source",
+    "utm_medium",
+    "utm_campaign",
+    "utm_term",
+    "utm_content",
+    "reason",
+    "notes",
+]
+
+function canonicalIdempotencyPayload(value: any): Record<string, any> {
+    const input = value && typeof value === "object" ? value : {}
+    const output: Record<string, any> = {}
+    for (const field of IDEMPOTENCY_FIELDS) {
+        const raw = input[field]
+        if (field === "travellers") {
+            output[field] = Array.isArray(raw) ? raw : []
+            continue
+        }
+        if (field === "traveller_count") {
+            const count = Number(raw)
+            output[field] = Number.isFinite(count) ? count : ""
+            continue
+        }
+        if (field === "source") {
+            output[field] = normalizeSource(raw)
+            continue
+        }
+        if (field === "status") {
+            output[field] = compact(raw).toLowerCase() || "submitted"
+            continue
+        }
+        if (field === "email") {
+            output[field] = normalizeEmail(raw)
+            continue
+        }
+        if (field === "normalized_email") {
+            output[field] = normalizeEmail(raw || input.email)
+            continue
+        }
+        if (field === "trip_slug") {
+            // A slug inferred from page_url is server-derived metadata. It
+            // must not make a replay of an older submission look different.
+            const slug = compact(raw)
+            const inferred = inferTripSlug(input.page_url)
+            output[field] = slug && slug !== inferred ? slug : ""
+            continue
+        }
+        output[field] = raw === null || raw === undefined ? "" : raw
+    }
+    return output
 }
 
 async function findExistingLead(
@@ -412,6 +496,91 @@ async function updateCurrentLead(params: {
     return result.data
 }
 
+async function projectAndMarkSubmission(params: {
+    supabase: any
+    lead: any | null
+    leadId: string
+    submission: any
+    submissionId: string
+    source: string
+    status: string
+}): Promise<ProjectionOutcome> {
+    const {
+        supabase,
+        lead,
+        leadId,
+        submission,
+        submissionId,
+        source,
+        status,
+    } = params
+
+    try {
+        const projection = await projectLeadSheets({
+            lead,
+            submission,
+            submissionId,
+            source,
+            status,
+            notes: "",
+            supabase,
+        })
+        const syncedAt = new Date().toISOString()
+        const updated = await supabase.from("lead_submissions").update({
+            sheet_sync_status: projection.sheetStatus,
+            sheet_synced_at: syncedAt,
+            error_message: null,
+            updated_at: syncedAt,
+        }).eq("submission_id", submissionId)
+        if (updated.error) throw updated.error
+        return {
+            ok: true,
+            sheetLogged: projection.sheetLogged,
+            masterLogged: projection.masterLogged,
+            sheetStatus: projection.sheetStatus,
+        }
+    } catch (sheetError: any) {
+        const sheetStatus = projectionConfigurationError(sheetError?.message || sheetError)
+        const errorCode = sheetStatus === "configuration_missing"
+            ? "SHEET_CONFIGURATION_MISSING"
+            : "SHEET_SYNC_FAILED"
+        const errorMessage = compact(sheetError?.message || sheetError).slice(0, 500)
+        const updated = await supabase.from("lead_submissions").update({
+            sheet_sync_status: sheetStatus,
+            error_message: errorMessage,
+            updated_at: new Date().toISOString(),
+        }).eq("submission_id", submissionId)
+        if (updated.error) {
+            console.error("[record-lead] Sheet projection status update failed", {
+                submissionId,
+                error: updated.error,
+            })
+        }
+        console.error("[record-lead] Sheet projection failed", {
+            submissionId,
+            leadId,
+            source,
+            status,
+            error: errorMessage,
+        })
+        return {
+            ok: false,
+            sheetLogged: false,
+            masterLogged: false,
+            sheetStatus,
+            errorCode,
+            errorMessage,
+        }
+    }
+}
+
+function scheduleProjection(task: Promise<ProjectionOutcome>): boolean {
+    const runtime = (globalThis as any).EdgeRuntime
+    if (!runtime || typeof runtime.waitUntil !== "function") return false
+    runtime.waitUntil(task)
+    return true
+}
+
 Deno.serve(async (req) => {
     if (req.method === "OPTIONS") {
         return new Response("ok", { headers: corsHeaders })
@@ -481,9 +650,7 @@ Deno.serve(async (req) => {
         // The submission timestamp is server-generated metadata, not lead
         // input. Excluding it keeps a replay with the same submission_id
         // idempotent after a timeout or repeated click.
-        const hashPayload: Record<string, any> = { ...submissionPayload }
-        delete hashPayload.captured_at
-        const hash = await payloadHash(hashPayload)
+        const hash = await payloadHash(canonicalIdempotencyPayload(body))
 
         const supabaseUrl = compact(Deno.env.get("SUPABASE_URL"))
         const serviceRoleKey = compact(Deno.env.get("SUPABASE_SERVICE_ROLE_KEY"))
@@ -498,8 +665,15 @@ Deno.serve(async (req) => {
             .eq("submission_id", submissionId)
             .maybeSingle()
         if (existingSubmission.error) throw existingSubmission.error
+        const existingPayloadHash = existingSubmission.data?.payload
+            ? await payloadHash(
+                canonicalIdempotencyPayload(existingSubmission.data.payload),
+            )
+            : ""
         if (
-            existingSubmission.data && existingSubmission.data.payload_hash !== hash
+            existingSubmission.data &&
+            existingSubmission.data.payload_hash !== hash &&
+            existingPayloadHash !== hash
         ) {
             return json({
                 error: "submission_id was already used with different lead data",
@@ -593,52 +767,97 @@ Deno.serve(async (req) => {
             }
         }
 
-        const projectionSubmission = existingSubmission.data?.payload ||
-            submissionPayload
         const projectionSource = compact(existingSubmission.data?.source) || source
         const projectionStatus = compact(existingSubmission.data?.status) || status
-        try {
-            const projection = await projectLeadSheets({
-                lead,
-                submission: projectionSubmission,
-                submissionId,
-                source: projectionSource,
-                status: projectionStatus,
-                notes: "",
-                supabase,
+        const storedProjectionPayload = existingSubmission.data?.payload ||
+            submissionPayload
+        const projectionSubmission = {
+            ...storedProjectionPayload,
+            submission_id: submissionId,
+            captured_at: storedProjectionPayload.captured_at ||
+                existingSubmission.data?.created_at || now,
+            source: projectionSource,
+            status: projectionStatus,
+        }
+        const existingSheetStatus = compact(existingSubmission.data?.sheet_sync_status).toLowerCase()
+
+        // A replay of an already synchronized submission is complete. Returning
+        // without another Sheet read also prevents duplicate concurrent retries.
+        if (existingSubmission.data && existingSheetStatus === "synced") {
+            return json({
+                ok: true,
+                lead_id: leadId || null,
+                submission_id: submissionId,
+                sheet_logged: true,
+                sheet_sync_status: "synced",
+                replayed: true,
             })
-            await supabase.from("lead_submissions").update({
-                sheet_sync_status: projection.sheetStatus,
-                sheet_synced_at: projection.sheetStatus === "synced" ? new Date().toISOString() : null,
-                error_message: null,
-                updated_at: new Date().toISOString(),
-            }).eq("submission_id", submissionId)
+        }
+
+        // A pending submission may still have an in-flight background
+        // projection from the original request. Let the protected retry path
+        // handle genuinely stale pending rows rather than starting a second
+        // concurrent append.
+        if (existingSubmission.data && existingSheetStatus === "pending") {
+            return json({
+                ok: true,
+                lead_id: leadId || null,
+                submission_id: submissionId,
+                sheet_logged: false,
+                sheet_sync_status: "pending",
+                replayed: true,
+            })
+        }
+
+        const projectionTask = projectAndMarkSubmission({
+            supabase,
+            lead,
+            leadId,
+            submission: projectionSubmission,
+            submissionId,
+            source: projectionSource,
+            status: projectionStatus,
+        })
+
+        // Google Sheets is an operational projection, not part of the browser
+        // acknowledgement path. Supabase EdgeRuntime keeps this task alive
+        // after the response so Framer can finish the user's form immediately.
+        if (scheduleProjection(projectionTask)) {
+            return json({
+                ok: true,
+                lead_id: leadId || null,
+                submission_id: submissionId,
+                sheet_logged: false,
+                sheet_sync_status: "pending",
+                projection: "background",
+                retry_function: LEAD_SHEET_RETRY_FUNCTION,
+                replayed: Boolean(existingSubmission.data),
+            })
+        }
+
+        // Local/test runtimes do not expose EdgeRuntime.waitUntil. Keep the
+        // synchronous fallback there so unit and smoke tests still exercise
+        // the complete projection contract.
+        const projection = await projectionTask
+        if (projection.ok) {
             return json({
                 ok: true,
                 lead_id: leadId || null,
                 submission_id: submissionId,
                 sheet_logged: projection.sheetLogged,
+                sheet_sync_status: projection.sheetStatus,
                 replayed: Boolean(existingSubmission.data),
             })
-        } catch (sheetError: any) {
-            const sheetStatus = projectionConfigurationError(sheetError?.message || sheetError)
-            const errorCode = sheetStatus === "configuration_missing"
-                ? "SHEET_CONFIGURATION_MISSING"
-                : "SHEET_SYNC_FAILED"
-            await supabase.from("lead_submissions").update({
-                sheet_sync_status: sheetStatus,
-                error_message: compact(sheetError?.message || sheetError).slice(0, 500),
-                updated_at: new Date().toISOString(),
-            }).eq("submission_id", submissionId)
-            return json({
-                ok: false,
-                error: "Lead saved; Sheet projection failed and can be retried",
-                code: errorCode,
-                retry_function: LEAD_SHEET_RETRY_FUNCTION,
-                lead_id: leadId || null,
-                submission_id: submissionId,
-            }, 503)
         }
+        return json({
+            ok: false,
+            error: "Lead saved; Sheet projection failed and can be retried",
+            code: projection.errorCode,
+            retry_function: LEAD_SHEET_RETRY_FUNCTION,
+            lead_id: leadId || null,
+            submission_id: submissionId,
+            sheet_sync_status: projection.sheetStatus,
+        }, 503)
     } catch (err: any) {
         console.error("[record-lead] error", err)
         const message = compact(err?.message || err)

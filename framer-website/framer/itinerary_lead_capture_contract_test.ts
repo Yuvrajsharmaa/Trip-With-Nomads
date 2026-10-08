@@ -27,7 +27,8 @@ Deno.test("record-lead hashes a stable submission payload without request timest
         new URL("../supabase/functions/record-lead/index.ts", import.meta.url),
     )
 
-    assertStringIncludes(source, "const hashPayload: Record<string, any> = { ...submissionPayload }")
-    assertStringIncludes(source, "delete hashPayload.captured_at")
-    assertStringIncludes(source, "payloadHash(hashPayload)")
+    assertStringIncludes(source, "const IDEMPOTENCY_FIELDS = [")
+    assertStringIncludes(source, "function canonicalIdempotencyPayload")
+    assertStringIncludes(source, "captured_at: now")
+    assertStringIncludes(source, "payloadHash(canonicalIdempotencyPayload(body))")
 })

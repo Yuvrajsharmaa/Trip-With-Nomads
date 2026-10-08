@@ -18,6 +18,10 @@ Deno.test("record-lead requires durable submission identity and retries Sheet pr
     assertStringIncludes(source, "trip_itinerary_download")
     assertStringIncludes(source, "projectLeadSheets")
     assertStringIncludes(source, "retry-lead-sheets")
+    assertStringIncludes(source, "EdgeRuntime")
+    assertStringIncludes(source, "waitUntil")
+    assertStringIncludes(source, 'sheet_sync_status: "pending"')
+    assertStringIncludes(source, 'projection: "background"')
     assertStringIncludes(source, ".range(offset, offset + pageSize - 1)")
     assertStringIncludes(source, "utm_term")
     assertStringIncludes(projection, "GOOGLE_SHEET_ID_CUSTOM_TRIPS")
@@ -31,6 +35,8 @@ Deno.test("record-lead requires durable submission identity and retries Sheet pr
     assertStringIncludes(source, "does not belong")
     assertStringIncludes(source, "notes: compact(body?.notes)")
     assertStringIncludes(source, "notes: firstNonEmpty(body?.notes, existingLead?.notes)")
+    assertStringIncludes(source, "canonicalIdempotencyPayload")
+    assertStringIncludes(source, "existingPayloadHash")
 })
 
 Deno.test("lead routing is explicit and custom tabs remain configuration-gated", () => {
