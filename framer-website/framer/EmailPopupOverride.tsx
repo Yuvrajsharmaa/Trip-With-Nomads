@@ -87,9 +87,15 @@ function createSubmissionId(): string {
 function getSubmissionId(
     source: string,
     form: HTMLFormElement | null,
+    identitySuffix = "",
 ): { id: string; key: string } {
     const formIdentity = form?.id || form?.getAttribute("name") || "default"
-    const key = `__twn_lead_submission_v1:${source}:${window.location.pathname}:${formIdentity}`
+    const normalizedSuffix = identitySuffix.trim().toLowerCase().replace(
+        /[^a-z0-9_-]+/g,
+        "-",
+    )
+    const suffix = normalizedSuffix ? `:${normalizedSuffix}` : ""
+    const key = `__twn_lead_submission_v1:${source}:${window.location.pathname}:${formIdentity}${suffix}`
     try {
         const existing = sessionStorage.getItem(key)
         if (existing && /^[0-9a-f-]{36}$/i.test(existing)) {
@@ -129,6 +135,55 @@ function findInputValue(root: ParentNode | null, selectors: string[]): string {
         }
     }
     return ""
+}
+
+type LeadActivityContext = {
+    itineraryName?: string
+    activityType?: string
+    activityLabel?: string
+    submissionIdentity?: string
+    retainSubmissionId?: boolean
+}
+
+function firstNonEmptyText(...values: unknown[]): string {
+    for (const value of values) {
+        const text = String(value || "").trim()
+        if (text) return text
+    }
+    return ""
+}
+
+function getItineraryName(props: any, target: any): string {
+    const dataTarget = target?.closest?.(
+        "[data-itinerary-name], [data-trip-name], [data-trip-title]",
+    )
+    const explicit = firstNonEmptyText(
+        props?.itineraryName,
+        props?.tripName,
+        props?.["data-itinerary-name"],
+        props?.["data-trip-name"],
+        target?.getAttribute?.("data-itinerary-name"),
+        target?.getAttribute?.("data-trip-name"),
+        target?.getAttribute?.("data-trip-title"),
+        dataTarget?.getAttribute?.("data-itinerary-name"),
+        dataTarget?.getAttribute?.("data-trip-name"),
+        dataTarget?.getAttribute?.("data-trip-title"),
+    )
+    if (explicit) return explicit
+
+    const scope = target?.closest?.("article, section, main") || document
+    const heading = scope.querySelector?.("h1, h2, h3")
+    const headingText = String(heading?.textContent || "").trim()
+    if (headingText && !/download itinerary|download|itinerary/i.test(headingText)) {
+        return headingText
+    }
+
+    const title = String(document.title || "")
+        .replace(/\s*[|–—-]\s*Trip With Nomads.*$/i, "")
+        .trim()
+    return title && !/download itinerary|download|itinerary/i.test(title)
+        ? title
+        : ""
 }
 
 function getProjectRefFromHost(): string {
@@ -523,6 +578,7 @@ async function postLeadWithSource(
     form: HTMLFormElement | null,
     source: string,
     statusOverride?: string,
+    activity: LeadActivityContext = {},
 ): Promise<boolean> {
     const root = form ?? document
     const email = normalizeEmail(
@@ -536,7 +592,9 @@ async function postLeadWithSource(
     // The live trip-page form labels email as optional. An omitted email is
     // therefore an explicit partial form submission, while other submitted
     // routes still require a valid email.
-    const inferredPartialFill = !email && source === "trip_page_lead"
+    const inferredPartialFill = !email && (
+        source === "trip_page_lead" || source === "trip_itinerary_download"
+    )
     const effectiveStatus = statusOverride ||
         (inferredPartialFill ? "partial_fill" : "submitted")
     const isPartialFill = effectiveStatus === "partial_fill"
@@ -589,7 +647,11 @@ async function postLeadWithSource(
     const params = new URLSearchParams(window.location.search)
     const projectRef = getProjectRefFromHost()
     const endpoint = `https://${projectRef}.supabase.co/functions/v1/record-lead`
-    const submission = getSubmissionId(source, form)
+    const submission = getSubmissionId(
+        source,
+        form,
+        activity.submissionIdentity || "",
+    )
 
     try {
         const response = await fetch(endpoint, {
@@ -602,6 +664,7 @@ async function postLeadWithSource(
                 phone: phone || null,
                 instagram_id: instagram_id || null,
                 reason: reason || null,
+                company_name: companyName || null,
                 notes: companyName ? `Company: ${companyName}` : null,
                 source,
                 country_code: country_code || null,
@@ -609,6 +672,10 @@ async function postLeadWithSource(
                 page_url: window.location.href,
                 trip_id: params.get("tripId"),
                 trip_slug: params.get("slug"),
+                trip_name: activity.itineraryName || null,
+                itinerary_name: activity.itineraryName || null,
+                activity_type: activity.activityType || null,
+                activity_label: activity.activityLabel || null,
                 utm_source: params.get("utm_source"),
                 utm_medium: params.get("utm_medium"),
                 utm_campaign: params.get("utm_campaign"),
@@ -635,7 +702,7 @@ async function postLeadWithSource(
             sheetLogged: payload?.sheet_logged,
             sheetTab: payload?.sheet_tab,
         })
-        clearSubmissionId(submission.key)
+        if (!activity.retainSubmissionId) clearSubmissionId(submission.key)
         return true
     } catch (error) {
         console.error(`[LeadTracking:${source}] Request failed`, error)
@@ -770,6 +837,133 @@ export function withTripPageLeadTracking(
                             props?.status === "partial_fill" ? "partial_fill" : undefined,
                         )
                         if (ok) props.onClick?.(event)
+                    } finally {
+                        window.setTimeout(() => {
+                            w[SUBMIT_LOCK_KEY] = false
+                        }, 700)
+                    }
+                }}
+                onSubmit={undefined}
+            />
+        )
+    }
+}
+
+/**
+ * Capture a trip-page itinerary download before allowing the existing
+ * download action to continue. The lead record is server-first and uses a
+ * stable id per itinerary so repeated clicks do not create another event.
+ */
+export function withTripItineraryDownloadTracking(
+    Component: ComponentType,
+): ComponentType {
+    return function TripItineraryDownloadTracking(props: any) {
+        return (
+            <Component
+                {...props}
+                onClick={async (event: any) => {
+                    event?.preventDefault?.()
+                    event?.stopPropagation?.()
+                    event?.persist?.()
+                    const w = window as any
+                    if (w[SUBMIT_LOCK_KEY]) return
+                    w[SUBMIT_LOCK_KEY] = true
+
+                    const target = event?.currentTarget
+                    const form = target?.closest?.("form") || null
+                    const itineraryName = getItineraryName(props, target)
+                    const params = new URLSearchParams(window.location.search)
+                    const submissionIdentity = firstNonEmptyText(
+                        props?.itinerarySlug,
+                        props?.tripSlug,
+                        props?.["data-itinerary-slug"],
+                        params.get("tripId"),
+                        params.get("slug"),
+                        itineraryName,
+                        "default",
+                    )
+                    const href = target?.href || props?.href || ""
+                    const linkTarget = target?.target || props?.target || ""
+
+                    try {
+                        const ok = await postLeadWithSource(
+                            form,
+                            "trip_itinerary_download",
+                            undefined,
+                            {
+                                itineraryName,
+                                activityType: "itinerary_download",
+                                activityLabel: "Downloaded itinerary",
+                                submissionIdentity,
+                                retainSubmissionId: true,
+                            },
+                        )
+                        if (!ok) return
+
+                        if (typeof props.onClick === "function") {
+                            props.onClick(event)
+                        } else if (href) {
+                            if (linkTarget === "_blank") {
+                                window.open(href, "_blank", "noopener,noreferrer")
+                            } else {
+                                window.location.assign(href)
+                            }
+                        }
+                    } finally {
+                        window.setTimeout(() => {
+                            w[SUBMIT_LOCK_KEY] = false
+                        }, 700)
+                    }
+                }}
+                onSubmit={undefined}
+            />
+        )
+    }
+}
+
+/**
+ * Track interaction with the itinerary form as a partial lead when the
+ * visitor leaves before downloading. The submit button uses the download
+ * adapter above, so both paths share one source and the same lock.
+ */
+export function withTripItineraryFormTracking(
+    Component: ComponentType,
+): ComponentType {
+    return function TripItineraryFormTracking(props: any) {
+        return (
+            <Component
+                {...props}
+                onClick={async (event: any) => {
+                    const w = window as any
+                    if (w[SUBMIT_LOCK_KEY]) return
+                    w[SUBMIT_LOCK_KEY] = true
+                    const form = event?.currentTarget?.tagName === "FORM"
+                        ? event.currentTarget
+                        : event?.currentTarget?.closest?.("form") || null
+                    const itineraryName = getItineraryName(props, form)
+                    const params = new URLSearchParams(window.location.search)
+                    const submissionIdentity = firstNonEmptyText(
+                        props?.itinerarySlug,
+                        props?.tripSlug,
+                        props?.["data-itinerary-slug"],
+                        params.get("tripId"),
+                        params.get("slug"),
+                        itineraryName,
+                        "default",
+                    )
+                    try {
+                        await postLeadWithSource(
+                            form,
+                            "trip_itinerary_download",
+                            undefined,
+                            {
+                                itineraryName,
+                                activityType: "itinerary_download",
+                                activityLabel: "Started itinerary request",
+                                submissionIdentity,
+                                retainSubmissionId: true,
+                            },
+                        )
                     } finally {
                         window.setTimeout(() => {
                             w[SUBMIT_LOCK_KEY] = false

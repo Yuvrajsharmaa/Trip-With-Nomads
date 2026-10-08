@@ -472,7 +472,12 @@ Deno.serve(async (req) => {
             notes: compact(body?.notes),
             captured_at: now,
         }
-        const hash = await payloadHash(submissionPayload)
+        // The submission timestamp is server-generated metadata, not lead
+        // input. Excluding it keeps a replay with the same submission_id
+        // idempotent after a timeout or repeated click.
+        const hashPayload: Record<string, any> = { ...submissionPayload }
+        delete hashPayload.captured_at
+        const hash = await payloadHash(hashPayload)
 
         const supabaseUrl = compact(Deno.env.get("SUPABASE_URL"))
         const serviceRoleKey = compact(Deno.env.get("SUPABASE_SERVICE_ROLE_KEY"))
@@ -582,13 +587,17 @@ Deno.serve(async (req) => {
             }
         }
 
+        const projectionSubmission = existingSubmission.data?.payload ||
+            submissionPayload
+        const projectionSource = compact(existingSubmission.data?.source) || source
+        const projectionStatus = compact(existingSubmission.data?.status) || status
         try {
             const projection = await projectLeadSheets({
                 lead,
-                submission: submissionPayload,
+                submission: projectionSubmission,
                 submissionId,
-                source,
-                status,
+                source: projectionSource,
+                status: projectionStatus,
                 notes: "",
                 supabase,
             })
