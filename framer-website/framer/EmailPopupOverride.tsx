@@ -881,7 +881,7 @@ export function withTripItineraryDownloadTracking(
                         params.get("slug"),
                         itineraryName,
                         "default",
-                    )
+                    ) + ":download"
                     const href = target?.href || props?.href || ""
                     const linkTarget = target?.target || props?.target || ""
 
@@ -950,7 +950,7 @@ export function withTripItineraryFormTracking(
                         params.get("slug"),
                         itineraryName,
                         "default",
-                    )
+                    ) + ":partial"
                     try {
                         await postLeadWithSource(
                             form,

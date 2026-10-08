@@ -71,6 +71,8 @@ Deno.test("all legacy lead routes remain exported and use one guarded submission
             "withFormTracking",
             "withBookingInviteTracking",
             "withTripPageLeadTracking",
+            "withTripItineraryFormTracking",
+            "withTripItineraryDownloadTracking",
             "withPartialFillTracking",
         ]
     ) {
