@@ -953,7 +953,7 @@ export function withTravellerList(Component): ComponentType {
 
 // The confetti is a success-only decoration, separate from the status marker.
 // It must never appear while payment verification is pending or unavailable.
-export function withVerifiedSuccessDecoration(Component): ComponentType {
+export function withVerifiedSuccessDecoration(Component: ComponentType): ComponentType {
     return (props: any) => {
         const [data, state] = useBooking()
         if (statusIconForState(state, data?.payment_status) !== "success") return null

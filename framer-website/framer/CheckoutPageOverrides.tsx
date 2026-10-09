@@ -126,9 +126,9 @@ function decodeBase64Url(value: string): string {
         if (typeof atob === "function") return atob(padded)
     } catch (_) {}
     try {
-        // @ts-ignore Framer runtime may expose Buffer in some contexts.
-        if (typeof Buffer !== "undefined") {
-            return Buffer.from(padded, "base64").toString("utf8")
+        const runtimeBuffer = (globalThis as any).Buffer
+        if (runtimeBuffer) {
+            return runtimeBuffer.from(padded, "base64").toString("utf8")
         }
     } catch (_) {}
     return ""
@@ -1684,29 +1684,6 @@ function readCheckoutDraft(): CheckoutDraft | null {
     }
 }
 
-type CheckoutDraft = {
-    tripId?: string
-    date?: string
-    transport?: string
-    contactName?: string
-    contactPhone?: string
-    contactEmail?: string
-    paymentMode?: PaymentMode
-    travellers?: Traveller[]
-}
-
-function readCheckoutDraft(): CheckoutDraft | null {
-    if (typeof window === "undefined") return null
-    try {
-        const raw = window.sessionStorage.getItem("__twn_checkout_draft_v1")
-        if (!raw) return null
-        const parsed = JSON.parse(raw)
-        return parsed && typeof parsed === "object" ? parsed : null
-    } catch (_) {
-        return null
-    }
-}
-
 function routeContextKey(ctx: {
     tripId: string
     slug: string
@@ -3092,54 +3069,6 @@ export function withTravellerVehicleError(Component): ComponentType {
     return withTravellerFieldError("vehicle")(Component)
 }
 
-// Legacy Framer bindings kept as compatibility adapters. The canonical
-// checkout state and pricing calculation remain shared with the current UI.
-export function withCheckoutGrandTotalLabel(Component): ComponentType {
-    return withTextFromState(() => "Total trip cost")(Component)
-}
-
-export function withCheckoutGrandTotal(Component): ComponentType {
-    return withTextFromState((store) => fmtINR(computeTotals(store).subtotal))(Component)
-}
-
-export function withCheckoutPayableNowLabel(Component): ComponentType {
-    return withTextFromState(() => "Payable now")(Component)
-}
-
-export function withCheckoutDueLabel(Component): ComponentType {
-    return withTextFromState((store) =>
-        computeTotals(store).paymentMode === "partial_25" ? "Remaining due" : "Balance due"
-    )(Component)
-}
-
-export function withCheckoutNameError(Component): ComponentType {
-    return withFieldErrorText((store) => checkoutFieldError(store, "name"))(Component)
-}
-
-export function withCheckoutPhoneError(Component): ComponentType {
-    return withFieldErrorText((store) => checkoutFieldError(store, "phone"))(Component)
-}
-
-export function withCheckoutEmailError(Component): ComponentType {
-    return withFieldErrorText((store) => checkoutFieldError(store, "email"))(Component)
-}
-
-export function withCheckoutDepartureDateError(Component): ComponentType {
-    return withFieldErrorText((store) => checkoutFieldError(store, "date"))(Component)
-}
-
-export function withTravellerNameError(Component): ComponentType {
-    return withTravellerFieldError("name")(Component)
-}
-
-export function withTravellerSharingError(Component): ComponentType {
-    return withTravellerFieldError("sharing")(Component)
-}
-
-export function withTravellerVehicleError(Component): ComponentType {
-    return withTravellerFieldError("vehicle")(Component)
-}
-
 export function withCheckoutValidationHint(Component): ComponentType {
     return (props: any) => (
         <Component
@@ -3375,26 +3304,23 @@ export function withCheckoutPayButton(Component): ComponentType {
 
         useEffect(() => {
             if (typeof window === "undefined") return
-            const handlePageHide = () => {
+            const captureAbandonedBooking = () => {
                 if (paymentStartedRef.current) return
                 void postBookingAbandonLead(latestStoreRef.current)
             }
-            window.addEventListener("pagehide", handlePageHide)
-            return () => window.removeEventListener("pagehide", handlePageHide)
-        }, [])
-
-        useEffect(() => {
-            latestStoreRef.current = store
-        }, [store])
-
-        useEffect(() => {
-            if (typeof window === "undefined") return
-            const handlePageHide = () => {
-                if (paymentStartedRef.current) return
-                void postBookingAbandonLead(latestStoreRef.current)
+            const handleVisibilityChange = () => {
+                if (document.visibilityState === "hidden") {
+                    captureAbandonedBooking()
+                }
             }
-            window.addEventListener("pagehide", handlePageHide)
-            return () => window.removeEventListener("pagehide", handlePageHide)
+            window.addEventListener("pagehide", captureAbandonedBooking)
+            window.addEventListener("beforeunload", captureAbandonedBooking)
+            document.addEventListener("visibilitychange", handleVisibilityChange)
+            return () => {
+                window.removeEventListener("pagehide", captureAbandonedBooking)
+                window.removeEventListener("beforeunload", captureAbandonedBooking)
+                document.removeEventListener("visibilitychange", handleVisibilityChange)
+            }
         }, [])
 
         const submit = async () => {
