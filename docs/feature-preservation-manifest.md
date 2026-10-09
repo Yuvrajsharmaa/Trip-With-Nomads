@@ -1,6 +1,6 @@
 # Feature Preservation Manifest
 
-Status: the prior recovery release was deployed; the 2026-10-09 staging/main reconciliation remains an integration candidate and is not yet merged to `main` or fully promoted to production.
+Status: the 2026-10-09 staging/main source reconciliation was squash-merged to `main` via PR #57. Production Supabase schema, nine relevant Edge Function bundles, and Framer version `8abe561bd` were aligned with staging. The remaining live end-to-end payment, email-inbox, and Sheet-replay cases below are not yet signed off.
 
 Baseline: `origin/main` / `aa1ea63a5372de804b7b1ac37faf74a3803a1b50`
 
@@ -96,8 +96,9 @@ This manifest is the release gate for recovery. A behavior may be changed only w
 - [x] Live staging checkout displays the refreshed accessible toast and a valid future trip price; production still displays the older toast design.
 - [x] The prior dirty checkout remains available and untouched; its recovery snapshot is recorded separately.
 - [ ] Complete remaining staging retry, webhook-ordering, Sheet-replay, and email-retry scenarios against the current deployment.
-- [ ] Apply the two staging-verified Sheet-projection migrations to production; production currently lacks both tables and their lock RPCs.
-- [ ] Deploy and verify production Edge Functions against the aligned schema, then run the production read-only checks.
-- [ ] Promote the refreshed Framer version to production and verify the toast visually on the production route.
-- [ ] Complete the reviewed PR-to-`main` release and final production sign-off.
+- [x] Apply the two staging-verified Sheet-projection migrations to production; read-only schema verification confirmed both tables and lock RPCs.
+- [x] Deploy and compare nine relevant production Edge Function bundles against staging; version hashes and JWT settings match.
+- [x] Promote Framer version `8abe561bd` to production; a missing-trip checkout visibly showed the refreshed dismissible toast, and a future Vietnam checkout showed ₹54,999 + ₹2,749.95 GST = ₹57,748.95.
+- [x] Complete the required PR-to-`main` release through policy-compliant squash PR #57.
+- [ ] Final production sign-off still requires live full/partial/failure payment journeys, email-inbox confirmation, and Sheet-replay checks; contract tests and database `synced` state do not substitute for these.
 - [x] No new Google Sheets workbook or tab was created by this reconciliation.

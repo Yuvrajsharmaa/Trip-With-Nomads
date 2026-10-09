@@ -19,22 +19,23 @@ The existing-sheet contract and routing hardening were re-verified on staging be
 
 ### Routing correction
 
-The 2026-10-07 observation below is historical: at that point checkout abandonment was only written to `TWN Bookings → Abandoned Bookings`. The current feature branch also projects the contact into `TWN Master Leads → Master Leads` for follow-up, while preserving any terminal CRM status. This is not deployed until the branch is reviewed and merged.
+The 2026-10-07 observation below is historical: at that point checkout abandonment was only written to `TWN Bookings → Abandoned Bookings`. Current production code also projects the contact into `TWN Master Leads → Master Leads` for follow-up, while preserving any terminal CRM status.
 
 Payment history now prefers the existing combined `Payment History` tab when available. It falls back to the existing `Bookings_Success` / `Bookings_Failed` tabs for older workbooks, and never creates tabs. `Bookings` remains the one current row per booking.
 
-### 2026-10-09 integration/release audit (staging evidence; production pending)
+### 2026-10-09 integration and production read-back
 
 - The connected Framer project has only its `main` branch. A fresh preview reports version `8abe561bd`, zero pending edits, and no publish errors or warnings.
-- Live staging checkout verification showed the refreshed dismissible, accessible card toast on a missing-trip error. The same safe missing-trip check on production still shows the older compact dark toast; this confirms a stale production Framer publish, not a missing toast implementation in current source.
-- A valid staging Vietnam checkout for the future `2026-10-24` departure displayed ₹54,999 trip cost, ₹2,749.95 GST, and ₹57,748.95 payable now.
-- Added durable per-tab Sheet write locks and Supabase payment-event-to-Sheet-row reservations; staging has these tables and lock RPCs. Production is missing them, although its current payment/lead projection functions use the newer projection code.
-- Production `retry-lead-sheets` is behind staging (production version 3 vs staging version 9); staging adds safe explicit-submission retry targeting. Production deployment is pending schema alignment and release review.
+- The refreshed dismissible checkout toast and the future `2026-10-24` Vietnam price (₹54,999 + ₹2,749.95 GST = ₹57,748.95) were verified on staging, then re-read on production after Framer version `8abe561bd` was promoted.
+- PR #57 squash-merged the staged source tree to `main` under the repository's no-merge-commit policy; the superseded merge-snapshot branch remains preserved.
+- The two additive Sheet-projection migrations were applied to production. Read-only SQL confirmed the lock table, event-row table, and lock RPCs. Nine relevant Edge Function bundles now have matching staging/production hashes and JWT settings.
+- Staging and production `record-lead` reject an empty request with HTTP 400; both webhook endpoints reject an invalid signature with HTTP 401. These are safe smoke checks, not payment-success tests.
 - Read-only seven-day Supabase aggregates report 93 production lead submissions and 52 staging submissions, all marked `synced` in their database projection state. This is database status evidence, not an independent read-back of every Google Sheet row.
+- Read-back of the six existing production workbooks found zero duplicate normalized emails in current lead tabs. Recent identifiable abandoned leads were present in Master Leads. The Trip Page tab showed 9 October itinerary-download activity, and the latest NTC invite had a reason. Historical NTC reasons are mostly blank (14 of 85 rows populated); absent old answers cannot be reconstructed. Ten Master Leads rows have no captured date, and one pair shares a phone number but has different names, so it needs human review before merging.
 - Local verification: 103 Framer/function contract tests, 8 migration-contract tests, and 12 managed-Sheets/worktree tests pass. This does not replace the remaining live retry/webhook/email cases below.
-- No production payment, form submission, Sheet write, migration, Edge Function deployment, or Framer production publish was performed during this audit.
+- No new payment or form submission was created for this read-back, and no Google Sheet rows were edited or deleted. Live full/partial/failure payment, inbox delivery, and retry/replay cases remain unsatisfied release evidence.
 
-All values recorded here must be staging-only. Never record API keys, service-account JSON, payment credentials, webhook secrets, or complete signed tokens.
+Never record API keys, service-account JSON, payment credentials, webhook secrets, or complete signed tokens.
 
 ## Environment map
 
