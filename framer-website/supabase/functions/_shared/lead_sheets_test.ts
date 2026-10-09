@@ -178,6 +178,43 @@ Deno.test("lead rows preserve meaningful fields without technical identifiers", 
     assertEquals(abandonedMasterRow[4], "+91 9999999999")
     assertEquals(abandonedMasterRow[6], "Japan")
     assertEquals(abandonedMasterRow[9], "Partially filled")
+
+    const abandonedBookingMasterRow = buildMasterLeadSheetRow({
+        lead: {
+            current_status: "submitted",
+            latest_source: "trip_page_lead",
+            email: "guest@example.com",
+            name: "Guest",
+        },
+        status: "abandoned_booking",
+        latestSubmission: {
+            source: "booking_abandoned",
+            status: "abandoned_booking",
+            trip_name: "Vietnam",
+            reason: "Checkout abandoned before payment",
+        },
+    })
+    assertEquals(abandonedBookingMasterRow[6], "Vietnam")
+    assertEquals(abandonedBookingMasterRow[7], "Checkout abandoned before payment")
+    assertEquals(abandonedBookingMasterRow[8], "Checkout abandoned")
+    assertEquals(abandonedBookingMasterRow[9], "Checkout abandoned")
+
+    const convertedBookingMasterRow = buildMasterLeadSheetRow({
+        lead: {
+            current_status: "converted",
+            latest_source: "trip_page_lead",
+            email: "guest@example.com",
+            name: "Guest",
+        },
+        status: "abandoned_booking",
+        latestSubmission: {
+            source: "booking_abandoned",
+            status: "abandoned_booking",
+            trip_name: "Vietnam",
+        },
+    })
+    assertEquals(convertedBookingMasterRow[8], "Checkout abandoned")
+    assertEquals(convertedBookingMasterRow[9], "Converted")
 })
 
 Deno.test("master contact matching uses email and phone and detects duplicate matches", () => {

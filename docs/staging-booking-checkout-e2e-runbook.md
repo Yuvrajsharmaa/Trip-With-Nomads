@@ -19,7 +19,17 @@ The existing-sheet contract and routing hardening were re-verified on staging be
 
 ### Routing correction
 
-Checkout abandonment is written to `TWN Bookings → Abandoned Bookings`. It is not written to the general `Abandoned Leads` tab or `Master Leads`. `Bookings` is the one current booking row; `Bookings_Success` and `Bookings_Failed` are verified payment-event history, so they intentionally contain related information without representing duplicate bookings.
+The 2026-10-07 observation below is historical: at that point checkout abandonment was only written to `TWN Bookings → Abandoned Bookings`. The current feature branch also projects the contact into `TWN Master Leads → Master Leads` for follow-up, while preserving any terminal CRM status. This is not deployed until the branch is reviewed and merged.
+
+Payment history now prefers the existing combined `Payment History` tab when available. It falls back to the existing `Bookings_Success` / `Bookings_Failed` tabs for older workbooks, and never creates tabs. `Bookings` remains the one current row per booking.
+
+### 2026-10-09 feature-branch checks (not yet staging evidence)
+
+- Restored the accessible, responsive checkout error toast in the Framer source and added a contract test. The source is in the feature branch/preview only; it is not yet live on production.
+- Added durable per-tab Sheet write locks and Supabase payment-event-to-Sheet-row reservations. This keeps retries idempotent without exposing technical event IDs in the visible workbook.
+- Updated the payment-history route to inspect existing tab names before choosing a destination. The current workbook audit found an existing `Payment History` tab, so no new tab is required.
+- Checkout-abandoned submissions now also appear in Master Leads as a follow-up activity; terminal CRM status is retained.
+- Local verification: Framer contracts and Supabase contracts are recorded in the PR checks; none of these bullets is proof of a staging deployment or live payment.
 
 All values recorded here must be staging-only. Never record API keys, service-account JSON, payment credentials, webhook secrets, or complete signed tokens.
 

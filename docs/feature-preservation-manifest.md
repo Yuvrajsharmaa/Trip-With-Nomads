@@ -67,8 +67,7 @@ This manifest is the release gate for recovery. A behavior may be changed only w
 | Destination | Contract to preserve | Recovery decision |
 | --- | --- | --- |
 | `Bookings` | One current row by hidden `Booking Key`; visible row is the human-readable current booking register | Keep current provider-neutral contract; never restore blind append or `callback_orphan` |
-| `Bookings_Success` | Append once per verified provider event | Preserve failed-then-success history as separate events |
-| `Bookings_Failed` | Append once per verified provider event | Preserve retry/failure history as separate events |
+| `Payment History` (when present) | Append once per verified provider event | Keep distinct success/failure/retry events; old `Bookings_Success` / `Bookings_Failed` remain supported only where those are the existing tabs |
 | `Leads` | One current normalized contact per existing routed destination | Upsert by normalized email; preserve non-empty fields |
 | `Abandoned Leads` | Event row keyed by `submission_id` | Append once per partial submission |
 | `NTC - Invites` | Existing invite-specific route with visible `Why They Want To Travel` reason | Preserve tab, workbook name `NTC Invites`, and existing reason values |

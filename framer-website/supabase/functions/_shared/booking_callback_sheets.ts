@@ -15,12 +15,45 @@ export const BOOKING_CALLBACK_HEADERS = [
 ]
 
 export const BOOKING_PAYMENT_HISTORY_TAB = "Payment History"
+export const BOOKING_SUCCESS_HISTORY_TAB = "Bookings_Success"
+export const BOOKING_FAILED_HISTORY_TAB = "Bookings_Failed"
 
-// Legacy success/failed tab overrides are deliberately ignored. All verified
-// payment events belong in one event history, where Payment Result separates
-// successful and failed attempts.
-export function resolveBookingPaymentHistoryTab(_legacyConfiguredTab?: string): string {
-    return BOOKING_PAYMENT_HISTORY_TAB
+// Prefer one existing combined history tab for clarity. Older workbooks may
+// still have separate success/failure tabs; choose those only when the combined
+// tab is absent. The caller supplies live tab metadata so this never invents a
+// destination or relies on stale environment configuration.
+export function resolveBookingPaymentHistoryTab(
+    paymentResult: unknown,
+    availableTabs: string[],
+    configuredHistoryTab?: string | null,
+    successTab = BOOKING_SUCCESS_HISTORY_TAB,
+    failedTab = BOOKING_FAILED_HISTORY_TAB,
+    mappedHistoryTab?: string | null,
+): string {
+    const result = compact(paymentResult).toLowerCase()
+    const existing = new Map(
+        availableTabs.map((tab) => [compact(tab).toLowerCase(), compact(tab)]),
+    )
+    const mapped = compact(mappedHistoryTab).toLowerCase()
+    if (mapped && existing.has(mapped)) return existing.get(mapped)!
+    if (existing.has(BOOKING_PAYMENT_HISTORY_TAB.toLowerCase())) {
+        return existing.get(BOOKING_PAYMENT_HISTORY_TAB.toLowerCase())!
+    }
+    const configured = compact(configuredHistoryTab).toLowerCase()
+    const outcomeTabs = new Set([
+        compact(successTab).toLowerCase(),
+        compact(failedTab).toLowerCase(),
+    ])
+    if (configured && existing.has(configured) && !outcomeTabs.has(configured)) {
+        return existing.get(configured)!
+    }
+    const outcomeTab = ["failed", "failure"].includes(result) ? failedTab :
+        ["paid", "success", "captured"].includes(result) ? successTab : ""
+    const matchedOutcomeTab = existing.get(compact(outcomeTab).toLowerCase())
+    if (matchedOutcomeTab) return matchedOutcomeTab
+    throw new Error(
+        `No existing managed payment history tab for result=${result || "empty"}`,
+    )
 }
 
 function compact(value: any): string {
@@ -55,6 +88,16 @@ function settlementStatus(value: any): string {
     return humanize(status)
 }
 
+function eventLabel(value: unknown, result: string): string {
+    const type = compact(value).toLowerCase()
+    if (type === "payment.failed") return "Payment failed"
+    if (type === "payment.captured") return "Payment captured"
+    if (type === "order.paid") return "Order marked paid"
+    if (result === "Paid") return "Payment received"
+    if (result === "Failed") return "Payment failed"
+    return humanize(type)
+}
+
 export function buildBookingCallbackRow(params: {
     booking: Record<string, any>
     eventId?: string
@@ -74,12 +117,15 @@ export function buildBookingCallbackRow(params: {
 }) {
     const booking = params.booking || {}
     const reconciliation = compact(params.reconciliationResult)
+    const result = paymentResult(params.paymentResult || booking.payment_status)
+    const attempt = Number(params.paymentAttempt)
     const notes = [
-        compact(params.notes),
+        eventLabel(params.eventType, result),
+        Number.isInteger(attempt) && attempt > 0 ? `Attempt ${attempt}` : "",
         reconciliation && reconciliation.toLowerCase() !== "matched"
-            ? `Reconciliation: ${humanize(reconciliation)}`
+            ? `Review: ${humanize(reconciliation)}`
             : "",
-    ].filter(Boolean).join(" | ")
+    ].filter(Boolean).join(" · ")
     return [
         timestampToSheetSerial(params.eventReceivedAt || params.processedAt),
         compact(booking.booking_ref),
@@ -89,7 +135,7 @@ export function buildBookingCallbackRow(params: {
         compact(booking.email).toLowerCase(),
         toNumber(params.amountReceived),
         toNumber(params.expectedAmount || booking.payable_now_amount || booking.amount),
-        paymentResult(params.paymentResult || booking.payment_status),
+        result,
         settlementStatus(params.settlementStatus || booking.settlement_status),
         notes,
     ]
