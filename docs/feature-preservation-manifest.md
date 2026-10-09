@@ -1,10 +1,12 @@
 # Feature Preservation Manifest
 
-Status: the 2026-10-09 staging/main source reconciliation was squash-merged to `main` via PR #57. Production Supabase schema, nine relevant Edge Function bundles, and Framer version `8abe561bd` were aligned with staging. The remaining live end-to-end payment, email-inbox, and Sheet-replay cases below are not yet signed off.
+Status: recovered and staging-verified. The 2026-10-09 staging/main source reconciliation was squash-merged to `main` via PR #57; this follow-up Razorpay callback fix is verified on staging and is being promoted through the protected `main` PR before production deployment. Remaining live sign-off items are recorded below rather than being implied by local tests.
 
-Baseline: `origin/main` / `aa1ea63a5372de804b7b1ac37faf74a3803a1b50`
+Baseline before the 2026-10-09 reconciliation: `origin/main` / `aa1ea63a5372de804b7b1ac37faf74a3803a1b50`.
 
-Staging source snapshot: `origin/staging` / `a4e3e42bf10445d5a404c4a229a79129281785fc`
+Earlier recovery baseline: `origin/main` / `59f8cab2d29b039d2bc59b8965bb45c6ea3b7b35`.
+
+Staging source snapshot: `origin/staging` / `a4e3e42bf10445d5a404c4a229a79129281785fc`.
 
 Recovery source: `/Users/yuvrajsharma/Downloads/Trip-With-Nomads` on `codex/resend-payment-notifications`, intentionally left untouched.
 
@@ -102,3 +104,13 @@ This manifest is the release gate for recovery. A behavior may be changed only w
 - [x] Complete the required PR-to-`main` release through policy-compliant squash PR #57.
 - [ ] Final production sign-off still requires live full/partial/failure payment journeys, email-inbox confirmation, and Sheet-replay checks; contract tests and database `synced` state do not substitute for these.
 - [x] No new Google Sheets workbook or tab was created by this reconciliation.
+- [x] Every manifest row has a source review and local contract evidence; staging evidence is recorded in the runbook.
+- [x] No current hardening migration/function was replaced by historical code.
+- [x] Full, failed, and 25% staging payment journeys pass through Razorpay Test Mode; retry/idempotency behavior is covered by contract tests and staging replay checks.
+- [x] Status pages render verified paid and failed results immediately, with bounded polling and actionable timeout/error states.
+- [x] Resend delivery is visible and retryable per payment event; provider failures are durable. The `@example.com` failure was confirmed as a Resend Test Mode recipient restriction.
+- [x] Every configured lead route and existing Sheet destination passes normalization/idempotency checks; conflicting lead IDs return HTTP 409.
+- [x] No new Google Sheet tab/workbook was created.
+- [x] The dirty checkout remains available and unchanged; its recovery snapshot is recorded separately.
+- [x] Razorpay browser success and failure callbacks return signed status-page redirects on staging without changing payment authority from the verified webhook.
+- [ ] Deploy the callback gateway setting to production and verify fresh success/failure redirect responses before final production sign-off.
