@@ -21,7 +21,10 @@ import {
     transitionPaymentStatus,
 } from "../_shared/payment_reconciliation.ts"
 import { buildPaymentEmail } from "../_shared/payment_email.ts"
-import { sendResendEmail } from "../_shared/resend.ts"
+import {
+    isResendIdempotencyConflict,
+    sendResendEmail,
+} from "../_shared/resend.ts"
 import {
     deliverInternalBookingNotification,
 } from "../_shared/internal_booking_notifications.ts"
@@ -377,7 +380,18 @@ async function reservePaymentEvent(params: {
 async function claimPaymentEvent(supabase: any, row: any): Promise<"process" | "sheet" | "email" | "done"> {
     const processing = String(row?.processing_status || "").toLowerCase()
     const sheet = String(row?.sheet_sync_status || "").toLowerCase()
-    if (processing === "ignored") return "done"
+    if (processing === "ignored") {
+        // Close older ignored rows that were reserved before email projection
+        // was made explicitly terminal. Unsupported/rejected events never
+        // send customer email and must not remain pending forever.
+        if (String(row?.email_sync_status || "").toLowerCase() !== "not_required") {
+            await updatePaymentEvent(supabase, row.id, {
+                email_sync_status: "not_required",
+                email_error: null,
+            })
+        }
+        return "done"
+    }
     if (processing === "applied") {
         if (sheet !== "synced") return "sheet"
         return "email"
@@ -550,36 +564,66 @@ async function sendPaymentEmailProjection(params: {
             }
 
             if (payload) {
-                const result = await sendResendEmail(payload)
-                const classified = classifyEmailDeliveryResult(result, true)
-                await updatePaymentEvent(params.supabase, eventRow.id, {
-                    email_sync_status: classified.status,
-                    email_provider_id: classified.providerId,
-                    email_sent_at: classified.status === "sent" ? new Date().toISOString() : null,
-                    email_error: classified.error,
-                })
-                customerDelivered = classified.status === "sent"
-                if (classified.status === "sent") {
-                    console.log("[razorpay-webhook] payment email sent", {
-                        bookingId: params.booking.id,
-                        paymentStatus: params.booking.payment_status,
-                        settlementStatus: params.booking.settlement_status,
-                        eventId: eventRow.provider_event_id,
+                const priorEmail = await params.supabase
+                    .from("payment_events")
+                    .select("id, email_provider_id, email_sent_at")
+                    .eq("email_idempotency_key", payload.idempotencyKey)
+                    .eq("email_sync_status", "sent")
+                    .neq("id", eventRow.id)
+                    .limit(1)
+                    .maybeSingle()
+                if (!priorEmail.error && priorEmail.data) {
+                    await updatePaymentEvent(params.supabase, eventRow.id, {
+                        email_sync_status: "not_required",
+                        email_provider_id: priorEmail.data.email_provider_id || null,
+                        email_sent_at: priorEmail.data.email_sent_at || new Date().toISOString(),
+                        email_error: null,
                     })
+                    customerDelivered = true
+                } else {
+                    const result = await sendResendEmail(payload)
+                    const classified = classifyEmailDeliveryResult(result, true)
+                    await updatePaymentEvent(params.supabase, eventRow.id, {
+                        email_sync_status: classified.status,
+                        email_provider_id: classified.providerId,
+                        email_sent_at: classified.status === "sent" ? new Date().toISOString() : null,
+                        email_error: classified.error,
+                    })
+                    customerDelivered = classified.status === "sent"
+                    if (classified.status === "sent") {
+                        console.log("[razorpay-webhook] payment email sent", {
+                            bookingId: params.booking.id,
+                            paymentStatus: params.booking.payment_status,
+                            settlementStatus: params.booking.settlement_status,
+                            eventId: eventRow.provider_event_id,
+                        })
+                    }
                 }
             }
         } catch (error) {
-            const message = safeEmailProjectionError(error)
-            await updatePaymentEvent(params.supabase, eventRow.id, {
-                email_sync_status: "failed",
-                email_error: message,
-            })
-            console.error("[razorpay-webhook] payment email failed", {
-                bookingId: params.booking.id,
-                eventId: eventRow.provider_event_id,
-                error: message,
-            })
-            customerDelivered = false
+            if (isResendIdempotencyConflict(error)) {
+                await updatePaymentEvent(params.supabase, eventRow.id, {
+                    email_sync_status: "not_required",
+                    email_error: null,
+                })
+                customerDelivered = true
+                console.warn("[razorpay-webhook] duplicate payment email suppressed", {
+                    bookingId: params.booking.id,
+                    eventId: eventRow.provider_event_id,
+                })
+            } else {
+                const message = safeEmailProjectionError(error)
+                await updatePaymentEvent(params.supabase, eventRow.id, {
+                    email_sync_status: "failed",
+                    email_error: message,
+                })
+                console.error("[razorpay-webhook] payment email failed", {
+                    bookingId: params.booking.id,
+                    eventId: eventRow.provider_event_id,
+                    error: message,
+                })
+                customerDelivered = false
+            }
         }
     }
 
@@ -1102,6 +1146,8 @@ serve(async (req) => {
                 verification_status: "ignored",
                 processing_status: "ignored",
                 sheet_sync_status: "not_required",
+                email_sync_status: "not_required",
+                email_error: null,
                 processed_at: new Date().toISOString(),
                 notes: `Unsupported Razorpay event: ${eventName || "unknown"}`,
             })
@@ -1260,6 +1306,9 @@ serve(async (req) => {
                 processing_status: paymentApplied ? "applied" : invalid ? "ignored" : "failed",
                 sheet_sync_status: paymentApplied
                     ? (sheetConfigurationMissing ? "configuration_missing" : "failed")
+                    : "not_required",
+                email_sync_status: paymentApplied
+                    ? firstNonEmpty(eventRow.email_sync_status, "pending")
                     : "not_required",
                 error_message: message.slice(0, 500),
                 processed_at: invalid ? new Date().toISOString() : null,

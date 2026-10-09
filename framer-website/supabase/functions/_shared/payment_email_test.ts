@@ -230,6 +230,33 @@ Deno.test("uses the configured site URL for environment-safe email links", () =>
   assertEquals(email.html.includes('https://tripwithnomads.com"'), false);
 });
 
+Deno.test("paid email uses the signed booking status destination", () => {
+  const statusUrl =
+    "https://maroon-aside-814100.framer.app/booking-status?booking_id=booking-123&status_token=signed-status";
+  const email = buildPaymentEmail(
+    pendingBooking,
+    {
+      ...pendingBooking,
+      payment_status: "paid",
+      settlement_status: "fully_paid",
+      paid_amount: 24780,
+      payment_gateway_txn_id: "pay_status",
+    },
+    "Summer Spiti",
+    "https://maroon-aside-814100.framer.app",
+    statusUrl,
+  );
+
+  assert(email);
+  assertStringIncludes(email.html, "View booking status");
+  assertStringIncludes(email.html, "status_token=signed-status");
+  assertStringIncludes(
+    email.html,
+    'href="https://maroon-aside-814100.framer.app/booking-status?booking_id=booking-123&amp;status_token=signed-status"',
+  );
+  assertStringIncludes(email.text, "View booking status: " + statusUrl);
+});
+
 Deno.test("does not build an email for a repeated unchanged callback", () => {
   const booking = {
     ...pendingBooking,

@@ -9,7 +9,7 @@ import {
     MASTER_LEAD_HEADERS,
     NTC_INVITE_HEADERS,
 } from "./lead_sheets.ts"
-import { findRowsMatchingAnyKey } from "./sheets.ts"
+import { masterLeadMatchKeys } from "./lead_projection.ts"
 
 const SALES_LEAD_HEADERS = [
     "Captured At",
@@ -217,34 +217,38 @@ Deno.test("lead rows preserve meaningful fields without technical identifiers", 
     assertEquals(convertedBookingMasterRow[9], "Converted")
 })
 
-Deno.test("master contact matching uses email and phone and detects duplicate matches", () => {
-    const headers = ["Name", "Email", "Phone"]
-    const rows = [
-        headers,
-        ["One", "one@example.com", "+91 1111111111"],
-        ["Two", "", "+91 2222222222"],
-    ]
-
+Deno.test("master contact matching uses normalized email only", () => {
     assertEquals(
-        findRowsMatchingAnyKey(rows, [
-            { column: "Email", value: "one@example.com" },
-            { column: "Phone", value: "+91 1111111111" },
+        masterLeadMatchKeys([
+            "9 Oct 2026",
+            "9 Oct 2026",
+            "One",
+            " ONE@example.com ",
+            "+91 1111111111",
+            "",
+            "Vietnam",
+            "",
+            "Trip page form",
+            "Submitted",
+            "",
         ]),
-        [2],
+        [{ column: "Email", value: "one@example.com" }],
     )
     assertEquals(
-        findRowsMatchingAnyKey(rows, [
-            { column: "Email", value: "new@example.com" },
-            { column: "Phone", value: "+91 2222222222" },
+        masterLeadMatchKeys([
+            "9 Oct 2026",
+            "9 Oct 2026",
+            "Two",
+            "",
+            "+91 2222222222",
+            "",
+            "Japan",
+            "Downloaded itinerary",
+            "Itinerary download",
+            "Submitted",
+            "",
         ]),
-        [3],
-    )
-    assertEquals(
-        findRowsMatchingAnyKey(rows, [
-            { column: "Email", value: "one@example.com" },
-            { column: "Phone", value: "+91 2222222222" },
-        ]),
-        [2, 3],
+        [],
     )
 })
 

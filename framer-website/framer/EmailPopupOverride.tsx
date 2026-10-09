@@ -120,39 +120,6 @@ function clearSubmissionId(key: string) {
     }
 }
 
-function createSubmissionId(): string {
-    if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
-        return crypto.randomUUID();
-    }
-    return "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, (character) => {
-        const random = (Math.random() * 16) | 0;
-        const value = character === "x" ? random : (random & 0x3) | 0x8;
-        return value.toString(16);
-    });
-}
-
-function getSubmissionId(source: string, form: HTMLFormElement | null): { id: string; key: string } {
-    const formIdentity = form?.id || form?.getAttribute("name") || "default";
-    const key = `__twn_lead_submission_v1:${source}:${window.location.pathname}:${formIdentity}`;
-    try {
-        const existing = sessionStorage.getItem(key);
-        if (existing && /^[0-9a-f-]{36}$/i.test(existing)) return { id: existing, key };
-        const id = createSubmissionId();
-        sessionStorage.setItem(key, id);
-        return { id, key };
-    } catch {
-        return { id: createSubmissionId(), key };
-    }
-}
-
-function clearSubmissionId(key: string) {
-    try {
-        sessionStorage.removeItem(key);
-    } catch {
-        // Storage is an enhancement; the server still owns idempotency.
-    }
-}
-
 function isValidEmail(value: string): boolean {
     return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value)
 }
@@ -294,6 +261,10 @@ async function postLead(
         return false
     }
     const root = form
+    // Keep a completed form idempotent while Framer's success state is still
+    // mounted. This closes the gap between the short network lock and a
+    // second click after the first request has already committed.
+    if (root.dataset.twnLeadCaptured === "true") return true
     const email = normalizeEmail(
         findInputValue(root, [
             'input[type="email"]',
@@ -352,11 +323,31 @@ async function postLead(
         'input[name*="company" i]',
         'input[placeholder*="company" i]',
     ])
+    const customDestination = findInputValue(root, [
+        'input[placeholder*="where would you like to go" i]',
+        'textarea[placeholder*="where would you like to go" i]',
+        'input[name*="destination" i]',
+        'textarea[name*="destination" i]',
+    ])
+    const pathname = String(window.location.pathname || "").toLowerCase()
+    const isCustomTripForm = Boolean(customDestination) ||
+        Boolean(root.querySelector(
+            'input[placeholder*="where would you like to go" i], textarea[placeholder*="where would you like to go" i]',
+        ))
+    const leadSource = isCustomTripForm
+        ? "custom_trip_lead"
+        : (companyName || pathname.includes("/corporate-trips")
+            ? "corporate_enquiry"
+            : "waitlist_popup")
+    const capturedReason = reason ||
+        (isCustomTripForm && customDestination
+            ? `Custom trip enquiry: ${customDestination}`
+            : "")
 
     const params = new URLSearchParams(window.location.search)
     const projectRef = getProjectRefFromHost()
     const endpoint = `https://${projectRef}.supabase.co/functions/v1/record-lead`
-    const submission = getSubmissionId("waitlist_popup", form)
+    const submission = getSubmissionId(leadSource, form)
 
     try {
         const response = await fetchLeadWithRetry(endpoint, {
@@ -369,13 +360,16 @@ async function postLead(
                 phone: phone || null,
                 country_code: country_code || null,
                 instagram_id: instagram_id || null,
-                reason: reason || null,
+                reason: capturedReason || null,
+                company_name: companyName || null,
                 notes: companyName ? `Company: ${companyName}` : null,
-                source: "waitlist_popup",
+                source: leadSource,
                 status: statusOverride || "submitted",
                 page_url: window.location.href,
                 trip_id: params.get("tripId"),
                 trip_slug: params.get("slug"),
+                trip_name: isCustomTripForm ? customDestination || null : null,
+                itinerary_name: isCustomTripForm ? customDestination || null : null,
                 utm_source: params.get("utm_source"),
                 utm_medium: params.get("utm_medium"),
                 utm_campaign: params.get("utm_campaign"),
@@ -400,6 +394,7 @@ async function postLead(
             leadId: payload?.lead_id,
             sheetLogged: payload?.sheet_logged,
         })
+        if (!isPartialFill) root.dataset.twnLeadCaptured = "true"
         clearSubmissionId(submission.key)
         return true
     } catch (error) {
@@ -687,6 +682,7 @@ async function postLeadWithSource(
         return false
     }
     const root = form
+    if (root.dataset.twnLeadCaptured === "true") return true
     const email = normalizeEmail(
         findInputValue(root, [
             'input[type="email"]',
@@ -835,6 +831,9 @@ async function postLeadWithSource(
             sheetLogged: payload?.sheet_logged,
             sheetTab: payload?.sheet_tab,
         })
+        if (effectiveStatus !== "partial_fill") {
+            root.dataset.twnLeadCaptured = "true"
+        }
         if (!activity.retainSubmissionId) clearSubmissionId(submission.key)
         return true
     } catch (error) {
@@ -965,6 +964,51 @@ export function withBookingInviteTracking(
     Component: ComponentType,
 ): ComponentType {
     return function BookingInviteTracking(props: any) {
+        const capturePartialInvite = (event: any) => {
+            const form = resolveFormFromEvent(event)
+            if (!form) return
+
+            window.setTimeout(() => {
+                if (
+                    !form.isConnected ||
+                    form.contains(document.activeElement) ||
+                    form.dataset.twnLeadCaptured === "true" ||
+                    form.dataset.twnBookingInvitePartialCaptured === "true"
+                ) return
+
+                const hasContact = findInputValue(form, [
+                    'input[type="email"]',
+                    'input[type="tel"]',
+                    'input[name*="name" i]',
+                ])
+                if (!hasContact) return
+
+                form.dataset.twnBookingInvitePartialCaptured = "pending"
+                const w = window as any
+                if (w[SUBMIT_LOCK_KEY]) {
+                    form.dataset.twnBookingInvitePartialCaptured = "false"
+                    return
+                }
+                w[SUBMIT_LOCK_KEY] = true
+                void (async () => {
+                    try {
+                        const ok = await postLeadWithSource(
+                            form,
+                            "booking_invite",
+                            "partial_fill",
+                        )
+                        form.dataset.twnBookingInvitePartialCaptured = ok
+                            ? "true"
+                            : "false"
+                    } finally {
+                        window.setTimeout(() => {
+                            w[SUBMIT_LOCK_KEY] = false
+                        }, 700)
+                    }
+                })()
+            }, 500)
+        }
+
         useEffect(() => {
             const submitHandler = (event: Event) => {
                 const form = event.target instanceof HTMLFormElement
@@ -1024,6 +1068,10 @@ export function withBookingInviteTracking(
             <Component
                 {...props}
                 data-twn-lead-source="booking_invite"
+                onBlur={(event: any) => {
+                    props.onBlur?.(event)
+                    capturePartialInvite(event)
+                }}
             />
         )
     }
