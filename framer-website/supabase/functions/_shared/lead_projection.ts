@@ -2,6 +2,7 @@ import {
     appendHistoryRowOnceByFingerprint,
     sheetsEnabled,
     upsertCurrentRowByAnyKey,
+    withSheetProjectionLock,
 } from "./sheets.ts"
 import {
     ABANDONED_LEAD_HEADERS,
@@ -41,10 +42,8 @@ export function masterLeadMatchKeys(
     const phoneIndex = MASTER_LEAD_HEADERS.indexOf("Phone")
     const email = String(values[emailIndex] ?? "").trim().toLowerCase()
     const phone = String(values[phoneIndex] ?? "").trim()
-    return [
-        ...(email ? [{ column: "Email", value: email }] : []),
-        ...(phone ? [{ column: "Phone", value: phone }] : []),
-    ]
+    if (email) return [{ column: "Email", value: email }]
+    return phone ? [{ column: "Phone", value: phone }] : []
 }
 
 function compact(value: unknown): string {
@@ -60,7 +59,8 @@ export function isPhoneOnlyLeadContact(
     submission: Record<string, any>,
 ): boolean {
     return !normalizeEmail(submission?.email) && Boolean(compact(submission?.phone)) &&
-        (source === "booking_invite" || source === "trip_itinerary_download")
+        (source === "booking_invite" || source === "trip_itinerary_download" ||
+            source === "general_lead" || source === "waitlist_popup")
 }
 
 function routeForLead(source: string, status: string) {
@@ -226,22 +226,24 @@ export async function projectLeadSheets(
                 const fingerprintColumns = isBookingAbandonment
                     ? ["Captured At", "Email", "Phone", "Trip", "Departure Date", "Reason"]
                     : projectionFingerprintColumns()
-                await runProjectionAttempt({
-                    projection: params,
-                    sheetId: route.sheetId,
-                    tab: route.tab,
-                    projectionType: "history",
-                    projectionKey: params.submissionId,
-                    values,
-                    action: () =>
-                        appendHistoryRowOnceByFingerprint(
-                            route.sheetId,
-                            route.tab,
-                            values,
-                            historyHeaders,
-                            fingerprintColumns,
-                        ),
-                })
+                await withSheetProjectionLock(params.supabase, route.sheetId, route.tab, () =>
+                    runProjectionAttempt({
+                        projection: params,
+                        sheetId: route.sheetId,
+                        tab: route.tab,
+                        projectionType: "history",
+                        projectionKey: params.submissionId,
+                        values,
+                        action: () =>
+                            appendHistoryRowOnceByFingerprint(
+                                route.sheetId,
+                                route.tab,
+                                values,
+                                historyHeaders,
+                                fingerprintColumns,
+                            ),
+                    })
+                )
                 return
             }
 
@@ -267,24 +269,26 @@ export async function projectLeadSheets(
                     latestSubmission: params.submission,
                     notes: params.notes,
                 })
-            await runProjectionAttempt({
-                projection: params,
-                sheetId: route.sheetId,
-                tab: route.tab,
-                projectionType: "current",
-                projectionKey: normalizeEmail(lead.email) ||
-                    compact(lead.phone || params.submission.phone),
-                values,
-                action: () =>
-                    upsertCurrentRowByAnyKey(
-                        route.sheetId,
-                        route.tab,
-                        masterLeadMatchKeys(values),
-                        values,
-                        isInviteRoute ? NTC_INVITE_HEADERS : LEAD_HEADERS,
-                        { moveUpdatedRowToBottom: true },
-                    ),
-            })
+            await withSheetProjectionLock(params.supabase, route.sheetId, route.tab, () =>
+                runProjectionAttempt({
+                    projection: params,
+                    sheetId: route.sheetId,
+                    tab: route.tab,
+                    projectionType: "current",
+                    projectionKey: normalizeEmail(lead.email) ||
+                        compact(lead.phone || params.submission.phone),
+                    values,
+                    action: () =>
+                        upsertCurrentRowByAnyKey(
+                            route.sheetId,
+                            route.tab,
+                            masterLeadMatchKeys(values),
+                            values,
+                            isInviteRoute ? NTC_INVITE_HEADERS : LEAD_HEADERS,
+                            { moveUpdatedRowToBottom: true },
+                        ),
+                })
+            )
         },
         async () => {
             const masterSheetId = compact(Deno.env.get("GOOGLE_SHEET_ID_MASTER"))
@@ -301,37 +305,39 @@ export async function projectLeadSheets(
             const masterProjectionKey =
                 masterKeys.map((key) => `${key.column}:${key.value}`).join("|") ||
                 params.submissionId
-            await runProjectionAttempt({
-                projection: params,
-                sheetId: masterSheetId,
-                tab: "Master Leads",
-                projectionType: "master",
-                projectionKey: masterProjectionKey,
-                values: masterValues,
-                action: () =>
-                    masterKeys.length > 0
-                        ? upsertCurrentRowByAnyKey(
-                            masterSheetId,
-                            "Master Leads",
-                            masterKeys,
-                            masterValues,
-                            MASTER_LEAD_HEADERS,
-                            { moveUpdatedRowToBottom: true },
-                        )
-                        : appendHistoryRowOnceByFingerprint(
-                            masterSheetId,
-                            "Master Leads",
-                            masterValues,
-                            MASTER_LEAD_HEADERS,
-                            [
-                                "Captured At",
-                                "Name",
-                                "Trip / Itinerary",
-                                "Reason / Activity",
-                                "Source",
-                            ],
-                        ),
-            })
+            await withSheetProjectionLock(params.supabase, masterSheetId, "Master Leads", () =>
+                runProjectionAttempt({
+                    projection: params,
+                    sheetId: masterSheetId,
+                    tab: "Master Leads",
+                    projectionType: "master",
+                    projectionKey: masterProjectionKey,
+                    values: masterValues,
+                    action: () =>
+                        masterKeys.length > 0
+                            ? upsertCurrentRowByAnyKey(
+                                masterSheetId,
+                                "Master Leads",
+                                masterKeys,
+                                masterValues,
+                                MASTER_LEAD_HEADERS,
+                                { moveUpdatedRowToBottom: true },
+                            )
+                            : appendHistoryRowOnceByFingerprint(
+                                masterSheetId,
+                                "Master Leads",
+                                masterValues,
+                                MASTER_LEAD_HEADERS,
+                                [
+                                    "Captured At",
+                                    "Name",
+                                    "Trip / Itinerary",
+                                    "Reason / Activity",
+                                    "Source",
+                                ],
+                            ),
+                })
+            )
         },
     )
 

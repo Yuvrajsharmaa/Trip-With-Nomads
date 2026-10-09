@@ -17,6 +17,7 @@ type TokenCache = {
 export type SheetTabMetadata = {
     title: string
     sheetId: number
+    rowCount: number
 }
 
 const ensuredHeaders = new Map<string, Set<string>>() // map sheetId -> Set of tab names
@@ -191,7 +192,7 @@ export async function getSpreadsheetTabs(
 ): Promise<SheetTabMetadata[]> {
     if (!sheetsEnabled()) return []
     const res = await sheetsFetch(
-        "?fields=sheets.properties(sheetId,title)",
+        "?fields=sheets.properties(sheetId,title,gridProperties)",
         sheetId,
     )
     if (!res.ok) {
@@ -204,6 +205,7 @@ export async function getSpreadsheetTabs(
         .map((sheet: any) => ({
             title: String(sheet?.properties?.title || "").trim(),
             sheetId: Number(sheet?.properties?.sheetId),
+            rowCount: Number(sheet?.properties?.gridProperties?.rowCount || 0),
         }))
         .filter((sheet: SheetTabMetadata) => sheet.title && Number.isFinite(sheet.sheetId))
 }
@@ -515,6 +517,7 @@ export async function appendRow(
         }
     }
     const rowNumber = Math.max(2, lastPopulatedRow + 1)
+    await ensureGridRowExists(sheetId, tab, rowNumber)
     const endColumn = columnNumberToName(Math.max(1, values.length))
     const res = await sheetsFetch(
         `/values/${
@@ -567,11 +570,15 @@ export async function readTabValues(
     sheetId: string,
     tab: string,
     range = "A:ZZ",
+    valueRenderOption?: "FORMATTED_VALUE" | "UNFORMATTED_VALUE" | "FORMULA",
 ): Promise<any[][]> {
     if (!sheetsEnabled()) return []
     await ensureTab(tab, sheetId)
+    const renderOption = valueRenderOption
+        ? `?valueRenderOption=${encodeURIComponent(valueRenderOption)}`
+        : ""
     const res = await sheetsFetch(
-        `/values/${encodeURIComponent(tab)}!${encodeURIComponent(range)}`,
+        `/values/${encodeURIComponent(tab)}!${encodeURIComponent(range)}${renderOption}`,
         sheetId,
     )
     if (!res.ok) {
@@ -741,6 +748,7 @@ async function moveRowToBottom(
     // position in the same Sheets batch. This keeps one row per key while
     // making the newest activity visibly land at the bottom.
     const destinationRow = lastPopulatedRow + 1
+    await ensureGridRowExists(sheetId, tab, destinationRow)
     const tabs = await getSpreadsheetTabs(sheetId)
     const target = tabs.find((item) => item.title === tab)
     if (!target) throw new Error(`Managed Sheet tab not found: ${tab}`)
@@ -910,11 +918,265 @@ export function rowMatchesColumnFingerprint(
         if (index < 0 || valueIndex < 0) return false
         const expected = values[valueIndex]
         if (typeof expected === "number") {
+            if (
+                String(column).trim().toLowerCase() === "payment date" &&
+                typeof row[index] === "number" && Number.isFinite(row[index])
+            ) {
+                // Payment event identity must distinguish events within the
+                // same displayed minute. The caller reads this date as an
+                // unformatted Sheets serial, so compare its stored millisecond.
+                return Math.round(row[index] * 86_400_000) ===
+                    Math.round(expected * 86_400_000)
+            }
             const dateOnly = String(column).trim().toLowerCase() === "departure date"
             return formattedSheetDateMatches(row[index], expected, dateOnly)
         }
         return String(row[index] ?? "").trim() === String(expected ?? "").trim()
     })
+}
+
+export type PaymentHistoryRowResolution =
+    | { action: "reuse"; row: number }
+    | { action: "write"; row: number }
+    | { action: "conflict"; row: null }
+
+/** Resolve an event row using its durable Supabase row reservation first. */
+export function resolvePaymentHistoryRow(params: {
+    mappedRow: number | null
+    mappedRowMatches: boolean
+    mappedRowBlank: boolean
+    fingerprintMatches: number[]
+    lastPopulatedRow: number
+    allowFingerprintRecovery?: boolean
+}): PaymentHistoryRowResolution {
+    const matches = [...new Set(params.fingerprintMatches)].sort((a, b) => a - b)
+    if (params.mappedRow && params.mappedRowMatches) {
+        return { action: "reuse", row: params.mappedRow }
+    }
+    if (!params.mappedRow && params.allowFingerprintRecovery === false) {
+        return { action: "write", row: Math.max(2, params.lastPopulatedRow + 1) }
+    }
+    if (matches.length > 1) return { action: "conflict", row: null }
+    if (matches.length === 1) return { action: "reuse", row: matches[0] }
+    if (params.mappedRow) {
+        return params.mappedRowBlank
+            ? { action: "write", row: params.mappedRow }
+            : { action: "conflict", row: null }
+    }
+    return { action: "write", row: Math.max(2, params.lastPopulatedRow + 1) }
+}
+
+async function savePaymentHistoryRowMapping(
+    supabase: any,
+    paymentEventRowId: string,
+    spreadsheetId: string,
+    tab: string,
+    row: number,
+    create: boolean,
+): Promise<void> {
+    const mapping = {
+        payment_event_id: paymentEventRowId,
+        spreadsheet_id: spreadsheetId,
+        tab_name: tab,
+        row_number: row,
+        updated_at: new Date().toISOString(),
+    }
+    const request = create
+        ? supabase.from("payment_event_sheet_rows").insert(mapping)
+        : supabase.from("payment_event_sheet_rows")
+            .update(mapping)
+            .eq("payment_event_id", paymentEventRowId)
+    const result = await request
+    if (result.error) throw result.error
+}
+
+async function ensureGridRowExists(
+    spreadsheetId: string,
+    tab: string,
+    row: number,
+): Promise<void> {
+    const target = (await getSpreadsheetTabs(spreadsheetId)).find((item) => item.title === tab)
+    if (!target) throw new Error(`Managed Sheet tab not found: ${tab}`)
+    if (row <= target.rowCount) return
+    const response = await sheetsFetch(":batchUpdate", spreadsheetId, {
+        method: "POST",
+        body: JSON.stringify({
+            requests: [{
+                appendDimension: {
+                    sheetId: target.sheetId,
+                    dimension: "ROWS",
+                    length: row - target.rowCount,
+                },
+            }],
+        }),
+    })
+    if (!response.ok) {
+        const text = await response.text()
+        throw new Error(`Managed Sheet row capacity update failed: ${response.status} ${text}`)
+    }
+}
+
+/**
+ * Append one verified provider event and keep its exact Sheet row reservation
+ * in private Supabase state rather than adding a technical visible column.
+ */
+export async function appendPaymentHistoryRowOnceByEventRowId(
+    supabase: any,
+    paymentEventRowId: string,
+    spreadsheetId: string,
+    tab: string,
+    values: (string | number | null)[],
+    headers: string[],
+    fingerprintColumns: string[],
+    allowFingerprintRecovery = true,
+): Promise<{ row: number | null; appended: boolean }> {
+    if (!String(paymentEventRowId || "").trim()) {
+        throw new Error(`Payment event database row is required for ${tab}`)
+    }
+    if (!Array.isArray(fingerprintColumns) || fingerprintColumns.length === 0) {
+        throw new Error(`Payment event recovery fingerprint is required for ${tab}`)
+    }
+    if (!sheetsEnabled()) return { row: null, appended: false }
+
+    await ensureTab(tab, spreadsheetId)
+    await ensureHeaders(tab, headers, spreadsheetId)
+    const mappingResult = await supabase
+        .from("payment_event_sheet_rows")
+        .select("spreadsheet_id,tab_name,row_number")
+        .eq("payment_event_id", paymentEventRowId)
+        .maybeSingle()
+    if (mappingResult.error) throw mappingResult.error
+    const mapping = mappingResult.data
+    if (mapping && (mapping.spreadsheet_id !== spreadsheetId || mapping.tab_name !== tab)) {
+        throw new Error(`Payment event row is already routed to another Sheet destination`)
+    }
+
+    const existingRows = await readTabValues(
+        spreadsheetId,
+        tab,
+        "A1:ZZ10000",
+        "UNFORMATTED_VALUE",
+    )
+    const header = Array.isArray(existingRows[0])
+        ? existingRows[0].map((cell) => String(cell ?? "").trim())
+        : []
+    const missingColumn = fingerprintColumns.find((column) =>
+        !header.some((cell) => cell.toLowerCase() === String(column).trim().toLowerCase())
+    )
+    if (missingColumn) {
+        throw new Error(`Payment event recovery column not found in ${tab}: ${missingColumn}`)
+    }
+
+    const fingerprintMatches: number[] = []
+    let lastPopulatedRow = 0
+    for (let index = 1; index < existingRows.length; index++) {
+        const row = Array.isArray(existingRows[index]) ? existingRows[index] : []
+        const rowNumber = index + 1
+        if (row.some((cell) => String(cell ?? "").trim() !== "")) lastPopulatedRow = rowNumber
+        if (
+            allowFingerprintRecovery &&
+            rowMatchesColumnFingerprint(row, header, values, fingerprintColumns, headers)
+        ) {
+            fingerprintMatches.push(rowNumber)
+        }
+    }
+
+    const mappedRow = Number(mapping?.row_number) || null
+    const mappedValues = mappedRow ? existingRows[mappedRow - 1] : undefined
+    const mappedRowMatches = Boolean(mappedRow && mappedValues &&
+        rowMatchesColumnFingerprint(mappedValues, header, values, fingerprintColumns, headers))
+    const mappedRowBlank = !mappedValues || !mappedValues.some((cell: unknown) =>
+        String(cell ?? "").trim() !== ""
+    )
+    const resolution = resolvePaymentHistoryRow({
+        mappedRow,
+        mappedRowMatches,
+        mappedRowBlank,
+        fingerprintMatches,
+        lastPopulatedRow,
+        allowFingerprintRecovery,
+    })
+    if (resolution.action === "conflict") {
+        throw new Error(`Ambiguous payment history event row in ${tab}; repair is required`)
+    }
+    if (resolution.action === "reuse") {
+        if (!mapping) {
+            await savePaymentHistoryRowMapping(
+                supabase,
+                paymentEventRowId,
+                spreadsheetId,
+                tab,
+                resolution.row,
+                true,
+            )
+        } else if (mappedRow !== resolution.row) {
+            await savePaymentHistoryRowMapping(
+                supabase,
+                paymentEventRowId,
+                spreadsheetId,
+                tab,
+                resolution.row,
+                false,
+            )
+        }
+        return { row: resolution.row, appended: false }
+    }
+
+    if (!mapping) {
+        await savePaymentHistoryRowMapping(
+            supabase,
+            paymentEventRowId,
+            spreadsheetId,
+            tab,
+            resolution.row,
+            true,
+        )
+    }
+    await ensureGridRowExists(spreadsheetId, tab, resolution.row)
+    await updateRow(spreadsheetId, tab, resolution.row, values, headers)
+    return { row: resolution.row, appended: true }
+}
+
+/** Serialize writes to one managed tab across edge-function instances. */
+export async function withSheetProjectionLock<T>(
+    supabase: any,
+    spreadsheetId: string,
+    tab: string,
+    action: () => Promise<T>,
+): Promise<T> {
+    if (!supabase?.rpc) throw new Error("Durable Sheet projection lock is unavailable")
+    const lockKey = `${spreadsheetId}:${tab}`
+    const ownerToken = crypto.randomUUID()
+    const deadline = Date.now() + 12_000
+    let acquired = false
+    while (!acquired && Date.now() < deadline) {
+        const result = await supabase.rpc("acquire_sheet_projection_lock", {
+            p_lock_key: lockKey,
+            p_owner_token: ownerToken,
+            p_lease_seconds: 180,
+        })
+        if (result.error) {
+            throw new Error(`Sheet projection lock failed: ${result.error.message || result.error}`)
+        }
+        acquired = result.data === true
+        if (!acquired) await new Promise((resolve) => setTimeout(resolve, 100))
+    }
+    if (!acquired) throw new Error(`Sheet projection is busy; retry later (${tab})`)
+
+    try {
+        return await action()
+    } finally {
+        const release = await supabase.rpc("release_sheet_projection_lock", {
+            p_lock_key: lockKey,
+            p_owner_token: ownerToken,
+        })
+        if (release.error) {
+            console.error("[sheets] could not release projection lock", {
+                tab,
+                message: release.error.message || String(release.error),
+            })
+        }
+    }
 }
 
 export async function appendHistoryRowOnceByFingerprint(

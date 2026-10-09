@@ -1,5 +1,9 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2"
-import { projectionConfigurationError, projectLeadSheets } from "../_shared/lead_projection.ts"
+import {
+    isPhoneOnlyLeadContact,
+    projectionConfigurationError,
+    projectLeadSheets,
+} from "../_shared/lead_projection.ts"
 
 const corsHeaders = {
     "Access-Control-Allow-Origin": "*",
@@ -608,16 +612,16 @@ Deno.serve(async (req) => {
         if (source === "booking_invite" && !partialFill && !phone) {
             return json({ error: "Phone is required for NTC invites", code: "PHONE_REQUIRED" }, 400)
         }
-        const phoneOnlyInvite = source === "booking_invite" &&
-            !normalizedEmail && Boolean(phone)
+        const phoneOnlyContact = isPhoneOnlyLeadContact(source, {
+            email: normalizedEmail,
+            phone,
+        })
         if (source === "trip_itinerary_download" && !normalizedEmail && !partialFill && !phone) {
             return json({
                 error: "Phone is required for itinerary downloads without an email",
             }, 400)
         }
-        const itineraryWithoutEmail = source === "trip_itinerary_download" &&
-            !partialFill && Boolean(phone)
-        if (!normalizedEmail && !partialFill && !phoneOnlyInvite && !itineraryWithoutEmail) {
+        if (!normalizedEmail && !partialFill && !phoneOnlyContact) {
             return json({ error: "Email is required" }, 400)
         }
         if (normalizedEmail && !isValidEmail(normalizedEmail)) {

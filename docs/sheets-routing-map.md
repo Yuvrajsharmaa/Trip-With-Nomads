@@ -20,14 +20,14 @@ Supabase is the source of truth. Google Sheets are readable team views. The appl
 | NTC invite form | Requesting an invite to Nomads Travel Club | Name, email, phone, Instagram, and the exact answer to **why they want to travel with us** | **NTC Invites → `NTC - Invites`**; incomplete submissions → `Abandoned Leads` |
 | Custom trip enquiry form | Requesting a trip designed around their needs | Name, email, phone, Instagram, reason, source page, trip context, and UTM values | **Custom Trip Leads → `Custom Trip Leads`**; incomplete submissions → `Abandoned Leads` |
 | Full-page `/checkout` | Buying a trip | Departure, guest/contact details, traveller names and sharing, transport/vehicle, coupon, payment plan, GST, total, payable now, and balance due | **TWN Bookings → `Bookings`** |
-| Checkout abandoned before payment | Started checkout but did not complete payment | Contact details, trip, departure date, travellers, payment plan, and `Checkout abandoned before payment` reason | **TWN Bookings → `Abandoned Bookings`**; it is not a current `Bookings` row or a current `Leads` row |
-| Razorpay payment webhook | Confirming a payment | Verified event, booking, amount, attempt, provider references, result, and reconciliation | **TWN Bookings → `Bookings_Success` or `Bookings_Failed`** as payment history; the current state remains in `Bookings` |
+| Checkout abandoned before payment | Started checkout but did not complete payment | Contact details, trip, departure date, travellers, payment plan, and `Checkout abandoned before payment` reason | **TWN Bookings → `Abandoned Bookings`** and a follow-up contact in **TWN Master Leads → `Master Leads`**; it is not a paid/current booking |
+| Razorpay payment webhook | Confirming a payment | Verified event, booking, amount, attempt, result, and settlement | **TWN Bookings → `Payment History`** when that existing tab is present; older workbooks may use existing `Bookings_Success` / `Bookings_Failed` tabs. The current state remains in `Bookings`. No tab is created automatically. |
 
 ## What each workbook should look like
 
 | Workbook | Day-to-day tab | History or recovery tabs | Meaning |
 | --- | --- | --- | --- |
-| **TWN Bookings** | `Bookings` | `Abandoned Bookings`, `Bookings_Success`, `Bookings_Failed`, hidden `Legacy Abandoned Archive` | `Bookings` is the only current booking register. `Abandoned Bookings` is the pre-payment checkout event log. Success and failed tabs are payment-event history for retries, disputes, and reconciliation; they are not another booking list. |
+| **TWN Bookings** | `Bookings` | `Abandoned Bookings`, one existing payment-history destination (`Payment History` or legacy outcome tabs), hidden legacy archive tabs | `Bookings` is the only current booking register. `Abandoned Bookings` is the pre-payment checkout event log. Payment History is event history for retries, failures, and reconciliation; it is not another booking list. |
 | **TWN Trip Page Leads** | `Leads` | `Abandoned Leads` | Contacts who came from a trip page. |
 | **TWN General & Waitlist Leads** | `Leads` | `Abandoned Leads` | General enquiries and waitlist entries. |
 | **NTC Invites** | `NTC - Invites` | `Abandoned Leads` | Invite requests and the reason each person gave. |
@@ -48,6 +48,6 @@ The booking current tab shows the booking, traveller details, money, `Payment St
 - `trip_page_lead` uses the dedicated trip-page workbook. The old `GOOGLE_SHEET_ID_TRIPS` variable is only a compatibility alias for that lead workbook; it is never a booking destination.
 - `waitlist_popup` and `general_lead` use the general/waitlist workbook.
 - `custom_trip_lead` uses the custom workbook only when its existing destination is configured and present.
-- `booking_abandoned` is an event and goes to the booking workbook's `Abandoned Bookings` tab. It never goes to the general lead workbook or `Master Leads`.
+- `booking_abandoned` is an event in the booking workbook's `Abandoned Bookings` tab and also updates the contact's current `Master Leads` row for follow-up. A prior terminal CRM status is preserved.
 - A missing tab, changed header row, or multiple current-row matches stops the write and enters the repair report. The application does not silently create a tab or append a duplicate.
 - Existing NTC reasons are preserved exactly. New invite submissions write their answer to the visible reason column; a blank historical reason is not invented.

@@ -33,14 +33,16 @@ jobs:
 
             // Only enforce on PRs targeting main. For other bases, mark success so the check always exists.
             if (pr.base?.ref !== "main") {
-              await github.rest.repos.createCommitStatus({
-                owner,
-                repo,
-                sha: statusSha,
-                state: "success",
-                context: requiredContext,
-                description: "Not applicable (base is not main)",
-              });
+              for (const statusSha of statusShas) {
+                await github.rest.repos.createCommitStatus({
+                  owner,
+                  repo,
+                  sha: statusSha,
+                  state: "success",
+                  context: requiredContext,
+                  description: "Not applicable (base is not main)",
+                });
+              }
               return;
             }
 

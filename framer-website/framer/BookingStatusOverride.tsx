@@ -251,6 +251,34 @@ let _subs: Array<() => void> = []
 let _pendingCountdown = 0
 let _errorMessage = ""
 
+type StatusTextOptions = {
+    loadingText: string
+    errorText: string
+    readyText?: string
+    fallbackText: string
+}
+
+function statusTextForState(state: LoadState, options: StatusTextOptions): string {
+    if (state === "loading") return options.loadingText
+    if (state === "error") return options.errorText
+    return options.readyText ?? options.fallbackText
+}
+
+type StatusIconState = "checking" | "unavailable" | "failed" | "pending" | "success"
+
+function statusIconForState(state: LoadState, paymentStatus?: string): StatusIconState {
+    if (state === "loading") return "checking"
+    if (state === "error") return "unavailable"
+    if (paymentStatus === "failed") return "failed"
+    if (paymentStatus === "pending") return "pending"
+    if (paymentStatus === "paid") return "success"
+    return "unavailable"
+}
+
+function shouldShowPaymentSummary(state: LoadState, paymentStatus?: string): boolean {
+    return state === "ready" && paymentStatus !== "failed"
+}
+
 function notify() { _subs.forEach((fn) => fn()) }
 
 function useBooking(): [BookingData | null, LoadState] {
@@ -344,7 +372,7 @@ function dueAmount(d: BookingData): number {
     if (explicit > 0) return explicit
     const status = settlementStatus(d)
     if (status === "partially_paid") {
-        const total = Math.max(0, toNumber(d.total_amount))
+        const total = resolvedTotalAmount(d)
         const payableNow = Math.max(0, toNumber((d as any)?.payable_now_amount))
         if (payableNow > 0) return Math.max(0, total - payableNow)
     }
@@ -585,7 +613,12 @@ export function withBookingStatus(Component): ComponentType {
 //    component and replaces its textContent.
 // ═════════════════════════════════════════════════════════════
 
-function textOverride(getter: (d: BookingData) => string, fallback = "—") {
+function textOverride(
+    getter: (d: BookingData) => string,
+    fallback = "—",
+    loadingText = "Loading…",
+    errorText = fallback,
+) {
     return function (Component: ComponentType): ComponentType {
         return (props: any) => {
             const [data, state] = useBooking()
@@ -596,20 +629,14 @@ function textOverride(getter: (d: BookingData) => string, fallback = "—") {
                 const el = ref.current.querySelector("p, span, h1, h2, h3, h4, h5, h6")
                 if (!el) return
 
-                if (state === "loading") {
-                    ; (el as HTMLElement).style.opacity = "0.4"
-                    return
-                }
-
-                ; (el as HTMLElement).style.opacity = "1"
-
-                if (state === "error") {
-                    ; (el as HTMLElement).textContent = _errorMessage || "We couldn't load your booking status. Please try again."
-                } else if (state === "ready" && data) {
-                    ; (el as HTMLElement).textContent = getter(data)
-                } else {
-                    ; (el as HTMLElement).textContent = fallback
-                }
+                const text = statusTextForState(state, {
+                    loadingText,
+                    errorText,
+                    readyText: data ? getter(data) : undefined,
+                    fallbackText: fallback,
+                })
+                ; (el as HTMLElement).style.opacity = state === "loading" ? "0.72" : "1"
+                ; (el as HTMLElement).textContent = text
             }, [data, state])
 
             return (
@@ -924,6 +951,16 @@ export function withTravellerList(Component): ComponentType {
 //                               (e.g. Payment Summary card)
 // ═════════════════════════════════════════════════════════════
 
+// The confetti is a success-only decoration, separate from the status marker.
+// It must never appear while payment verification is pending or unavailable.
+export function withVerifiedSuccessDecoration(Component): ComponentType {
+    return (props: any) => {
+        const [data, state] = useBooking()
+        if (statusIconForState(state, data?.payment_status) !== "success") return null
+        return <Component {...props} />
+    }
+}
+
 // --- Page heading: "Booking Confirmed!" / "Payment Failed" ---
 export function withHeadingText(Component): ComponentType {
     const Wrapped = textOverride(
@@ -933,7 +970,9 @@ export function withHeadingText(Component): ComponentType {
             if (d.payment_status === "failed") return "Payment Failed"
             return "Processing…"
         },
-        "Loading…"
+        "We couldn't verify this booking.",
+        "Checking payment status…",
+        "We couldn't verify this booking.",
     )(Component)
     return Wrapped
 }
@@ -956,7 +995,9 @@ export function withSubheadingText(Component): ComponentType {
             }
             return "We're confirming your payment…"
         },
-        ""
+        "Refresh this page or contact us if the issue continues.",
+        "Loading your booking details securely…",
+        "Your payment status could not be verified. Please refresh or contact us.",
     )(Component)
     return Wrapped
 }
@@ -965,55 +1006,83 @@ export function withSubheadingText(Component): ComponentType {
 export function withStatusIcon(Component): ComponentType {
     return (props: any) => {
         const [data, state] = useBooking()
-        const ref = useRef<HTMLDivElement>(null)
+        const iconState = statusIconForState(state, data?.payment_status)
 
-        useEffect(() => {
-            if (!ref.current || state !== "ready" || !data) return
+        // Keep the original Framer animation only for a server-verified payment.
+        // Declarative replacement prevents async animation children from
+        // reintroducing a green success mark while the status is unknown.
+        if (iconState === "success") return <Component {...props} />
 
-            const el = ref.current
-            const isFailed = data.payment_status === "failed"
-            const isPending = data.payment_status === "pending"
-
-            // Try to find an SVG or img inside
-            const svg = el.querySelector("svg")
-            const img = el.querySelector("img")
-
-            if (isFailed) {
-                // Replace content with a red ✗ circle
-                el.innerHTML = `
-                    <div style="
-                        width: 64px; height: 64px; border-radius: 50%;
-                        background: #ef4444; display: flex;
-                        align-items: center; justify-content: center;
-                        margin: 0 auto;
-                    ">
-                        <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2.5" stroke-linecap="round">
-                            <line x1="18" y1="6" x2="6" y2="18"/>
-                            <line x1="6" y1="6" x2="18" y2="18"/>
-                        </svg>
-                    </div>
-                `
-            } else if (isPending) {
-                el.innerHTML = `
-                    <div style="
-                        width: 64px; height: 64px; border-radius: 50%;
-                        background: #f59e0b; display: flex;
-                        align-items: center; justify-content: center;
-                        margin: 0 auto;
-                    ">
-                        <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2.5" stroke-linecap="round">
-                            <circle cx="12" cy="12" r="10"/>
-                            <polyline points="12 6 12 12 16 14"/>
-                        </svg>
-                    </div>
-                `
-            }
-            // On "paid", leave the original ✅ icon from Framer
-        }, [data, state])
+        const accessibleLabel =
+            iconState === "checking"
+                ? "Checking payment status"
+                : iconState === "unavailable"
+                  ? "Booking status unavailable"
+                  : iconState === "failed"
+                    ? "Payment failed"
+                    : "Payment pending"
+        const circleStyle: React.CSSProperties = {
+            width: 64,
+            height: 64,
+            borderRadius: "50%",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            margin: "0 auto",
+            background:
+                iconState === "checking"
+                    ? "#e5e7eb"
+                    : iconState === "failed"
+                      ? "#ef4444"
+                      : "#f59e0b",
+            color: iconState === "checking" ? "#475569" : "white",
+            fontSize: 30,
+            fontWeight: 600,
+        }
 
         return (
-            <div ref={ref} style={{ display: "contents" }}>
-                <Component {...props} />
+            <div
+                {...props}
+                role="status"
+                aria-label={accessibleLabel}
+                style={{
+                    ...(props.style || {}),
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                }}
+            >
+                <div aria-hidden="true" style={circleStyle}>
+                    {iconState === "checking" || iconState === "unavailable" ? (
+                        iconState === "checking" ? "…" : "!"
+                    ) : iconState === "failed" ? (
+                        <svg
+                            width="32"
+                            height="32"
+                            viewBox="0 0 24 24"
+                            fill="none"
+                            stroke="currentColor"
+                            strokeWidth="2.5"
+                            strokeLinecap="round"
+                        >
+                            <line x1="18" y1="6" x2="6" y2="18" />
+                            <line x1="6" y1="6" x2="18" y2="18" />
+                        </svg>
+                    ) : (
+                        <svg
+                            width="32"
+                            height="32"
+                            viewBox="0 0 24 24"
+                            fill="none"
+                            stroke="currentColor"
+                            strokeWidth="2.5"
+                            strokeLinecap="round"
+                        >
+                            <circle cx="12" cy="12" r="10" />
+                            <polyline points="12 6 12 12 16 14" />
+                        </svg>
+                    )}
+                </div>
             </div>
         )
     }
@@ -1168,7 +1237,7 @@ export function withHideOnFailure(Component): ComponentType {
     return (props: any) => {
         const [data, state] = useBooking()
 
-        if (state === "ready" && data && data.payment_status === "failed") {
+        if (!shouldShowPaymentSummary(state, data?.payment_status)) {
             return <Component {...props} style={{ ...props.style, display: "none" }} />
         }
 

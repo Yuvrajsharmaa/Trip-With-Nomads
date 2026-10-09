@@ -333,12 +333,51 @@ export function buildMasterLeadSheetRow(params: {
     latestSubmission?: Record<string, any>
     notes?: string | null
 }) {
+    const lead = params.lead || {}
+    const latestSubmission = params.latestSubmission || {}
+    const isBookingAbandonment =
+        compact(latestSubmission.source).toLowerCase() === "booking_abandoned"
+    let status = params.status
+    let projectedLead = lead
+    let projectedSubmission = latestSubmission
+
+    if (isBookingAbandonment) {
+        // Checkout abandonment is still a follow-up lead in Master Leads.
+        // Keep a terminal CRM outcome (paid/converted/closed) from being
+        // downgraded, while exposing the latest checkout activity and trip.
+        const currentStatus = firstNonEmpty(lead.current_status, lead.status).toLowerCase()
+        const terminalStatuses = new Set([
+            "paid",
+            "booked",
+            "converted",
+            "customer",
+            "closed_won",
+            "closed_lost",
+            "won",
+            "lost",
+        ])
+        if (terminalStatuses.has(currentStatus)) status = firstNonEmpty(lead.current_status, lead.status)
+        projectedLead = { ...lead, latest_source: "booking_abandoned" }
+        projectedSubmission = {
+            ...latestSubmission,
+            source: "booking_abandoned",
+            reason: firstNonEmpty(
+                latestSubmission.reason,
+                "Checkout abandoned before payment",
+            ),
+            activity_label: firstNonEmpty(
+                latestSubmission.activity_label,
+                "Checkout abandoned before payment",
+            ),
+        }
+    }
+
     return buildLeadSheetRow({
-        lead: params.lead,
+        lead: projectedLead,
         latestSubmissionId: params.latestSubmissionId,
-        latestSubmission: params.latestSubmission,
+        latestSubmission: projectedSubmission,
         notes: params.notes,
     }).map((value, index) =>
-        index === 9 && params.status ? humanizeLeadStatus(params.status) : value
+        index === 9 && status ? humanizeLeadStatus(status) : value
     )
 }
