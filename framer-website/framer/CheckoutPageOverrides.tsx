@@ -3,6 +3,23 @@ import type { ComponentType } from "react"
 import { createStore } from "https://framer.com/m/framer/store.js@^1.0.0"
 
 const CHECKOUT_TIMEZONE = "Asia/Kolkata"
+const CHECKOUT_DATA_REQUEST_TIMEOUT_MS = 8000
+
+async function fetchCheckoutDataWithTimeout(
+    input: RequestInfo | URL,
+    init: RequestInit = {},
+): Promise<Response> {
+    const controller = new AbortController()
+    const timeoutId = globalThis.setTimeout(
+        () => controller.abort(),
+        CHECKOUT_DATA_REQUEST_TIMEOUT_MS,
+    )
+    try {
+        return await fetch(input, { ...init, signal: controller.signal })
+    } finally {
+        globalThis.clearTimeout(timeoutId)
+    }
+}
 
 function formatCheckoutDateKey(value: Date): string {
     const parts = new Intl.DateTimeFormat("en-GB", {
@@ -1367,7 +1384,7 @@ async function fetchTripContextBySlug(
     const cleanSlug = normalizeSlug(slug)
     if (!cleanSlug) return null
 
-    const res = await fetch(
+    const res = await fetchCheckoutDataWithTimeout(
         `${SUPABASE_URL}/rest/v1/trips?slug=eq.${
             encodeURIComponent(cleanSlug)
         }&select=id,slug,title&limit=1`,
@@ -1397,7 +1414,7 @@ async function fetchTripContextById(
     const cleanTripId = String(tripId || "").trim()
     if (!cleanTripId) return null
 
-    const res = await fetch(
+    const res = await fetchCheckoutDataWithTimeout(
         `${SUPABASE_URL}/rest/v1/trips?id=eq.${
             encodeURIComponent(
                 cleanTripId,
@@ -1433,7 +1450,7 @@ async function fetchTripPricing(tripId: string): Promise<any[]> {
     const cleanTripId = (tripId || "").trim()
     if (!cleanTripId) return []
 
-    const res = await fetch(
+    const res = await fetchCheckoutDataWithTimeout(
         `${SUPABASE_URL}/rest/v1/trip_pricing?trip_id=eq.${
             encodeURIComponent(
                 cleanTripId,
@@ -1474,7 +1491,7 @@ async function fetchTripDisplayPrice(
     if (tripId) query.set("trip_id", tripId)
     query.set("v", "3")
 
-    const request = fetch(
+    const request = fetchCheckoutDataWithTimeout(
         `${SUPABASE_URL}/functions/v1/get-trip-display-price?${query.toString()}`,
         {
             method: "GET",
@@ -1724,6 +1741,9 @@ export function withCheckoutBootstrap(Component): ComponentType {
                         loading: false,
                         pricingUnavailable: true,
                         pricingData: [],
+                        tripName: "",
+                        couponMessageType: "error",
+                        couponMessage: "Open checkout from a trip page to see dates and pricing.",
                     })
                     return
                 }
@@ -2033,8 +2053,10 @@ export function withCheckoutTripId(Component): ComponentType {
 
 export function withCheckoutSelectionText(Component): ComponentType {
     return withTextFromState((store) => {
+        if (store?.loading) return "Loading trip details…"
+        if (!store?.tripId && !store?.slug) return "Choose a trip to continue"
         const tripName = store.tripName || store.slug || store.tripId ||
-            "trip name"
+            "Trip details unavailable"
         return `Checkout for ${tripName}`
     })(Component)
 }

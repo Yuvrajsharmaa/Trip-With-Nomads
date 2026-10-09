@@ -116,6 +116,23 @@ function resolveRuntimeConfig(): RuntimeConfig {
 const CURRENT_RUNTIME = resolveRuntimeConfig()
 const SUPABASE_URL = CURRENT_RUNTIME.supabaseUrl
 const SUPABASE_KEY = CURRENT_RUNTIME.supabaseAnonKey
+const TRIP_PRICE_REQUEST_TIMEOUT_MS = 8000
+
+async function fetchTripPriceWithTimeout(
+    input: RequestInfo | URL,
+    init: RequestInit = {},
+): Promise<Response> {
+    const controller = new AbortController()
+    const timeoutId = globalThis.setTimeout(
+        () => controller.abort(),
+        TRIP_PRICE_REQUEST_TIMEOUT_MS,
+    )
+    try {
+        return await fetch(input, { ...init, signal: controller.signal })
+    } finally {
+        globalThis.clearTimeout(timeoutId)
+    }
+}
 
 const cache = new Map<string, { ts: number; data: any }>()
 const inFlight = new Map<string, Promise<any | null>>()
@@ -218,7 +235,7 @@ async function fetchTripDisplayPrice(
     if (tripId) query.set("trip_id", tripId)
     query.set("v", "3")
 
-    const request = fetch(
+    const request = fetchTripPriceWithTimeout(
         `${SUPABASE_URL}/functions/v1/get-trip-display-price?${query.toString()}`,
         {
             method: "GET",

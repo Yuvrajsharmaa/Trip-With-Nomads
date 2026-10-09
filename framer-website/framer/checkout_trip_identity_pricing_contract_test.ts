@@ -129,3 +129,14 @@ Deno.test("trip and checkout price labels distinguish loading from zero price", 
     assertStringIncludes(standaloneTripPrice, "Price unavailable")
     assertFalse(standaloneTripPrice.includes(': "₹0"'))
 })
+
+Deno.test("pricing requests time out and direct checkout routes explain missing context", () => {
+    assertStringIncludes(source, "CHECKOUT_DATA_REQUEST_TIMEOUT_MS")
+    assertStringIncludes(source, "AbortController")
+    assertStringIncludes(source, "Loading trip details…")
+    assertStringIncludes(source, "Choose a trip to continue")
+    assertStringIncludes(source, "Open checkout from a trip page")
+
+    assertStringIncludes(tripPriceSource, "TRIP_PRICE_REQUEST_TIMEOUT_MS")
+    assertStringIncludes(tripPriceSource, "AbortController")
+})
