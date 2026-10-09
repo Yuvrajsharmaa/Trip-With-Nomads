@@ -1,8 +1,10 @@
 # Feature Preservation Manifest
 
-Status: recovered, staging-verified, merged to `main`, and deployed to production.
+Status: the prior recovery release was deployed; the 2026-10-09 staging/main reconciliation remains an integration candidate and is not yet merged to `main` or fully promoted to production.
 
-Baseline: `origin/main` / `59f8cab2d29b039d2bc59b8965bb45c6ea3b7b35`
+Baseline: `origin/main` / `aa1ea63a5372de804b7b1ac37faf74a3803a1b50`
+
+Staging source snapshot: `origin/staging` / `a4e3e42bf10445d5a404c4a229a79129281785fc`
 
 Recovery source: `/Users/yuvrajsharma/Downloads/Trip-With-Nomads` on `codex/resend-payment-notifications`, intentionally left untouched.
 
@@ -67,8 +69,7 @@ This manifest is the release gate for recovery. A behavior may be changed only w
 | Destination | Contract to preserve | Recovery decision |
 | --- | --- | --- |
 | `Bookings` | One current row by hidden `Booking Key`; visible row is the human-readable current booking register | Keep current provider-neutral contract; never restore blind append or `callback_orphan` |
-| `Bookings_Success` | Append once per verified provider event | Preserve failed-then-success history as separate events |
-| `Bookings_Failed` | Append once per verified provider event | Preserve retry/failure history as separate events |
+| `Payment History` (when present) | Append once per verified provider event | Keep distinct success/failure/retry events; old `Bookings_Success` / `Bookings_Failed` remain supported only where those are the existing tabs |
 | `Leads` | One current normalized contact per existing routed destination | Upsert by normalized email; preserve non-empty fields |
 | `Abandoned Leads` | Event row keyed by `submission_id` | Append once per partial submission |
 | `NTC - Invites` | Existing invite-specific route with visible `Why They Want To Travel` reason | Preserve tab, workbook name `NTC Invites`, and existing reason values |
@@ -90,11 +91,13 @@ This manifest is the release gate for recovery. A behavior may be changed only w
 
 ## Release sign-off
 
-- [x] Every manifest row has a source review and local contract evidence; staging evidence is recorded in the runbook.
-- [x] No current hardening migration/function was replaced by historical code.
-- [x] Full, failed, and 25% staging payment journeys pass through Razorpay Test Mode; retry/idempotency behavior is covered by contract tests and staging replay checks.
-- [x] Status pages render verified paid and failed results immediately, with bounded polling and actionable timeout/error states.
-- [x] Resend delivery is visible and retryable per payment event; provider failures are durable. The `@example.com` failure was confirmed as a Resend Test Mode recipient restriction.
-- [x] Every configured lead route and existing Sheet destination passes normalization/idempotency checks; conflicting lead IDs return HTTP 409.
-- [x] No new Google Sheet tab/workbook was created.
-- [x] The dirty checkout remains available and unchanged; its recovery snapshot is recorded separately.
+- [x] This linear reconciliation commit preserves the current staging source tree on top of `main`; both original protected branches and the earlier merge snapshot remain available as separate recovery refs, and no source files are deleted.
+- [x] Local contract suites pass: 103 Framer/function tests, 8 migration-contract tests, and 12 managed-Sheets/worktree tests.
+- [x] Live staging checkout displays the refreshed accessible toast and a valid future trip price; production still displays the older toast design.
+- [x] The prior dirty checkout remains available and untouched; its recovery snapshot is recorded separately.
+- [ ] Complete remaining staging retry, webhook-ordering, Sheet-replay, and email-retry scenarios against the current deployment.
+- [ ] Apply the two staging-verified Sheet-projection migrations to production; production currently lacks both tables and their lock RPCs.
+- [ ] Deploy and verify production Edge Functions against the aligned schema, then run the production read-only checks.
+- [ ] Promote the refreshed Framer version to production and verify the toast visually on the production route.
+- [ ] Complete the reviewed PR-to-`main` release and final production sign-off.
+- [x] No new Google Sheets workbook or tab was created by this reconciliation.

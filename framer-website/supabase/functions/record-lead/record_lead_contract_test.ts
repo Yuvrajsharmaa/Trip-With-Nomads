@@ -56,12 +56,18 @@ Deno.test("record-lead requires durable submission identity and retries Sheet pr
 })
 
 Deno.test("NTC invite accepts phone-only contacts while preserving required reasons", () => {
-    assertStringIncludes(source, 'const phoneOnlyInvite = source === "booking_invite"')
-    assertStringIncludes(source, "!phoneOnlyInvite && !itineraryWithoutEmail")
+    assertStringIncludes(source, "isPhoneOnlyLeadContact(source, {")
+    assertStringIncludes(source, 'source === "booking_invite" && !partialFill && !phone')
     assertStringIncludes(source, "if (normalizedEmail) {")
     assertStringIncludes(projection, "isPhoneOnlyLeadContact")
-    assertStringIncludes(wrapper, 'const phoneOnlyContact = source === "booking_invite"')
+    assertStringIncludes(wrapper, 'source === "booking_invite" ||')
     assertStringIncludes(wrapper, "A travel reason is required")
+})
+
+Deno.test("phone-only homepage and optional-email waitlist leads are accepted", () => {
+    assertStringIncludes(source, "!normalizedEmail && !partialFill && !phoneOnlyContact")
+    assertStringIncludes(wrapper, "const phoneOnlyWaitlistContact = !email && Boolean(phone)")
+    assertStringIncludes(wrapper, 'source === "general_lead") && !email && Boolean(phone)')
 })
 
 Deno.test("lead routing is explicit and custom tabs remain configuration-gated", () => {

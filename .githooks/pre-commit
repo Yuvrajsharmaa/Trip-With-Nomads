@@ -3,8 +3,16 @@ set -euo pipefail
 
 blocked_patterns=(
   '^framer-website/supabase/\.temp/'
+  '^framer-website/supabase/supabase/\.temp/'
   '^framer-website/\.wrangler/'
+  '^framer-website/\.next/'
+  '^framer-website/test-results/'
+  '^framer-website/backups/'
+  '^framer-website/cloudflare/'
   '^framer-website/\.tmp/'
+  '^\.wrangler/'
+  '^test-results/'
+  '^scratch/'
   '^skills-main/'
 )
 
@@ -23,4 +31,3 @@ while IFS= read -r file; do
     fi
   done
 done <<< "$staged_files"
-

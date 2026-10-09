@@ -6,12 +6,55 @@ import {
     resolveBookingPaymentHistoryTab,
 } from "./booking_callback_sheets.ts"
 
-Deno.test("all payment outcomes route to one human-readable history tab", () => {
+Deno.test("payment history prefers one existing human-readable tab and never invents one", () => {
     assertEquals(BOOKING_PAYMENT_HISTORY_TAB, "Payment History")
-    assertEquals(resolveBookingPaymentHistoryTab(undefined), "Payment History")
-    assertEquals(resolveBookingPaymentHistoryTab("Payment History"), "Payment History")
-    assertEquals(resolveBookingPaymentHistoryTab("Bookings_Success"), "Payment History")
-    assertEquals(resolveBookingPaymentHistoryTab("Bookings_Failed"), "Payment History")
+    assertEquals(
+        resolveBookingPaymentHistoryTab("paid", ["Payment History", "Bookings_Failed"]),
+        "Payment History",
+    )
+    assertEquals(
+        resolveBookingPaymentHistoryTab(
+            "failed",
+            ["Payment History", "Bookings_Failed"],
+            "Bookings_Success",
+        ),
+        "Payment History",
+    )
+    assertEquals(
+        resolveBookingPaymentHistoryTab("paid", ["Bookings_Success", "Bookings_Failed"]),
+        "Bookings_Success",
+    )
+    assertEquals(
+        resolveBookingPaymentHistoryTab("failed", ["Bookings_Success", "Bookings_Failed"]),
+        "Bookings_Failed",
+    )
+    assertEquals(
+        resolveBookingPaymentHistoryTab("failed", ["Bookings_Failed"], "Missing History"),
+        "Bookings_Failed",
+    )
+    assertEquals(
+        resolveBookingPaymentHistoryTab(
+            "failed",
+            ["Bookings_Success", "Bookings_Failed"],
+            "Bookings_Success",
+        ),
+        "Bookings_Failed",
+    )
+    assertEquals(
+        resolveBookingPaymentHistoryTab("paid", ["Payment Records"], "Payment Records"),
+        "Payment Records",
+    )
+    assertEquals(
+        resolveBookingPaymentHistoryTab(
+            "paid",
+            ["Payment History", "Bookings_Success"],
+            undefined,
+            "Bookings_Success",
+            "Bookings_Failed",
+            "Bookings_Success",
+        ),
+        "Bookings_Success",
+    )
 })
 
 Deno.test("payment history uses a compact event-oriented contract", () => {
@@ -50,6 +93,7 @@ Deno.test("payment history row preserves money and omits provider identifiers", 
         expectedAmount: 17323.95,
         reconciliationResult: "matched",
         notes: "webhook synced",
+        paymentAttempt: 2,
     })
 
     assertEquals(row.length, BOOKING_CALLBACK_HEADERS.length)
@@ -64,6 +108,19 @@ Deno.test("payment history row preserves money and omits provider identifiers", 
     assertEquals(row[7], 17323.95)
     assertEquals(row[8], "Paid")
     assertEquals(row[9], "Fully paid")
-    assertEquals(row[10], "webhook synced")
+    assertEquals(row[10], "Payment captured · Attempt 2")
     assert(!row.some((value) => /booking-123|evt_123|razorpay|order_|pay_/i.test(String(value))))
+})
+
+Deno.test("payment history notes explain failed attempts without provider jargon", () => {
+    const row = buildBookingCallbackRow({
+        booking: { booking_ref: "TWN-2026-00124", settlement_status: "pending" },
+        eventType: "payment.failed",
+        paymentResult: "failed",
+        paymentAttempt: 2,
+        reconciliationResult: "amount_mismatch",
+    })
+
+    assertEquals(row[8], "Failed")
+    assertEquals(row[10], "Payment failed · Attempt 2 · Review: Amount Mismatch")
 })

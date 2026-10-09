@@ -57,7 +57,7 @@ test("payment history and abandoned bookings use visible fingerprints", () => {
     ["8 Oct 2026, 3:30 PM IST", "TWN-1", "Trip", "20 Dec 2026", "Guest", "guest@example.com", 100, 100, "Paid", "Fully paid", ""],
   ])
   assert.equal(success.headerDrift, false)
-  assert.deepEqual(success.exactHistoryDuplicates, [{ key: "8 Oct 2026, 3:30 PM IST\u001fTWN-1\u001fTrip\u001f20 Dec 2026\u001fguest@example.com\u001f100\u001f100\u001fPaid", rows: [2, 3] }])
+  assert.deepEqual(success.exactHistoryDuplicates, [{ key: "8 Oct 2026, 3:30 PM IST\u001fTWN-1\u001fTrip\u001f20 Dec 2026\u001fguest@example.com\u001f100\u001f100\u001fPaid\u001f", rows: [2, 3] }])
 
   const abandoned = analyzeTab("Abandoned Bookings", [
     MANAGED_TABS["Abandoned Bookings"].headers,
@@ -65,4 +65,37 @@ test("payment history and abandoned bookings use visible fingerprints", () => {
   ])
   assert.equal(abandoned.headerDrift, false)
   assert.deepEqual(abandoned.orphanRows, [])
+})
+
+test("unified Payment History detects exact duplicate events but keeps distinct event types", () => {
+  const headers = MANAGED_TABS["Payment History"].headers
+  const captured = [
+    "8 Oct 2026, 3:30 PM IST", "TWN-1", "Trip", "20 Dec 2026", "Guest", "guest@example.com",
+    100, 100, "Paid", "Fully paid", "Payment captured · Attempt 1",
+  ]
+  const orderPaid = [
+    ...captured.slice(0, 10), "Order marked paid · Attempt 1",
+  ]
+  const audit = analyzeTab("Payment History", [headers, captured, orderPaid, captured])
+
+  assert.equal(audit.headerDrift, false)
+  assert.deepEqual(audit.exactHistoryDuplicates, [{
+    key: [
+      "8 Oct 2026, 3:30 PM IST", "TWN-1", "Trip", "20 Dec 2026", "guest@example.com", 100, 100,
+      "Paid", "Payment captured · Attempt 1",
+    ].join("\u001f"),
+    rows: [2, 4],
+  }])
+})
+
+test("custom-trip current duplicate rows require a merge review", () => {
+  const headers = MANAGED_TABS["Custom Trip Leads"].headers
+  const audit = analyzeTab("Custom Trip Leads", [
+    headers,
+    ["1 Oct", "2 Oct", "Guest", "guest@example.com", "+91 1", "", "Custom trip", "Planning", "Website", "New", ""],
+    ["1 Oct", "3 Oct", "Guest Updated", "guest@example.com", "+91 1", "", "Custom trip", "Planning", "Website", "New", ""],
+  ])
+
+  assert.equal(audit.duplicateKeys.length, 1)
+  assert.equal(buildDryRunRepairPlan({ tabs: [audit] })[0].action, "merge_current_rows_dry_run")
 })

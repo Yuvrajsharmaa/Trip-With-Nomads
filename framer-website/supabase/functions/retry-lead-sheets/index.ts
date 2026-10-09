@@ -18,6 +18,27 @@ function compact(value: unknown): string {
     return String(value ?? "").trim()
 }
 
+const MAX_EXPLICIT_REPLAY_IDS = 100
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
+
+function parseExplicitSubmissionIds(body: any): string[] | null {
+    if (!body || typeof body !== "object" || !("submission_ids" in body)) return null
+
+    const supplied = body.submission_ids
+    if (
+        !Array.isArray(supplied) || supplied.length === 0 ||
+        supplied.length > MAX_EXPLICIT_REPLAY_IDS
+    ) {
+        throw new Error("Invalid submission_ids: provide 1 to 100 submission UUIDs")
+    }
+
+    const ids = [...new Set(supplied.map((value) => compact(value).toLowerCase()))]
+    if (ids.some((id) => !UUID_PATTERN.test(id))) {
+        throw new Error("Invalid submission_ids: every value must be a UUID")
+    }
+    return ids
+}
+
 function isAuthorized(req: Request): boolean {
     const authorization = compact(req.headers.get("authorization"))
     const suppliedSecret = compact(req.headers.get("x-lead-sheet-retry-secret"))
@@ -48,15 +69,44 @@ Deno.serve(async (req) => {
     }
 
     try {
-        const body = await req.json().catch(() => ({}))
+        let body: any
+        try {
+            body = await req.json()
+        } catch (_) {
+            return json({ error: "Invalid JSON body" }, 400)
+        }
+
+        let explicitSubmissionIds: string[] | null
+        try {
+            explicitSubmissionIds = parseExplicitSubmissionIds(body)
+        } catch (error: any) {
+            return json({ error: compact(error?.message || error) }, 400)
+        }
+
         const supabase = createClient(supabaseUrl, serviceRoleKey)
-        const pending = await supabase
+        const submissionQuery = supabase
             .from("lead_submissions")
             .select("*")
-            .in("sheet_sync_status", ["pending", "failed", "configuration_missing"])
             .order("created_at", { ascending: true })
-            .limit(limitFromBody(body))
+        const pending = explicitSubmissionIds === null
+            ? await submissionQuery
+                .in("sheet_sync_status", ["pending", "failed", "configuration_missing"])
+                .limit(limitFromBody(body))
+            : await submissionQuery.in("submission_id", explicitSubmissionIds)
         if (pending.error) throw pending.error
+
+        const foundSubmissionIds = new Set(
+            (pending.data || []).map((row: any) => compact(row?.submission_id)),
+        )
+        const missingSubmissionIds = explicitSubmissionIds?.filter((id) =>
+            !foundSubmissionIds.has(id)
+        ) || []
+        if (missingSubmissionIds.length) {
+            return json({
+                error: "One or more requested lead submissions were not found",
+                missing_submission_ids: missingSubmissionIds,
+            }, 404)
+        }
 
         const results: Array<Record<string, unknown>> = []
         let synced = 0

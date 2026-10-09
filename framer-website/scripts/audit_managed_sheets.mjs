@@ -3,6 +3,18 @@
 import fs from "node:fs/promises"
 import path from "node:path"
 
+const PAYMENT_HISTORY_TAB_CONFIG = {
+  history: true,
+  fingerprint: [
+    "Payment Date", "Booking Ref", "Trip", "Departure Date", "Email", "Amount Received",
+    "Expected Amount", "Payment Result", "Notes",
+  ],
+  headers: [
+    "Payment Date", "Booking Ref", "Trip", "Departure Date", "Guest Name", "Email",
+    "Amount Received", "Expected Amount", "Payment Result", "Settlement Status", "Notes",
+  ],
+}
+
 export const MANAGED_TABS = {
   Bookings: {
     key: "Booking Ref",
@@ -12,20 +24,9 @@ export const MANAGED_TABS = {
       "Settlement Status", "Notes",
     ],
   },
-  Bookings_Success: { history: true, fingerprint: [
-    "Payment Date", "Booking Ref", "Trip", "Departure Date", "Email", "Amount Received",
-    "Expected Amount", "Payment Result",
-  ], headers: [
-    "Payment Date", "Booking Ref", "Trip", "Departure Date", "Guest Name", "Email",
-    "Amount Received", "Expected Amount", "Payment Result", "Settlement Status", "Notes",
-  ] },
-  Bookings_Failed: { history: true, fingerprint: [
-    "Payment Date", "Booking Ref", "Trip", "Departure Date", "Email", "Amount Received",
-    "Expected Amount", "Payment Result",
-  ], headers: [
-    "Payment Date", "Booking Ref", "Trip", "Departure Date", "Guest Name", "Email",
-    "Amount Received", "Expected Amount", "Payment Result", "Settlement Status", "Notes",
-  ] },
+  "Payment History": PAYMENT_HISTORY_TAB_CONFIG,
+  Bookings_Success: PAYMENT_HISTORY_TAB_CONFIG,
+  Bookings_Failed: PAYMENT_HISTORY_TAB_CONFIG,
   Leads: { key: "Email", headers: [
     "Captured At", "Last Activity", "Name", "Email", "Phone", "Company / Group", "Trip / Itinerary",
     "Reason / Activity", "Source", "Status", "Notes",
@@ -158,7 +159,7 @@ export function buildDryRunRepairPlan(audit) {
     }
     const duplicates = tab.history ? (tab.exactHistoryDuplicates || []) : (tab.duplicateKeys || [])
     for (const duplicate of duplicates) {
-      if (tab.tab === "Bookings" || tab.tab === "Leads" || tab.tab === "NTC - Invites" || tab.tab === "Master Leads") {
+      if (tab.tab === "Bookings" || tab.tab === "Leads" || tab.tab === "Custom Trip Leads" || tab.tab === "NTC - Invites" || tab.tab === "Master Leads") {
         actions.push({
           action: "merge_current_rows_dry_run",
           tab: tab.tab,

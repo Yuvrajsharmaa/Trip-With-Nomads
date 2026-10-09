@@ -8,9 +8,11 @@ import {
 } from "../_shared/booking_callback_sheets.ts"
 import {
     appendRow,
-    appendHistoryRowOnceByFingerprint,
+    appendPaymentHistoryRowOnceByEventRowId,
+    getSpreadsheetTabs,
     sheetsEnabled,
     upsertCurrentRow,
+    withSheetProjectionLock,
 } from "../_shared/sheets.ts"
 import {
     calculateSettlementStatus,
@@ -823,6 +825,8 @@ async function syncPaymentSheets(params: {
     supabase: any
     booking: any
     attempt?: any
+    eventRowId: string
+    recoverUnmappedEvent?: boolean
     eventId: string
     eventName: string
     notes: string
@@ -863,35 +867,74 @@ async function syncPaymentSheets(params: {
         trip_title: resolvedTripName,
         trip_slug: firstNonEmpty(params.booking.trip_slug, trip.slug),
     }
-    const currentRow = buildBookingSheetRow({
-        booking: sheetBooking,
-        eventStage: params.eventName,
-        notes: params.notes,
-        updatedAt: params.processedAt,
+    let currentSheetBooking = sheetBooking
+    await withSheetProjectionLock(params.supabase, sheetId, bookingsTab, async () => {
+        // A delayed older webhook can arrive after a newer success. Read the
+        // canonical booking state while holding the tab lock so Sheets never
+        // regresses after Supabase has already advanced.
+        const latestBooking = await params.supabase
+            .from("bookings")
+            .select("*")
+            .eq("id", String(params.booking.id || ""))
+            .maybeSingle()
+        if (latestBooking.error) throw latestBooking.error
+        currentSheetBooking = {
+            ...(latestBooking.data || sheetBooking),
+            trip_name: resolvedTripName,
+            trip_title: resolvedTripName,
+            trip_slug: firstNonEmpty(
+                latestBooking.data?.trip_slug,
+                sheetBooking.trip_slug,
+                trip.slug,
+            ),
+        }
+        const currentRow = buildBookingSheetRow({
+            booking: currentSheetBooking,
+            eventStage: params.eventName,
+            notes: params.notes,
+            updatedAt: params.processedAt,
+        })
+        await upsertCurrentRow(
+            sheetId,
+            bookingsTab,
+            "Booking Ref",
+            String(currentSheetBooking.booking_ref || currentSheetBooking.id || ""),
+            currentRow,
+            BOOKING_HEADERS,
+        )
     })
-    await upsertCurrentRow(
-        sheetId,
-        bookingsTab,
-        "Booking Ref",
-        String(params.booking.booking_ref || params.booking.id || ""),
-        currentRow,
-        BOOKING_HEADERS,
-    )
 
+    const paymentResult = params.eventName === "payment.failed" ? "failed" : "paid"
+    const existingTabs = await getSpreadsheetTabs(sheetId)
+    const mappedHistoryResult = await params.supabase
+        .from("payment_event_sheet_rows")
+        .select("spreadsheet_id,tab_name")
+        .eq("payment_event_id", params.eventRowId)
+        .maybeSingle()
+    if (mappedHistoryResult.error) throw mappedHistoryResult.error
+    const mappedHistory = mappedHistoryResult.data
+    const existingTabNames = existingTabs.map((tab) => tab.title)
+    if (mappedHistory && mappedHistory.spreadsheet_id !== sheetId) {
+        throw new Error("Payment event is already routed to another booking workbook")
+    }
+    if (mappedHistory && !existingTabNames.includes(String(mappedHistory.tab_name || ""))) {
+        throw new Error("Payment event's existing history tab is missing; repair is required")
+    }
     const historyTab = resolveBookingPaymentHistoryTab(
-        firstNonEmpty(
-            Deno.env.get("BOOKING_PAYMENT_HISTORY_SHEET_TAB"),
-            Deno.env.get("BOOKING_FAILED_SHEET_TAB"),
-            Deno.env.get("BOOKING_SUCCESS_SHEET_TAB"),
-        ),
+        paymentResult,
+        existingTabNames,
+        Deno.env.get("BOOKING_PAYMENT_HISTORY_SHEET_TAB"),
+        firstNonEmpty(Deno.env.get("BOOKING_SUCCESS_SHEET_TAB"), "Bookings_Success"),
+        firstNonEmpty(Deno.env.get("BOOKING_FAILED_SHEET_TAB"), "Bookings_Failed"),
+        mappedHistory?.tab_name,
     )
     const historyRow = buildBookingCallbackRow({
-        booking: sheetBooking,
+        booking: currentSheetBooking,
         eventId: params.eventId,
         eventReceivedAt: params.eventReceivedAt,
         processedAt: params.processedAt,
         eventType: params.eventName,
-        paymentResult: params.eventName === "payment.failed" ? "failed" : "paid",
+        paymentResult,
         paymentProvider: PROVIDER,
         paymentAttempt: params.attempt?.attempt_no || params.booking.payment_attempt_number,
         providerOrderReference: params.orderId,
@@ -901,21 +944,27 @@ async function syncPaymentSheets(params: {
         reconciliationResult: params.reconciliationResult,
         notes: params.notes,
     })
-    await appendHistoryRowOnceByFingerprint(
-        sheetId,
-        historyTab,
-        historyRow,
-        BOOKING_CALLBACK_HEADERS,
-        [
-            "Payment Date",
-            "Booking Ref",
-            "Trip",
-            "Departure Date",
-            "Email",
-            "Amount Received",
-            "Expected Amount",
-            "Payment Result",
-        ],
+    await withSheetProjectionLock(params.supabase, sheetId, historyTab, () =>
+        appendPaymentHistoryRowOnceByEventRowId(
+            params.supabase,
+            params.eventRowId,
+            sheetId,
+            historyTab,
+            historyRow,
+            BOOKING_CALLBACK_HEADERS,
+            [
+                "Payment Date",
+                "Booking Ref",
+                "Trip",
+                "Departure Date",
+                "Email",
+                "Amount Received",
+                "Expected Amount",
+                "Payment Result",
+                "Notes",
+            ],
+            params.recoverUnmappedEvent,
+        )
     )
     return true
 }
@@ -999,6 +1048,8 @@ serve(async (req) => {
                     supabase,
                     booking,
                     attempt,
+                    eventRowId: eventRow.id,
+                    recoverUnmappedEvent: true,
                     eventId: eventRow.provider_event_id,
                     eventName: eventRow.event_type,
                     notes: eventRow.notes || eventRow.error_message || "Retrying payment Sheet projection",
@@ -1151,6 +1202,8 @@ serve(async (req) => {
                 supabase,
                 booking: reconciliation.booking,
                 attempt,
+                eventRowId: eventRow.id,
+                recoverUnmappedEvent: !reservation.inserted,
                 eventId,
                 eventName,
                 notes: reconciliationNotes,
