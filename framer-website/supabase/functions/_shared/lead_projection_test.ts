@@ -37,7 +37,7 @@ Deno.test("email is the sole matching key when a lead has an email", () => {
     )
 })
 
-Deno.test("phone remains the matching key for contacts submitted without email", () => {
+Deno.test("email-less contacts do not match another contact by phone", () => {
     assertEquals(
         masterLeadMatchKeys([
             "9 Oct 2026",
@@ -52,7 +52,7 @@ Deno.test("phone remains the matching key for contacts submitted without email",
             "Submitted",
             "",
         ]),
-        [{ column: "Phone", value: "+91 0000000000" }],
+        [],
     )
 })
 

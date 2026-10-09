@@ -88,6 +88,11 @@ Deno.test("all legacy lead routes remain exported and use one guarded submission
     assertStringIncludes(source, "querySelectorAll(selector)")
     assertStringIncludes(source, 'input[name*="company" i]')
     assertStringIncludes(source, 'Company: ${companyName}')
+    assertStringIncludes(source, 'custom_trip_lead')
+    assertStringIncludes(source, 'twnLeadCaptured')
+    assertStringIncludes(source, 'Custom trip enquiry: ${customDestination}')
+    assertStringIncludes(source, 'twnBookingInvitePartialCaptured')
+    assertStringIncludes(source, 'postLeadWithSource(\n                            form,\n                            "booking_invite",\n                            "partial_fill"')
 })
 
 Deno.test("checkout errors use the accessible responsive toast with safe text rendering", async () => {

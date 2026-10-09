@@ -373,8 +373,14 @@ export function buildPaymentEmail(
     "https://tripwithnomads.com",
   );
   const normalizedRetryUrl = normalizeHttpUrl(retryUrl, normalizedWebsiteUrl);
-  const actionUrl = isPaid ? normalizedWebsiteUrl : normalizedRetryUrl;
-  const actionLabel = isPaid ? "Visit Trip With Nomads" : "Try payment again";
+  // The webhook supplies a signed status URL for paid and advance-payment
+  // messages. Use it when present so the customer can immediately see the
+  // server-verified booking state. Older/manual callers still fall back to
+  // the website when they do not provide one.
+  const actionUrl = isPaid
+    ? (retryUrl ? normalizedRetryUrl : normalizedWebsiteUrl)
+    : normalizedRetryUrl;
+  const actionLabel = isPaid ? "View booking status" : "Try payment again";
   const preheader = isPaid
     ? label + " for " + trip + ". Booking " + bookingRef + "."
     : "Payment action needed for booking " + bookingRef + ".";
