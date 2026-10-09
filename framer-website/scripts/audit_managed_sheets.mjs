@@ -3,67 +3,68 @@
 import fs from "node:fs/promises"
 import path from "node:path"
 
+const PAYMENT_HISTORY_TAB_CONFIG = {
+  history: true,
+  fingerprint: [
+    "Payment Date", "Booking Ref", "Trip", "Departure Date", "Email", "Amount Received",
+    "Expected Amount", "Payment Result", "Notes",
+  ],
+  headers: [
+    "Payment Date", "Booking Ref", "Trip", "Departure Date", "Guest Name", "Email",
+    "Amount Received", "Expected Amount", "Payment Result", "Settlement Status", "Notes",
+  ],
+}
+
 export const MANAGED_TABS = {
   Bookings: {
-    key: "Booking ID",
+    key: "Booking Ref",
     headers: [
-      "Last Updated (IST)", "Booking Ref", "Booking ID", "Trip Name", "Trip ID",
-      "Departure Date", "Guest Name", "Email", "Phone", "Traveller Count",
-      "Traveller Summary", "Coupon Code", "Payment Plan", "Subtotal", "Discount",
-      "GST", "Trip Total", "Payable Now", "Paid Amount", "Balance Due", "Payment Status",
-      "Settlement Status", "Payment Provider", "Payment Attempt", "Provider Order/Reference",
-      "Provider Payment/Transaction ID", "Last Payment Event", "Last Payment Event At (IST)", "Notes",
+      "Last Updated", "Booking Ref", "Trip", "Departure Date", "Guest Name", "Email", "Phone",
+      "Travellers", "Payment Plan", "Trip Total", "Paid", "Balance Due", "Payment Status",
+      "Settlement Status", "Notes",
     ],
   },
-  Bookings_Success: { key: "Event ID", history: true, headers: [
-    "Event ID", "Event Received At (IST)", "Booking ID", "Booking Ref", "Payment Attempt",
-    "Payment Provider", "Event Type", "Payment Result", "Settlement Status", "Trip Name",
-    "Departure Date", "Guest Name", "Email", "Provider Order/Reference",
-    "Provider Payment/Transaction ID", "Amount Received", "Expected Amount", "Processed At (IST)",
-    "Reconciliation Result", "Notes",
-  ] },
-  Bookings_Failed: { key: "Event ID", history: true, headers: [
-    "Event ID", "Event Received At (IST)", "Booking ID", "Booking Ref", "Payment Attempt",
-    "Payment Provider", "Event Type", "Payment Result", "Settlement Status", "Trip Name",
-    "Departure Date", "Guest Name", "Email", "Provider Order/Reference",
-    "Provider Payment/Transaction ID", "Amount Received", "Expected Amount", "Processed At (IST)",
-    "Reconciliation Result", "Notes",
-  ] },
+  "Payment History": PAYMENT_HISTORY_TAB_CONFIG,
+  Bookings_Success: PAYMENT_HISTORY_TAB_CONFIG,
+  Bookings_Failed: PAYMENT_HISTORY_TAB_CONFIG,
   Leads: { key: "Email", headers: [
-    "Lead ID", "First Seen At", "Last Seen At", "Name", "Email", "Phone", "Instagram ID",
-    "Latest Source", "Latest Page URL", "Latest Trip ID", "Latest Trip Slug", "Latest UTM Source",
-    "Latest UTM Medium", "Latest UTM Campaign", "Latest UTM Term", "Latest UTM Content",
-    "Submission Count", "Current Status", "Latest Submission ID", "Notes",
+    "Captured At", "Last Activity", "Name", "Email", "Phone", "Company / Group", "Trip / Itinerary",
+    "Reason / Activity", "Source", "Status", "Notes",
   ] },
   "Custom Trip Leads": { key: "Email", headers: [
-    "Lead ID", "First Seen At", "Last Seen At", "Name", "Email", "Phone", "Instagram ID",
-    "Latest Source", "Latest Page URL", "Latest Trip ID", "Latest Trip Slug", "Latest UTM Source",
-    "Latest UTM Medium", "Latest UTM Campaign", "Latest UTM Term", "Latest UTM Content",
-    "Submission Count", "Current Status", "Latest Submission ID", "Notes",
+    "Captured At", "Last Activity", "Name", "Email", "Phone", "Company / Group", "Trip / Itinerary",
+    "Reason / Activity", "Source", "Status", "Notes",
   ] },
-  "Abandoned Leads": { key: "Submission ID", history: true, headers: [
-    "Submission ID", "Lead ID", "Captured At", "Name", "Email", "Phone", "Source", "Page URL",
-    "Trip ID", "Trip Slug", "Status", "Reason",
+  "Abandoned Leads": { history: true, fingerprint: [
+    "Captured At", "Email", "Phone", "Trip / Itinerary", "Source", "Reason / Activity",
+  ], headers: [
+    "Captured At", "Name", "Email", "Phone", "Trip / Itinerary", "Source", "Reason / Activity", "Status", "Notes",
+  ] },
+  "Abandoned Bookings": { history: true, fingerprint: [
+    "Captured At", "Email", "Phone", "Trip", "Departure Date", "Reason",
+  ], headers: [
+    "Captured At", "Name", "Email", "Phone", "Trip", "Departure Date", "Travellers", "Payment Plan",
+    "Reason", "Status", "Notes",
   ] },
   "NTC - Invites": { key: "Email", headers: [
-    "Lead ID", "Created At", "Name", "Email", "Phone", "Country Code", "Instagram ID", "Reason", "Source",
-    "Page URL", "Trip ID", "Trip Slug", "UTM Source", "UTM Medium", "UTM Campaign", "Status",
+    "Captured At", "Last Activity", "Name", "Email", "Phone", "Instagram", "Why They Want To Travel",
+    "Trip / Itinerary", "Status", "Notes",
   ] },
   "Master Leads": { key: "Email", headers: [
-    "Lead ID", "Created At", "Name", "Email", "Phone", "Country Code", "Source", "Status",
-    "Page URL", "Trip ID", "Trip Slug",
+    "Captured At", "Last Activity", "Name", "Email", "Phone", "Company / Group", "Trip / Itinerary",
+    "Reason / Activity", "Source", "Status", "Notes",
   ] },
 }
 
 export const PROVIDER_COLUMN_MAP = {
-  "PayU TxnID": "Provider Payment/Transaction ID",
-  "PayU Transaction ID": "Provider Payment/Transaction ID",
-  "PayU Mihpayid": "Provider Payment/Transaction ID",
-  "PayU Order ID": "Provider Order/Reference",
-  "Razorpay Order ID": "Provider Order/Reference",
-  "Razorpay Payment ID": "Provider Payment/Transaction ID",
-  "Gateway Order ID": "Provider Order/Reference",
-  "Gateway Payment ID": "Provider Payment/Transaction ID",
+  "PayU TxnID": "Provider Payment",
+  "PayU Transaction ID": "Provider Payment",
+  "PayU Mihpayid": "Provider Payment",
+  "PayU Order ID": "Provider Order",
+  "Razorpay Order ID": "Provider Order",
+  "Razorpay Payment ID": "Provider Payment",
+  "Gateway Order ID": "Provider Order",
+  "Gateway Payment ID": "Provider Payment",
 }
 
 const normalize = (value) => String(value ?? "").trim()
@@ -86,15 +87,23 @@ export function analyzeTab(tabName, values) {
   const expectedHeaders = config.headers
   const headerDrift = expectedHeaders.length > 0 && JSON.stringify(actualHeaders) !== JSON.stringify(expectedHeaders)
   const headers = indexHeaders(rows[0] || [])
-  const keyPosition = headers.get(config.key.toLowerCase())
+  const keyPosition = config.key ? headers.get(config.key.toLowerCase()) : null
+  const fingerprintPositions = (config.fingerprint || []).map((header) => headers.get(header.toLowerCase()))
+  const recordKey = (row) => {
+    if (config.history) {
+      if (fingerprintPositions.some((position) => position == null)) return ""
+      return fingerprintPositions.map((position) => normalize(row[position])).join("\u001f")
+    }
+    return keyPosition == null ? "" : normalize(row[keyPosition])
+  }
   const records = rows.slice(1).map((row, offset) => ({
     rowNumber: offset + 2,
     values: Array.isArray(row) ? row : [],
-    key: keyPosition == null ? "" : normalize(row[keyPosition]),
+    key: recordKey(Array.isArray(row) ? row : []),
   }))
   const groups = new Map()
   for (const record of records) {
-    const key = config.key.toLowerCase() === "email" ? normalizeEmail(record.key) : record.key
+    const key = config.key?.toLowerCase() === "email" ? normalizeEmail(record.key) : record.key
     if (!key) continue
     if (!groups.has(key)) groups.set(key, [])
     groups.get(key).push(record.rowNumber)
@@ -150,7 +159,7 @@ export function buildDryRunRepairPlan(audit) {
     }
     const duplicates = tab.history ? (tab.exactHistoryDuplicates || []) : (tab.duplicateKeys || [])
     for (const duplicate of duplicates) {
-      if (tab.tab === "Bookings" || tab.tab === "Leads" || tab.tab === "NTC - Invites" || tab.tab === "Master Leads") {
+      if (tab.tab === "Bookings" || tab.tab === "Leads" || tab.tab === "Custom Trip Leads" || tab.tab === "NTC - Invites" || tab.tab === "Master Leads") {
         actions.push({
           action: "merge_current_rows_dry_run",
           tab: tab.tab,

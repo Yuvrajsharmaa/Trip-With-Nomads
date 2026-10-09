@@ -1,9 +1,19 @@
 import { assert, assertStringIncludes } from "https://deno.land/std@0.224.0/assert/mod.ts"
 
 const source = await Deno.readTextFile(new URL("./index.ts", import.meta.url))
-const wrapper = await Deno.readTextFile(new URL("../../../framer/EmailPopupOverride.tsx", import.meta.url))
-const migration = await Deno.readTextFile(new URL("../../migrations/20261006100000_lead_submission_idempotency.sql", import.meta.url))
+const projection = await Deno.readTextFile(
+    new URL("../_shared/lead_projection.ts", import.meta.url),
+)
+const wrapper = await Deno.readTextFile(
+    new URL("../../../framer/EmailPopupOverride.tsx", import.meta.url),
+)
+const migration = await Deno.readTextFile(
+    new URL("../../migrations/20261006100000_lead_submission_idempotency.sql", import.meta.url),
+)
 const routing = await Deno.readTextFile(new URL("../_shared/lead_routing.ts", import.meta.url))
+const retry = await Deno.readTextFile(
+    new URL("../retry-lead-sheets/index.ts", import.meta.url),
+)
 
 Deno.test("record-lead requires durable submission identity and retries Sheet projection", () => {
     assertStringIncludes(source, "submission_id")
@@ -11,19 +21,53 @@ Deno.test("record-lead requires durable submission identity and retries Sheet pr
     assertStringIncludes(source, "lead_submissions")
     assertStringIncludes(source, "normalizedEmail")
     assertStringIncludes(source, "SHEET_SYNC_FAILED")
-    assertStringIncludes(source, "upsertCurrentRow")
-    assertStringIncludes(source, "appendHistoryRowOnce")
+    assertStringIncludes(source, "configuration_missing")
+    assertStringIncludes(source, "trip_itinerary_download")
+    assertStringIncludes(source, "projectLeadSheets")
+    assertStringIncludes(source, "retry-lead-sheets")
+    assertStringIncludes(source, "EdgeRuntime")
+    assertStringIncludes(source, "waitUntil")
+    assertStringIncludes(source, 'sheet_sync_status: "pending"')
+    assertStringIncludes(source, 'projection: "background"')
     assertStringIncludes(source, ".range(offset, offset + pageSize - 1)")
     assertStringIncludes(source, "utm_term")
-    assertStringIncludes(source, "GOOGLE_SHEET_ID_CUSTOM_TRIPS")
-    assertStringIncludes(source, "GOOGLE_SHEET_ID_TRIP_LEADS")
-    assertStringIncludes(source, 'trips: Deno.env.get("GOOGLE_SHEET_ID_TRIPS")')
-    assertStringIncludes(source, "booking_abandoned")
-    assertStringIncludes(source, "GOOGLE_SHEET_ID_MASTER")
-    assertStringIncludes(source, "Master Leads")
-    assertStringIncludes(source, '"Email",\n            normalizeEmail(params.lead.email)')
+    assertStringIncludes(projection, "GOOGLE_SHEET_ID_CUSTOM_TRIPS")
+    assertStringIncludes(projection, "GOOGLE_SHEET_ID_TRIP_LEADS")
+    assert(!projection.includes("GOOGLE_SHEET_ID_TRIPS"))
+    assertStringIncludes(projection, "booking_abandoned")
+    assertStringIncludes(projection, "GOOGLE_SHEET_ID_MASTER")
+    assertStringIncludes(projection, "Master Leads")
+    assertStringIncludes(projection, 'tab: "Master Leads"')
+    assertStringIncludes(projection, "masterLeadMatchKeys(masterValues)")
     assertStringIncludes(source, "LEAD_ID_CONFLICT")
     assertStringIncludes(source, "does not belong")
+    assertStringIncludes(source, "notes: compact(body?.notes)")
+    assertStringIncludes(source, "notes: firstNonEmpty(body?.notes, existingLead?.notes)")
+    assertStringIncludes(source, "canonicalIdempotencyPayload")
+    assertStringIncludes(source, "existingPayloadHash")
+    assertStringIncludes(source, "NTC invite reason is required")
+    assertStringIncludes(source, "Phone is required for itinerary downloads without an email")
+    assert(!projection.includes('params.source !== "booking_abandoned"'))
+    assertStringIncludes(projection, "upsertCurrentRowByAnyKey")
+    assertStringIncludes(projection, "appendHistoryRowOnceByFingerprint")
+    assertStringIncludes(projection, "runIndependentSheetProjections")
+    assertStringIncludes(retry, 'projection.sheetStatus === "synced"')
+    assertStringIncludes(retry, "projection.errorMessage")
+})
+
+Deno.test("NTC invite accepts phone-only contacts while preserving required reasons", () => {
+    assertStringIncludes(source, "isPhoneOnlyLeadContact(source, {")
+    assertStringIncludes(source, 'source === "booking_invite" && !partialFill && !phone')
+    assertStringIncludes(source, "if (normalizedEmail) {")
+    assertStringIncludes(projection, "isPhoneOnlyLeadContact")
+    assertStringIncludes(wrapper, 'source === "booking_invite" ||')
+    assertStringIncludes(wrapper, "A travel reason is required")
+})
+
+Deno.test("phone-only homepage and optional-email waitlist leads are accepted", () => {
+    assertStringIncludes(source, "!normalizedEmail && !partialFill && !phoneOnlyContact")
+    assertStringIncludes(wrapper, "const phoneOnlyWaitlistContact = !email && Boolean(phone)")
+    assertStringIncludes(wrapper, 'source === "general_lead") && !email && Boolean(phone)')
 })
 
 Deno.test("lead routing is explicit and custom tabs remain configuration-gated", () => {
@@ -40,6 +84,21 @@ Deno.test("lead wrappers use one guarded event path", () => {
     assertStringIncludes(wrapper, '"partial_fill"')
     assertStringIncludes(wrapper, "IDEMPOTENCY_CONFLICT")
     assert(wrapper.includes("event?.preventDefault?.()"))
+    assertStringIncludes(wrapper, "resolveFormFromEvent")
+    assertStringIncludes(wrapper, "requestSubmit")
+    assertStringIncludes(wrapper, "__twn_replaying_booking_invite_submit")
+    assertStringIncludes(wrapper, 'if (source !== "booking_invite") return')
+    const ntcStart = wrapper.indexOf("export function withBookingInviteTracking")
+    const ntcEnd = wrapper.indexOf("export function withTripPageLeadTracking", ntcStart)
+    const ntc = wrapper.slice(ntcStart, ntcEnd)
+    assertStringIncludes(ntc, 'document.addEventListener("submit", submitHandler, true)')
+    assertStringIncludes(ntc, "if (!form.checkValidity())")
+    assertStringIncludes(ntc, "postLeadWithSource")
+    assertStringIncludes(ntc, "form.requestSubmit()")
+    assertStringIncludes(wrapper, "Could not find the submitted form")
+    assertStringIncludes(wrapper, "const root = form")
+    assert(!wrapper.includes("const root = form ?? document"))
+    assertStringIncludes(wrapper, "if (!isFormSubmitClick(event, form))")
 })
 
 Deno.test("lead idempotency state is internal and creates no Sheet tab", () => {

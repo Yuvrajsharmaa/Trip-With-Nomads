@@ -2,6 +2,35 @@
 
 Status: executed against staging on 2026-10-06 IST; keep this as the reproducible verification record.
 
+## 2026-10-07 continuation
+
+The existing-sheet contract and routing hardening were re-verified on staging before the production backend rollout. The current deployed function versions are recorded below; earlier version numbers in the original runbook are historical evidence, not the active versions.
+
+| Environment | `create-booking` | `record-lead` | `get-booking-status` | `razorpay-webhook` |
+| --- | ---: | ---: | ---: | ---: |
+| Staging | 79 | 88 | 56 | 58 |
+| Production | 120 | 71 | 29 | 28 |
+
+### Latest controlled staging cases
+
+- Full-payment failure through Razorpay Test Mode bank simulator: booking `da0b3c63-6cea-4fd4-9b8e-d9735b2a90c6`, ref `TWN-2026-0136`. The verified `payment.failed` event is `applied`, its Sheet projection is `synced`, and its payment email projection is `sent`. The current `Bookings` row and `Bookings_Failed` event row both show the human-readable trip name `Vietnam`, `24 Oct 2026`, numeric INR amounts, and readable IST timestamps.
+- The first trip-name projection attempt exposed a missing Supabase client in the Sheet helper. It remained retryable with `sheet_sync_status = failed` and did not apply payment twice. The helper was corrected, redeployed, and the next controlled failure proved the repaired path above.
+- Production smoke checks returned HTTP 200 for the home page, full-page checkout, and the live `get-trip-checkout-context` endpoint. No production payment was created.
+
+### Routing correction
+
+The 2026-10-07 observation below is historical: at that point checkout abandonment was only written to `TWN Bookings → Abandoned Bookings`. The current feature branch also projects the contact into `TWN Master Leads → Master Leads` for follow-up, while preserving any terminal CRM status. This is not deployed until the branch is reviewed and merged.
+
+Payment history now prefers the existing combined `Payment History` tab when available. It falls back to the existing `Bookings_Success` / `Bookings_Failed` tabs for older workbooks, and never creates tabs. `Bookings` remains the one current row per booking.
+
+### 2026-10-09 feature-branch checks (not yet staging evidence)
+
+- Restored the accessible, responsive checkout error toast in the Framer source and added a contract test. The source is in the feature branch/preview only; it is not yet live on production.
+- Added durable per-tab Sheet write locks and Supabase payment-event-to-Sheet-row reservations. This keeps retries idempotent without exposing technical event IDs in the visible workbook.
+- Updated the payment-history route to inspect existing tab names before choosing a destination. The current workbook audit found an existing `Payment History` tab, so no new tab is required.
+- Checkout-abandoned submissions now also appear in Master Leads as a follow-up activity; terminal CRM status is retained.
+- Local verification: Framer contracts and Supabase contracts are recorded in the PR checks; none of these bullets is proof of a staging deployment or live payment.
+
 All values recorded here must be staging-only. Never record API keys, service-account JSON, payment credentials, webhook secrets, or complete signed tokens.
 
 ## Environment map

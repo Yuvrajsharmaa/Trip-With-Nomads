@@ -1,27 +1,60 @@
-const BOOKING_TIMEZONE = "Asia/Kolkata"
+import { dateToSheetSerial, timestampToSheetSerial } from "./sheet_dates.ts"
 
 export const BOOKING_CALLBACK_HEADERS = [
-    "Event ID",
-    "Event Received At (IST)",
-    "Booking ID",
+    "Payment Date",
     "Booking Ref",
-    "Payment Attempt",
-    "Payment Provider",
-    "Event Type",
-    "Payment Result",
-    "Settlement Status",
-    "Trip Name",
+    "Trip",
     "Departure Date",
     "Guest Name",
     "Email",
-    "Provider Order/Reference",
-    "Provider Payment/Transaction ID",
     "Amount Received",
     "Expected Amount",
-    "Processed At (IST)",
-    "Reconciliation Result",
+    "Payment Result",
+    "Settlement Status",
     "Notes",
 ]
+
+export const BOOKING_PAYMENT_HISTORY_TAB = "Payment History"
+export const BOOKING_SUCCESS_HISTORY_TAB = "Bookings_Success"
+export const BOOKING_FAILED_HISTORY_TAB = "Bookings_Failed"
+
+// Prefer one existing combined history tab for clarity. Older workbooks may
+// still have separate success/failure tabs; choose those only when the combined
+// tab is absent. The caller supplies live tab metadata so this never invents a
+// destination or relies on stale environment configuration.
+export function resolveBookingPaymentHistoryTab(
+    paymentResult: unknown,
+    availableTabs: string[],
+    configuredHistoryTab?: string | null,
+    successTab = BOOKING_SUCCESS_HISTORY_TAB,
+    failedTab = BOOKING_FAILED_HISTORY_TAB,
+    mappedHistoryTab?: string | null,
+): string {
+    const result = compact(paymentResult).toLowerCase()
+    const existing = new Map(
+        availableTabs.map((tab) => [compact(tab).toLowerCase(), compact(tab)]),
+    )
+    const mapped = compact(mappedHistoryTab).toLowerCase()
+    if (mapped && existing.has(mapped)) return existing.get(mapped)!
+    if (existing.has(BOOKING_PAYMENT_HISTORY_TAB.toLowerCase())) {
+        return existing.get(BOOKING_PAYMENT_HISTORY_TAB.toLowerCase())!
+    }
+    const configured = compact(configuredHistoryTab).toLowerCase()
+    const outcomeTabs = new Set([
+        compact(successTab).toLowerCase(),
+        compact(failedTab).toLowerCase(),
+    ])
+    if (configured && existing.has(configured) && !outcomeTabs.has(configured)) {
+        return existing.get(configured)!
+    }
+    const outcomeTab = ["failed", "failure"].includes(result) ? failedTab :
+        ["paid", "success", "captured"].includes(result) ? successTab : ""
+    const matchedOutcomeTab = existing.get(compact(outcomeTab).toLowerCase())
+    if (matchedOutcomeTab) return matchedOutcomeTab
+    throw new Error(
+        `No existing managed payment history tab for result=${result || "empty"}`,
+    )
+}
 
 function compact(value: any): string {
     return String(value ?? "").trim()
@@ -32,44 +65,37 @@ function toNumber(value: any): number {
     return Number.isFinite(parsed) ? Math.round(parsed * 100) / 100 : 0
 }
 
-function formatTimestampIST(value?: string): string {
-    const date = value ? new Date(value) : new Date()
-    if (Number.isNaN(date.getTime())) return compact(value)
-    const parts = new Intl.DateTimeFormat("en-CA", {
-        timeZone: BOOKING_TIMEZONE,
-        day: "2-digit",
-        month: "2-digit",
-        year: "numeric",
-        hour: "2-digit",
-        minute: "2-digit",
-        second: "2-digit",
-        hourCycle: "h23",
-    }).formatToParts(date)
-    const get = (type: string) => parts.find((part) => part.type === type)?.value || ""
-    return `${get("year")}-${get("month")}-${get("day")}T${get("hour")}:${get("minute")}:${get("second")}+05:30`
+function humanize(value: any): string {
+    return compact(value)
+        .replace(/[_-]+/g, " ")
+        .replace(/\s+/g, " ")
+        .trim()
+        .replace(/\b\w/g, (character) => character.toUpperCase())
 }
 
-function providerOrderReference(booking: Record<string, any>, override?: any): string {
-    return compact(
-        override ||
-            booking.payment_gateway_order_or_ref_id ||
-            booking.provider_order_id ||
-            booking.provider_order_reference ||
-            booking.razorpay_order_id ||
-            booking.payu_txnid
-    )
+function paymentResult(value: any): string {
+    const result = compact(value).toLowerCase()
+    if (result === "paid" || result === "success" || result === "captured") return "Paid"
+    if (result === "failed" || result === "failure") return "Failed"
+    return humanize(result)
 }
 
-function providerPaymentReference(booking: Record<string, any>, override?: any): string {
-    return compact(
-        override ||
-            booking.payment_gateway_payment_id ||
-            booking.payment_gateway_txn_id ||
-            booking.provider_payment_id ||
-            booking.provider_transaction_id ||
-            booking.razorpay_payment_id ||
-            booking.payu_mihpayid
-    )
+function settlementStatus(value: any): string {
+    const status = compact(value).toLowerCase()
+    if (status === "fully_paid") return "Fully paid"
+    if (status === "partially_paid") return "Partially paid"
+    if (status === "pending") return "Pending"
+    return humanize(status)
+}
+
+function eventLabel(value: unknown, result: string): string {
+    const type = compact(value).toLowerCase()
+    if (type === "payment.failed") return "Payment failed"
+    if (type === "payment.captured") return "Payment captured"
+    if (type === "order.paid") return "Order marked paid"
+    if (result === "Paid") return "Payment received"
+    if (result === "Failed") return "Payment failed"
+    return humanize(type)
 }
 
 export function buildBookingCallbackRow(params: {
@@ -90,27 +116,27 @@ export function buildBookingCallbackRow(params: {
     notes?: string
 }) {
     const booking = params.booking || {}
-    const processedAt = params.processedAt || new Date().toISOString()
+    const reconciliation = compact(params.reconciliationResult)
+    const result = paymentResult(params.paymentResult || booking.payment_status)
+    const attempt = Number(params.paymentAttempt)
+    const notes = [
+        eventLabel(params.eventType, result),
+        Number.isInteger(attempt) && attempt > 0 ? `Attempt ${attempt}` : "",
+        reconciliation && reconciliation.toLowerCase() !== "matched"
+            ? `Review: ${humanize(reconciliation)}`
+            : "",
+    ].filter(Boolean).join(" · ")
     return [
-        compact(params.eventId),
-        formatTimestampIST(params.eventReceivedAt || processedAt),
-        compact(booking.id),
+        timestampToSheetSerial(params.eventReceivedAt || params.processedAt),
         compact(booking.booking_ref),
-        toNumber(params.paymentAttempt || booking.payment_attempt_number || booking.attempt_no),
-        compact(params.paymentProvider || booking.payment_provider || booking.provider),
-        compact(params.eventType),
-        compact(params.paymentResult || booking.payment_status),
-        compact(params.settlementStatus || booking.settlement_status),
         compact(booking.trip_name || booking.trip_title),
-        compact(booking.departure_date || booking.date),
+        dateToSheetSerial(booking.departure_date || booking.date),
         compact(booking.name || booking.guest_name),
         compact(booking.email).toLowerCase(),
-        providerOrderReference(booking, params.providerOrderReference),
-        providerPaymentReference(booking, params.providerPaymentReference),
         toNumber(params.amountReceived),
         toNumber(params.expectedAmount || booking.payable_now_amount || booking.amount),
-        formatTimestampIST(processedAt),
-        compact(params.reconciliationResult),
-        compact(params.notes),
+        result,
+        settlementStatus(params.settlementStatus || booking.settlement_status),
+        notes,
     ]
 }

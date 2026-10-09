@@ -51,7 +51,7 @@ This manifest is the release gate for recovery. A behavior may be changed only w
 | Behavior | Current main | Recovery source/reference | Action | Required evidence |
 | --- | --- | --- | --- | --- |
 | Waitlist form | `EmailPopupOverride.tsx` waitlist tracking | dirty wrapper edits | preserve and test | One submission event/current contact and expected Sheet route |
-| Booking invite / NTC | `record-lead` routes `booking_invite` to `NTC - Invites` or `Abandoned Leads` | prior lead routing work | preserve | Exact existing tab, normalized row, partial event behavior |
+| Booking invite / NTC | `record-lead` routes `booking_invite` to `NTC - Invites` or `Abandoned Leads`; the workbook is named `NTC Invites` | prior lead routing work | preserve and restore the visible reason field | Exact existing tab, normalized row, invite reason, partial event behavior |
 | Trip-page lead | `trip_page_lead` to trips Sheet `Leads` or `Abandoned Leads` | prior lead routing work | preserve | Exact trips destination and values |
 | General lead | waitlist/general source to general Sheet `Leads` or `Abandoned Leads` | prior lead routing work | preserve | Exact general destination and values |
 | Custom-trip lead | verify configured destination before enabling | dirty `lead_routing.ts` candidate | do not guess; recover only if existing tab is confirmed | Metadata and route test |
@@ -66,12 +66,11 @@ This manifest is the release gate for recovery. A behavior may be changed only w
 
 | Destination | Contract to preserve | Recovery decision |
 | --- | --- | --- |
-| `Bookings` | One current row by `Booking ID`; update one, append zero, fail closed on multiple | Keep current provider-neutral contract; never restore blind append or `callback_orphan` |
-| `Bookings_Success` | Append once per verified provider event | Preserve failed-then-success history as separate events |
-| `Bookings_Failed` | Append once per verified provider event | Preserve retry/failure history as separate events |
+| `Bookings` | One current row by hidden `Booking Key`; visible row is the human-readable current booking register | Keep current provider-neutral contract; never restore blind append or `callback_orphan` |
+| `Payment History` (when present) | Append once per verified provider event | Keep distinct success/failure/retry events; old `Bookings_Success` / `Bookings_Failed` remain supported only where those are the existing tabs |
 | `Leads` | One current normalized contact per existing routed destination | Upsert by normalized email; preserve non-empty fields |
 | `Abandoned Leads` | Event row keyed by `submission_id` | Append once per partial submission |
-| `NTC - Invites` | Existing invite-specific columns and route | Preserve tab and existing human-readable contract |
+| `NTC - Invites` | Existing invite-specific route with visible `Why They Want To Travel` reason | Preserve tab, workbook name `NTC Invites`, and existing reason values |
 | Candidate custom tabs | Must be discovered in existing metadata | Never create automatically or route by guess |
 
 ## Historical commits and disposition

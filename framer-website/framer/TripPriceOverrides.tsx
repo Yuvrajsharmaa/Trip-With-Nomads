@@ -55,11 +55,11 @@ function decodeBase64Url(value: string): string {
     const padded = normalized + "=".repeat((4 - (normalized.length % 4 || 4)) % 4)
     try {
         if (typeof atob === "function") return atob(padded)
-    } catch (_) { }
+    } catch (_) {}
     try {
         // @ts-ignore Framer runtime may expose Buffer in some contexts.
         if (typeof Buffer !== "undefined") return Buffer.from(padded, "base64").toString("utf8")
-    } catch (_) { }
+    } catch (_) {}
     return ""
 }
 
@@ -94,13 +94,15 @@ function pickSupabaseAnonKey(url: string, overrideKey: string, selectedKey: stri
 function resolveRuntimeConfig(): RuntimeConfig {
     const env = resolveRuntimeEnv()
     const selected = RUNTIME_CONFIG[env]
-    const runtimeOverride =
-        typeof window !== "undefined" ? (window as any).__TWN_RUNTIME_CONFIG__ || {} : {}
-    const resolvedSupabaseUrl = String(runtimeOverride.supabaseUrl || selected.supabaseUrl || "").trim()
+    const runtimeOverride = typeof window !== "undefined"
+        ? (window as any).__TWN_RUNTIME_CONFIG__ || {}
+        : {}
+    const resolvedSupabaseUrl = String(runtimeOverride.supabaseUrl || selected.supabaseUrl || "")
+        .trim()
     const resolvedSupabaseAnonKey = pickSupabaseAnonKey(
         resolvedSupabaseUrl,
         String(runtimeOverride.supabaseAnonKey || ""),
-        String(selected.supabaseAnonKey || "")
+        String(selected.supabaseAnonKey || ""),
     )
     return {
         siteBaseUrl: String(runtimeOverride.siteBaseUrl || selected.siteBaseUrl || "")
@@ -114,6 +116,23 @@ function resolveRuntimeConfig(): RuntimeConfig {
 const CURRENT_RUNTIME = resolveRuntimeConfig()
 const SUPABASE_URL = CURRENT_RUNTIME.supabaseUrl
 const SUPABASE_KEY = CURRENT_RUNTIME.supabaseAnonKey
+const TRIP_PRICE_REQUEST_TIMEOUT_MS = 8000
+
+async function fetchTripPriceWithTimeout(
+    input: RequestInfo | URL,
+    init: RequestInit = {},
+): Promise<Response> {
+    const controller = new AbortController()
+    const timeoutId = globalThis.setTimeout(
+        () => controller.abort(),
+        TRIP_PRICE_REQUEST_TIMEOUT_MS,
+    )
+    try {
+        return await fetch(input, { ...init, signal: controller.signal })
+    } finally {
+        globalThis.clearTimeout(timeoutId)
+    }
+}
 
 const cache = new Map<string, { ts: number; data: any }>()
 const inFlight = new Map<string, Promise<any | null>>()
@@ -166,20 +185,20 @@ function normalizeTripId(value: any): string {
 function readTripIdCandidate(props: any): string {
     return normalizeTripId(
         props?.tripId ||
-        props?.["data-trip-id"] ||
-        props?.text ||
-        (typeof props?.children === "string" ? props.children : "")
+            props?.["data-trip-id"] ||
+            props?.text ||
+            (typeof props?.children === "string" ? props.children : ""),
     )
 }
 
 function readTripSlugCandidate(props: any): string {
     return normalizeSlug(
         props?.slug ||
-        props?.["data-trip-slug"] ||
-        props?.href ||
-        props?.link ||
-        props?.text ||
-        (typeof props?.children === "string" ? props.children : "")
+            props?.["data-trip-slug"] ||
+            props?.href ||
+            props?.link ||
+            props?.text ||
+            (typeof props?.children === "string" ? props.children : ""),
     )
 }
 
@@ -197,7 +216,9 @@ export function withTripIdSource(Component): ComponentType {
     }
 }
 
-async function fetchTripDisplayPrice(params: { slug?: string; tripId?: string }): Promise<any | null> {
+async function fetchTripDisplayPrice(
+    params: { slug?: string; tripId?: string },
+): Promise<any | null> {
     const slug = String(params.slug || "").trim()
     const tripId = String(params.tripId || "").trim()
     if (!slug && !tripId) return null
@@ -214,14 +235,17 @@ async function fetchTripDisplayPrice(params: { slug?: string; tripId?: string })
     if (tripId) query.set("trip_id", tripId)
     query.set("v", "3")
 
-    const request = fetch(`${SUPABASE_URL}/functions/v1/get-trip-display-price?${query.toString()}`, {
-        method: "GET",
-        priority: "high",
-        headers: {
-            apikey: SUPABASE_KEY,
-            Authorization: `Bearer ${SUPABASE_KEY}`,
-        },
-    } as any)
+    const request = fetchTripPriceWithTimeout(
+        `${SUPABASE_URL}/functions/v1/get-trip-display-price?${query.toString()}`,
+        {
+            method: "GET",
+            priority: "high",
+            headers: {
+                apikey: SUPABASE_KEY,
+                Authorization: `Bearer ${SUPABASE_KEY}`,
+            },
+        } as any,
+    )
         .then(async (res) => {
             if (!res.ok) return null
             const data = await res.json().catch(() => null)
@@ -238,27 +262,31 @@ async function fetchTripDisplayPrice(params: { slug?: string; tripId?: string })
 }
 
 function useTripDisplayData(props?: any) {
-    const [data, setData] = useState<any>(null)
+    const [state, setState] = useState<{ data: any; status: "loading" | "ready" | "unavailable" }>({
+        data: null,
+        status: "loading",
+    })
     const propTripId = readTripIdCandidate(props)
     const propSlug = readTripSlugCandidate(props)
 
     useEffect(() => {
         let disposed = false
+        setState({ data: null, status: "loading" })
         const query = new URLSearchParams(window.location.search)
         const slugFromPath = getTripSlugFromPathname(window.location.pathname)
-        const tripId =
-            propTripId || query.get("tripId") || query.get("trip_id") || forcedTripId || ""
-        const slug =
-            propSlug || slugFromPath || (tripId ? "" : query.get("slug") || "")
+        const tripId = propTripId || query.get("tripId") || query.get("trip_id") || forcedTripId ||
+            ""
+        const slug = propSlug || slugFromPath || (tripId ? "" : query.get("slug") || "")
 
         fetchTripDisplayPrice({ slug, tripId })
             .then((payload) => {
                 if (disposed) return
-                setData(payload || null)
+                const available = toNumber(payload?.display_summary?.payable_price) > 0
+                setState({ data: payload || null, status: available ? "ready" : "unavailable" })
             })
             .catch(() => {
                 if (disposed) return
-                setData(null)
+                setState({ data: null, status: "unavailable" })
             })
 
         return () => {
@@ -266,22 +294,27 @@ function useTripDisplayData(props?: any) {
         }
     }, [propTripId, propSlug])
 
-    return data
+    return state
 }
 
 export function withTripPrimaryPrice(Component): ComponentType {
     return (props: any) => {
-        const tripData = useTripDisplayData(props)
+        const priceState = useTripDisplayData(props)
+        const tripData = priceState.data
         const summary = tripData?.display_summary
         const value = toNumber(summary?.payable_price)
-        const text = value > 0 ? fmtINR(value) : "₹0"
+        const text = priceState.status === "loading"
+            ? "Loading price…"
+            : priceState.status !== "ready" || value <= 0
+            ? "Price unavailable"
+            : fmtINR(value)
         return <Component {...props} text={text} />
     }
 }
 
 export function withTripStrikePrice(Component): ComponentType {
     return (props: any) => {
-        const tripData = useTripDisplayData(props)
+        const tripData = useTripDisplayData(props).data
         const summary = tripData?.display_summary
         const base = toNumber(summary?.base_price)
         const payable = toNumber(summary?.payable_price)
@@ -307,7 +340,7 @@ export function withTripStrikePrice(Component): ComponentType {
 
 export function withTripSaveBadge(Component): ComponentType {
     return (props: any) => {
-        const tripData = useTripDisplayData(props)
+        const tripData = useTripDisplayData(props).data
         const summary = tripData?.display_summary
         const save = toNumber(summary?.save_amount)
         const hasDiscount = Boolean(summary?.has_discount) && save > 0
@@ -327,7 +360,7 @@ export function withTripSaveBadge(Component): ComponentType {
 
 export function withTripHideWhenNoDiscount(Component): ComponentType {
     return (props: any) => {
-        const tripData = useTripDisplayData(props)
+        const tripData = useTripDisplayData(props).data
         const summary = tripData?.display_summary
         const hasDiscount = Boolean(summary?.has_discount) && toNumber(summary?.save_amount) > 0
         if (!hasDiscount) {
@@ -351,7 +384,7 @@ export function withTripStartsFromText(Component): ComponentType {
 
 export function withTripNextBatchText(Component): ComponentType {
     return (props: any) => {
-        const tripData = useTripDisplayData(props)
+        const tripData = useTripDisplayData(props).data
         const nextBatchLabel = formatNextBatchDate(tripData?.next_batch_date)
         if (!nextBatchLabel) {
             return <Component {...props} text="" visible={false} />
