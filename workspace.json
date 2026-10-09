@@ -5,6 +5,22 @@
         "scripts": "scripts/",
         "context": "MASTER_HANDOFF.md"
     },
+    "workspaceScope": "Two related but independent Git repositories: the public website/Supabase repo and the nested internal CRM repo.",
+    "agentWorkflow": "docs/CROSS_REPO_WORKFLOW.md",
+    "relatedRepositories": [
+        {
+            "name": "website",
+            "path": ".",
+            "remote": "https://github.com/Yuvrajsharmaa/Trip-With-Nomads.git",
+            "instructions": "AGENTS.md"
+        },
+        {
+            "name": "crm",
+            "path": "trip-with-nomads-crm",
+            "remote": "https://github.com/Yuvrajsharmaa/trip-with-nomads-crm.git",
+            "instructions": "trip-with-nomads-crm/AGENTS.md"
+        }
+    ],
     "agentRules": {
         "preferredStack": [
             "React",
