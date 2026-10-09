@@ -303,12 +303,6 @@ async function postLead(
         ]),
     )
     const isPartialFill = statusOverride === "partial_fill"
-    if ((!email && !isPartialFill) || (email && !isValidEmail(email))) {
-        console.warn("[Popup] Submit blocked by validation; state not persisted")
-        form?.reportValidity?.()
-        return false
-    }
-
     const name = findInputValue(root, [
         'input[name="name"]',
         'input[name*="name" i]',
@@ -320,6 +314,15 @@ async function postLead(
         'input[name*="phone" i]',
         'input[placeholder*="phone" i]',
     ])
+    const phoneOnlyWaitlistContact = !email && Boolean(phone)
+    if (
+        (!email && !isPartialFill && !phoneOnlyWaitlistContact) ||
+        (email && !isValidEmail(email))
+    ) {
+        console.warn("[Popup] Submit blocked by validation; state not persisted")
+        form?.reportValidity?.()
+        return false
+    }
     const country_code = findInputValue(root, [
         'select[name*="country" i]',
         'input[name="country_code"]',
@@ -709,7 +712,8 @@ async function postLeadWithSource(
     const effectiveStatus = statusOverride ||
         (inferredPartialFill ? "partial_fill" : "submitted")
     const isPartialFill = effectiveStatus === "partial_fill"
-    const phoneOnlyContact = source === "booking_invite" && !email && Boolean(phone)
+    const phoneOnlyContact = (source === "booking_invite" ||
+        source === "general_lead") && !email && Boolean(phone)
     if (isPartialFill && !name && !email && !phone) {
         console.warn(`[LeadTracking:${source}] Partial submission has no contact details`)
         return false

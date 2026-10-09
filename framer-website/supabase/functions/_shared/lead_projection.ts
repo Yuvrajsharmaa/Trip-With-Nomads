@@ -41,10 +41,8 @@ export function masterLeadMatchKeys(
     const phoneIndex = MASTER_LEAD_HEADERS.indexOf("Phone")
     const email = String(values[emailIndex] ?? "").trim().toLowerCase()
     const phone = String(values[phoneIndex] ?? "").trim()
-    return [
-        ...(email ? [{ column: "Email", value: email }] : []),
-        ...(phone ? [{ column: "Phone", value: phone }] : []),
-    ]
+    if (email) return [{ column: "Email", value: email }]
+    return phone ? [{ column: "Phone", value: phone }] : []
 }
 
 function compact(value: unknown): string {
@@ -60,7 +58,8 @@ export function isPhoneOnlyLeadContact(
     submission: Record<string, any>,
 ): boolean {
     return !normalizeEmail(submission?.email) && Boolean(compact(submission?.phone)) &&
-        (source === "booking_invite" || source === "trip_itinerary_download")
+        (source === "booking_invite" || source === "trip_itinerary_download" ||
+            source === "general_lead" || source === "waitlist_popup")
 }
 
 function routeForLead(source: string, status: string) {
