@@ -3,6 +3,23 @@ import type { ComponentType } from "react"
 import { createStore } from "https://framer.com/m/framer/store.js@^1.0.0"
 
 const CHECKOUT_TIMEZONE = "Asia/Kolkata"
+const CHECKOUT_DATA_REQUEST_TIMEOUT_MS = 8000
+
+async function fetchCheckoutDataWithTimeout(
+    input: RequestInfo | URL,
+    init: RequestInit = {},
+): Promise<Response> {
+    const controller = new AbortController()
+    const timeoutId = globalThis.setTimeout(
+        () => controller.abort(),
+        CHECKOUT_DATA_REQUEST_TIMEOUT_MS,
+    )
+    try {
+        return await fetch(input, { ...init, signal: controller.signal })
+    } finally {
+        globalThis.clearTimeout(timeoutId)
+    }
+}
 
 function formatCheckoutDateKey(value: Date): string {
     const parts = new Intl.DateTimeFormat("en-GB", {
@@ -193,6 +210,9 @@ const BOOKING_ABANDON_LEAD_PREFIX = "__twn_booking_abandon_lead_v1"
 const bookingAbandonLeadInFlight = new Set<string>()
 const tripDisplayCache = new Map<string, { ts: number; data: any }>()
 const tripDisplayInFlight = new Map<string, Promise<any | null>>()
+type TripDisplayIdentity = { tripId: string; slug: string }
+const tripDisplayIdentityCache = new Map<string, { ts: number; data: TripDisplayIdentity }>()
+const tripDisplayIdentityInFlight = new Map<string, Promise<TripDisplayIdentity>>()
 let forcedTripId = ""
 let forcedTripIdPath = ""
 
@@ -453,6 +473,20 @@ function round2(value: number): number {
     return Math.round((Number(value) + Number.EPSILON) * 100) / 100
 }
 
+function calculateTaxInclusiveTotal(taxableAmount: any): {
+    taxableAmount: number
+    taxAmount: number
+    totalAmount: number
+} {
+    const taxable = round2(Math.max(0, toNumber(taxableAmount)))
+    const tax = round2(taxable * TAX_RATE)
+    return {
+        taxableAmount: taxable,
+        taxAmount: tax,
+        totalAmount: round2(taxable + tax),
+    }
+}
+
 function fmtINR(value: number): string {
     return "₹" + toNumber(value).toLocaleString("en-IN")
 }
@@ -524,24 +558,20 @@ function buildPricingBreakdownFromQuote(
         .trim()
         .toUpperCase()
 
-    const taxableAmount = round2(
+    const rawTaxableAmount = round2(
         pickFirstNumber(
             source,
             ["taxable_amount", "taxableSubtotal"],
             Math.max(0, baseSubtotal - discountAmountTotal),
         ),
     )
-    const fallbackTax = round2(Math.max(0, taxableAmount) * TAX_RATE)
-    const taxAmount = round2(
-        pickFirstNumber(source, ["tax_amount", "taxAmount"], fallbackTax),
-    )
-    const totalAmount = round2(
-        pickFirstNumber(
-            source,
-            ["total_amount", "totalAmount"],
-            Math.max(0, taxableAmount + taxAmount),
-        ),
-    )
+    // The quote endpoint is not the final pricing source of truth for GST.
+    // Recompute the inclusive amount so an older response cannot surface or
+    // charge a pre-GST total.
+    const taxInclusive = calculateTaxInclusiveTotal(rawTaxableAmount)
+    const taxableAmount = taxInclusive.taxableAmount
+    const taxAmount = taxInclusive.taxAmount
+    const totalAmount = taxInclusive.totalAmount
 
     return {
         base_subtotal: baseSubtotal,
@@ -905,9 +935,12 @@ function buildLocalPricingBreakdown(store: any): PricingBreakdown {
     const discountTotal = round2(
         Math.max(0, Math.min(subtotal, earlyDiscount + couponDiscount)),
     )
-    const taxable = round2(Math.max(0, subtotal - discountTotal))
-    const tax = round2(taxable * TAX_RATE)
-    const total = round2(taxable + tax)
+    const taxInclusive = calculateTaxInclusiveTotal(
+        Math.max(0, subtotal - discountTotal)
+    )
+    const taxable = taxInclusive.taxableAmount
+    const tax = taxInclusive.taxAmount
+    const total = taxInclusive.totalAmount
 
     return {
         base_subtotal: round2(subtotal),
@@ -1127,47 +1160,168 @@ function getValidationErrors(store: any): string[] {
 }
 
 function showInlineError(errors: string | string[]) {
-    const existing = document.getElementById("__checkout_error_toast")
-    if (existing) existing.remove()
+    if (typeof document === "undefined") return
 
-    const messages = Array.isArray(errors) ? errors : [errors]
-    const toast = document.createElement("div")
-    toast.id = "__checkout_error_toast"
+    const messages = (Array.isArray(errors) ? errors : [errors])
+        .map((message) => String(message || "").trim())
+        .filter(Boolean)
+    if (!messages.length) return
 
-    toast.innerHTML = `
-        <div style="font-weight:700; margin-bottom:${messages.length > 1 ? "8px" : "0"};">⚠️ ${
-        messages.length === 1 ? messages[0] : "Please complete:"
-    }</div>
-        ${
-        messages.length > 1
-            ? '<div style="opacity:.9;font-size:13px;line-height:1.5;">' +
-                messages.map((m) => `• ${m}`).join("<br>") +
-                "</div>"
-            : ""
+    const technicalFailure = messages.some((message) =>
+        /payment_attempts|txnid|not-null|constraint|edge function error/i.test(message)
+    )
+    const titleText = technicalFailure
+        ? "Payment could not start"
+        : messages.length > 1
+        ? "Please check your details"
+        : "Checkout needs attention"
+    const detailText = technicalFailure
+        ? "We couldn't start the payment. Please try again. If it keeps happening, contact us."
+        : messages.length > 1
+        ? messages.join(" ")
+        : messages[0]
+
+    const toastId = "__checkout_validation_toast"
+    document.getElementById(toastId)?.remove()
+
+    const styleId = "__checkout_validation_toast_styles"
+    if (!document.getElementById(styleId)) {
+        const style = document.createElement("style")
+        style.id = styleId
+        style.textContent = [
+            "#__checkout_validation_toast {",
+            "  transition: opacity 180ms cubic-bezier(0.23, 1, 0.32, 1), transform 180ms cubic-bezier(0.23, 1, 0.32, 1);",
+            "}",
+            "#__checkout_validation_toast button:hover {",
+            "  background: var(--token-f4eaf121-3b68-4679-bb26-dd7f8d850793, #f0f0f0) !important;",
+            "}",
+            "#__checkout_validation_toast button:focus-visible {",
+            "  outline: 2px solid var(--token-c9c5f521-19b8-44ca-852a-18e01b3c96c0, #8c8c8c);",
+            "  outline-offset: 2px;",
+            "}",
+            "@media (max-width: 767px) {",
+            "  #__checkout_validation_toast { left: 16px; right: 16px; max-width: none; }",
+            "}",
+            "@media (prefers-reduced-motion: reduce) {",
+            "  #__checkout_validation_toast { transition: none; }",
+            "}",
+        ].join("\n")
+        document.head.appendChild(style)
     }
-    `
 
-    Object.assign(toast.style, {
-        position: "fixed",
-        top: "20px",
-        left: "50%",
-        transform: "translateX(-50%)",
-        background: "rgba(30,30,50,.95)",
-        color: "#fff",
-        padding: "14px 20px",
-        borderRadius: "12px",
-        fontSize: "14px",
-        zIndex: "99999",
-        boxShadow: "0 10px 28px rgba(0,0,0,.28)",
-        maxWidth: "92vw",
-    })
+    const toast = document.createElement("div")
+    toast.id = toastId
+    toast.setAttribute("role", "alert")
+    toast.setAttribute("aria-live", "assertive")
+    toast.setAttribute("aria-atomic", "true")
+    toast.style.cssText = [
+        "position:fixed",
+        "top:calc(76px + env(safe-area-inset-top, 0px))",
+        "right:16px",
+        "z-index:99999",
+        "box-sizing:border-box",
+        "width:min(390px, calc(100vw - 32px))",
+        "padding:14px 14px 14px 16px",
+        "display:grid",
+        "grid-template-columns:34px minmax(0, 1fr) 24px",
+        "gap:12px",
+        "align-items:start",
+        "border:1px solid var(--token-3b770823-4283-4ef8-b764-0396a33ab8af, #e8e8e8)",
+        "border-radius:14px",
+        "background:var(--token-46a66e62-66c2-4a18-b691-af6d779f7282, #ffffff)",
+        "color:var(--token-38ce78f5-c058-4ca0-bf76-b3ab4f1a6a76, #111111)",
+        "font-family:Manrope, sans-serif",
+        "box-shadow:0 12px 28px rgba(0,0,0,0.16)",
+        "opacity:0",
+        "transform:translateY(-6px)",
+        "pointer-events:auto",
+    ].join(";")
 
+    const icon = document.createElement("div")
+    icon.setAttribute("aria-hidden", "true")
+    icon.textContent = "!"
+    icon.style.cssText = [
+        "width:34px",
+        "height:34px",
+        "display:grid",
+        "place-items:center",
+        "box-sizing:border-box",
+        "border-radius:50%",
+        "background:var(--token-f4eaf121-3b68-4679-bb26-dd7f8d850793, #f0f0f0)",
+        "color:var(--token-38ce78f5-c058-4ca0-bf76-b3ab4f1a6a76, #111111)",
+        "font-size:18px",
+        "font-weight:700",
+        "line-height:1",
+    ].join(";")
+
+    const copy = document.createElement("div")
+    copy.style.cssText = [
+        "min-width:0",
+        "display:flex",
+        "flex-direction:column",
+        "gap:3px",
+        "padding-top:1px",
+    ].join(";")
+
+    const title = document.createElement("div")
+    title.textContent = titleText
+    title.style.cssText = [
+        "font-size:14px",
+        "font-weight:700",
+        "line-height:1.3",
+        "letter-spacing:-0.01em",
+    ].join(";")
+
+    const detail = document.createElement("div")
+    detail.textContent = detailText
+    detail.style.cssText = [
+        "font-size:12px",
+        "font-weight:500",
+        "line-height:1.45",
+        "color:var(--token-3ff813c5-4475-4ced-a46c-f14c557a4dd6, #636363)",
+    ].join(";")
+
+    const closeButton = document.createElement("button")
+    closeButton.type = "button"
+    closeButton.setAttribute("aria-label", "Dismiss message")
+    closeButton.textContent = "×"
+    closeButton.style.cssText = [
+        "width:24px",
+        "height:24px",
+        "display:grid",
+        "place-items:center",
+        "padding:0",
+        "border:0",
+        "border-radius:7px",
+        "background:transparent",
+        "color:var(--token-3ff813c5-4475-4ced-a46c-f14c557a4dd6, #636363)",
+        "font-family:inherit",
+        "font-size:20px",
+        "font-weight:400",
+        "line-height:1",
+        "cursor:pointer",
+    ].join(";")
+
+    copy.append(title, detail)
+    toast.append(icon, copy, closeButton)
     document.body.appendChild(toast)
-    setTimeout(() => {
+
+    let dismissed = false
+    const dismiss = () => {
+        if (dismissed || !toast.isConnected) return
+        dismissed = true
         toast.style.opacity = "0"
-        toast.style.transition = "opacity .25s ease"
-        setTimeout(() => toast.remove(), 250)
-    }, 3200)
+        toast.style.transform = "translateY(-4px)"
+        window.setTimeout(() => toast.remove(), 180)
+    }
+    closeButton.addEventListener("click", dismiss)
+
+    window.requestAnimationFrame(() => {
+        if (!toast.isConnected) return
+        toast.style.opacity = "1"
+        toast.style.transform = "translateY(0)"
+    })
+    window.setTimeout(dismiss, 6000)
 }
 
 function firstNonEmpty(...values: any[]): string {
@@ -1351,7 +1505,7 @@ async function fetchTripContextBySlug(
     const cleanSlug = normalizeSlug(slug)
     if (!cleanSlug) return null
 
-    const res = await fetch(
+    const res = await fetchCheckoutDataWithTimeout(
         `${SUPABASE_URL}/rest/v1/trips?slug=eq.${
             encodeURIComponent(cleanSlug)
         }&select=id,slug,title&limit=1`,
@@ -1381,7 +1535,7 @@ async function fetchTripContextById(
     const cleanTripId = String(tripId || "").trim()
     if (!cleanTripId) return null
 
-    const res = await fetch(
+    const res = await fetchCheckoutDataWithTimeout(
         `${SUPABASE_URL}/rest/v1/trips?id=eq.${
             encodeURIComponent(
                 cleanTripId,
@@ -1417,7 +1571,7 @@ async function fetchTripPricing(tripId: string): Promise<any[]> {
     const cleanTripId = (tripId || "").trim()
     if (!cleanTripId) return []
 
-    const res = await fetch(
+    const res = await fetchCheckoutDataWithTimeout(
         `${SUPABASE_URL}/rest/v1/trip_pricing?trip_id=eq.${
             encodeURIComponent(
                 cleanTripId,
@@ -1458,7 +1612,7 @@ async function fetchTripDisplayPrice(
     if (tripId) query.set("trip_id", tripId)
     query.set("v", "3")
 
-    const request = fetch(
+    const request = fetchCheckoutDataWithTimeout(
         `${SUPABASE_URL}/functions/v1/get-trip-display-price?${query.toString()}`,
         {
             method: "GET",
@@ -1504,6 +1658,29 @@ function readCheckoutRouteContext() {
         date: String(query.get("date") || "").trim(),
         transport: String(query.get("vehicle") || query.get("transport") || "")
             .trim(),
+    }
+}
+
+type CheckoutDraft = {
+    tripId?: string
+    date?: string
+    transport?: string
+    contactName?: string
+    contactPhone?: string
+    contactEmail?: string
+    paymentMode?: PaymentMode
+    travellers?: Traveller[]
+}
+
+function readCheckoutDraft(): CheckoutDraft | null {
+    if (typeof window === "undefined") return null
+    try {
+        const raw = window.sessionStorage.getItem("__twn_checkout_draft_v1")
+        if (!raw) return null
+        const parsed = JSON.parse(raw)
+        return parsed && typeof parsed === "object" ? parsed : null
+    } catch (_) {
+        return null
     }
 }
 
@@ -1685,6 +1862,9 @@ export function withCheckoutBootstrap(Component): ComponentType {
                         loading: false,
                         pricingUnavailable: true,
                         pricingData: [],
+                        tripName: "",
+                        couponMessageType: "error",
+                        couponMessage: "Open checkout from a trip page to see dates and pricing.",
                     })
                     return
                 }
@@ -1981,7 +2161,7 @@ export function withBookNowToCheckout(Component): ComponentType {
             if (firstTransport) next.set("vehicle", firstTransport)
 
             const qs = next.toString()
-            window.location.href = qs ? `${CHECKOUT_PAGE_URL}?${qs}` : CHECKOUT_PAGE_URL
+                window.location.href = qs ? CHECKOUT_PAGE_URL + "?" + qs : CHECKOUT_PAGE_URL
         }
 
         return <Component {...props} onClick={handleClick} />
@@ -1994,8 +2174,10 @@ export function withCheckoutTripId(Component): ComponentType {
 
 export function withCheckoutSelectionText(Component): ComponentType {
     return withTextFromState((store) => {
+        if (store?.loading) return "Loading trip details…"
+        if (!store?.tripId && !store?.slug) return "Choose a trip to continue"
         const tripName = store.tripName || store.slug || store.tripId ||
-            "trip name"
+            "Trip details unavailable"
         return `Checkout for ${tripName}`
     })(Component)
 }
@@ -2910,6 +3092,54 @@ export function withTravellerVehicleError(Component): ComponentType {
     return withTravellerFieldError("vehicle")(Component)
 }
 
+// Legacy Framer bindings kept as compatibility adapters. The canonical
+// checkout state and pricing calculation remain shared with the current UI.
+export function withCheckoutGrandTotalLabel(Component): ComponentType {
+    return withTextFromState(() => "Total trip cost")(Component)
+}
+
+export function withCheckoutGrandTotal(Component): ComponentType {
+    return withTextFromState((store) => fmtINR(computeTotals(store).subtotal))(Component)
+}
+
+export function withCheckoutPayableNowLabel(Component): ComponentType {
+    return withTextFromState(() => "Payable now")(Component)
+}
+
+export function withCheckoutDueLabel(Component): ComponentType {
+    return withTextFromState((store) =>
+        computeTotals(store).paymentMode === "partial_25" ? "Remaining due" : "Balance due"
+    )(Component)
+}
+
+export function withCheckoutNameError(Component): ComponentType {
+    return withFieldErrorText((store) => checkoutFieldError(store, "name"))(Component)
+}
+
+export function withCheckoutPhoneError(Component): ComponentType {
+    return withFieldErrorText((store) => checkoutFieldError(store, "phone"))(Component)
+}
+
+export function withCheckoutEmailError(Component): ComponentType {
+    return withFieldErrorText((store) => checkoutFieldError(store, "email"))(Component)
+}
+
+export function withCheckoutDepartureDateError(Component): ComponentType {
+    return withFieldErrorText((store) => checkoutFieldError(store, "date"))(Component)
+}
+
+export function withTravellerNameError(Component): ComponentType {
+    return withTravellerFieldError("name")(Component)
+}
+
+export function withTravellerSharingError(Component): ComponentType {
+    return withTravellerFieldError("sharing")(Component)
+}
+
+export function withTravellerVehicleError(Component): ComponentType {
+    return withTravellerFieldError("vehicle")(Component)
+}
+
 export function withCheckoutValidationHint(Component): ComponentType {
     return (props: any) => (
         <Component
@@ -3109,7 +3339,11 @@ export function withCheckoutHideWhenNoCoupon(Component): ComponentType {
 export function withCheckoutHideWhenNoDiscount(Component): ComponentType {
     return (props: any) => {
         const [store] = useStore()
-        const hasDiscount = computeTotals(store).discount > 0
+        const totals = computeTotals(store)
+        // Coupon Discount has its own summary row. Keep this row for an
+        // early-bird discount so a coupon amount is never shown twice.
+        const hasDiscount =
+            totals.discount > 0 && totals.appliedDiscountSource !== "coupon"
 
         if (!hasDiscount) {
             return (
@@ -3134,6 +3368,20 @@ export function withCheckoutPayButton(Component): ComponentType {
         const isPricingReady = !store?.loading && !store?.pricingUnavailable &&
             Array.isArray(store?.pricingData) && store.pricingData.length > 0
         const isValid = errors.length === 0 && isPricingReady
+
+        useEffect(() => {
+            latestStoreRef.current = store
+        }, [store])
+
+        useEffect(() => {
+            if (typeof window === "undefined") return
+            const handlePageHide = () => {
+                if (paymentStartedRef.current) return
+                void postBookingAbandonLead(latestStoreRef.current)
+            }
+            window.addEventListener("pagehide", handlePageHide)
+            return () => window.removeEventListener("pagehide", handlePageHide)
+        }, [])
 
         useEffect(() => {
             latestStoreRef.current = store
@@ -3455,15 +3703,15 @@ export function withCheckoutPayButton(Component): ComponentType {
     }
 }
 
+function readBrowserLocationKey(): string {
+    if (typeof window === "undefined") return ""
+    return String(window.location.pathname || "") + "|" + String(window.location.search || "")
+}
+
 function getTripSlugFromPathname(pathname: string): string {
     const clean = String(pathname || "")
     const match = clean.match(/\/upcoming-trips\/([^/?#]+)/i)
     return match?.[1] ? decodeURIComponent(match[1]) : ""
-}
-
-function readBrowserLocationKey(): string {
-    if (typeof window === "undefined") return ""
-    return String(window.location.pathname || "") + "|" + String(window.location.search || "")
 }
 
 function normalizeSlug(value: any): string {
@@ -3484,6 +3732,93 @@ function normalizeTripId(value: any): string {
         return ""
     }
     return clean
+}
+
+function tripDisplayIdentityKey(params: {
+    pathname: string
+    query: URLSearchParams
+    propTripId: string
+    propSlug: string
+}): string {
+    const pathname = String(params.pathname || "")
+    const pathSlug = normalizeSlug(getTripSlugFromPathname(pathname))
+    const isCheckoutPath = pathname.toLowerCase().startsWith("/checkout")
+    return [
+        pathname,
+        pathSlug,
+        normalizeTripId(params.propTripId),
+        normalizeSlug(params.propSlug),
+        getPageScopedTripId(),
+        isCheckoutPath
+            ? normalizeTripId(params.query.get("tripId") || params.query.get("trip_id"))
+            : "",
+        isCheckoutPath ? normalizeSlug(params.query.get("slug")) : "",
+    ].join("::")
+}
+
+async function resolveTripDisplayIdentity(params: {
+    pathname: string
+    query: URLSearchParams
+    propTripId: string
+    propSlug: string
+}): Promise<TripDisplayIdentity> {
+    const cacheKey = tripDisplayIdentityKey(params)
+    const now = Date.now()
+    const cached = tripDisplayIdentityCache.get(cacheKey)
+    if (cached && now - cached.ts < 120000) return cached.data
+
+    const inFlight = tripDisplayIdentityInFlight.get(cacheKey)
+    if (inFlight) return inFlight
+
+    const request = (async (): Promise<TripDisplayIdentity> => {
+        const pathname = String(params.pathname || "")
+        const pathSlug = normalizeSlug(getTripSlugFromPathname(pathname))
+
+        if (pathSlug) {
+            const pageTripId = normalizeTripId(params.propTripId || getPageScopedTripId())
+            if (pageTripId) {
+                try {
+                    const pageContext = await fetchTripContextById(pageTripId)
+                    if (normalizeSlug(pageContext?.slug) === pathSlug) {
+                        return { tripId: pageTripId, slug: "" }
+                    }
+                } catch (_) {
+                    // Resolve the current detail route below when the page ID is stale.
+                }
+            }
+
+            try {
+                const tripId = normalizeTripId(await fetchTripIdBySlug(pathSlug))
+                return tripId ? { tripId, slug: "" } : { tripId: "", slug: pathSlug }
+            } catch (_) {
+                return { tripId: "", slug: pathSlug }
+            }
+        }
+
+        const isCheckoutPath = pathname.toLowerCase().startsWith("/checkout")
+        const tripId = normalizeTripId(
+            (isCheckoutPath
+                ? params.query.get("tripId") || params.query.get("trip_id")
+                : "") ||
+                params.propTripId ||
+                getPageScopedTripId(),
+        )
+        const slug = tripId
+            ? ""
+            : params.propSlug || (isCheckoutPath ? String(params.query.get("slug") || "").trim() : "")
+
+        return { tripId, slug }
+    })()
+        .then((identity) => {
+            tripDisplayIdentityCache.set(cacheKey, { ts: Date.now(), data: identity })
+            return identity
+        })
+        .finally(() => {
+            tripDisplayIdentityInFlight.delete(cacheKey)
+        })
+
+    tripDisplayIdentityInFlight.set(cacheKey, request)
+    return request
 }
 
 function readTripIdCandidate(props: any): string {
@@ -3557,26 +3892,25 @@ function useTripDisplayData(props?: any) {
     useEffect(() => {
         let disposed = false
         setState({ data: null, status: "loading" })
-        const query = new URLSearchParams(window.location.search)
-        const slugFromPath = getTripSlugFromPathname(window.location.pathname)
-        const tripId = normalizeTripId(
-            query.get("tripId") ||
-                query.get("trip_id") ||
-                (slugFromPath ? "" : propTripId) ||
-                (slugFromPath ? "" : getPageScopedTripId()),
-        )
-        const slug = tripId ? "" : slugFromPath || propSlug || query.get("slug") || ""
-
-        fetchTripDisplayPrice({ slug, tripId })
-            .then((payload) => {
+        const run = async () => {
+            try {
+                const identity = await resolveTripDisplayIdentity({
+                    pathname: window.location.pathname,
+                    query: new URLSearchParams(window.location.search),
+                    propTripId,
+                    propSlug,
+                })
+                const payload = await fetchTripDisplayPrice(identity)
                 if (disposed) return
                 const available = toNumber(payload?.display_summary?.payable_price) > 0
                 setState({ data: payload || null, status: available ? "ready" : "unavailable" })
-            })
-            .catch(() => {
+            } catch (_) {
                 if (disposed) return
                 setState({ data: null, status: "unavailable" })
-            })
+            }
+        }
+
+        void run()
 
         return () => {
             disposed = true

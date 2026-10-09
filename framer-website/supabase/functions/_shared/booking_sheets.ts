@@ -1,5 +1,7 @@
 import { dateToSheetSerial, timestampToSheetSerial } from "./sheet_dates.ts"
 
+// Current-state contract for the managed Bookings tab. Keep these labels
+// human-readable and gateway-neutral.
 export const BOOKING_HEADERS = [
     "Last Updated",
     "Booking Ref",

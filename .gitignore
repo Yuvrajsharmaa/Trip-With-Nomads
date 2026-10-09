@@ -47,6 +47,16 @@ framer-website/.framer_backups/
 framer-website/.tmp_project_xml.txt
 framer-website/.tmp/
 framer-website/.wrangler/
+framer-website/.next/
+framer-website/test-results/
+framer-website/backups/
+framer-website/cloudflare/
+framer-website/supabase/supabase/.temp/
+
+# Local runtime and audit output
+/.wrangler/
+/test-results/
+/scratch/
 
 # Local scratch repos
 skills-main/

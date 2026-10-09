@@ -19,7 +19,20 @@ The existing-sheet contract and routing hardening were re-verified on staging be
 
 ### Routing correction
 
-Checkout abandonment is written to `TWN Bookings → Abandoned Bookings`. It is not written to the general `Abandoned Leads` tab or `Master Leads`. `Bookings` is the one current booking row; `Bookings_Success` and `Bookings_Failed` are verified payment-event history, so they intentionally contain related information without representing duplicate bookings.
+The 2026-10-07 observation below is historical: at that point checkout abandonment was only written to `TWN Bookings → Abandoned Bookings`. The current feature branch also projects the contact into `TWN Master Leads → Master Leads` for follow-up, while preserving any terminal CRM status. This is not deployed until the branch is reviewed and merged.
+
+Payment history now prefers the existing combined `Payment History` tab when available. It falls back to the existing `Bookings_Success` / `Bookings_Failed` tabs for older workbooks, and never creates tabs. `Bookings` remains the one current row per booking.
+
+### 2026-10-09 integration/release audit (staging evidence; production pending)
+
+- The connected Framer project has only its `main` branch. A fresh preview reports version `8abe561bd`, zero pending edits, and no publish errors or warnings.
+- Live staging checkout verification showed the refreshed dismissible, accessible card toast on a missing-trip error. The same safe missing-trip check on production still shows the older compact dark toast; this confirms a stale production Framer publish, not a missing toast implementation in current source.
+- A valid staging Vietnam checkout for the future `2026-10-24` departure displayed ₹54,999 trip cost, ₹2,749.95 GST, and ₹57,748.95 payable now.
+- Added durable per-tab Sheet write locks and Supabase payment-event-to-Sheet-row reservations; staging has these tables and lock RPCs. Production is missing them, although its current payment/lead projection functions use the newer projection code.
+- Production `retry-lead-sheets` is behind staging (production version 3 vs staging version 9); staging adds safe explicit-submission retry targeting. Production deployment is pending schema alignment and release review.
+- Read-only seven-day Supabase aggregates report 93 production lead submissions and 52 staging submissions, all marked `synced` in their database projection state. This is database status evidence, not an independent read-back of every Google Sheet row.
+- Local verification: 103 Framer/function contract tests, 8 migration-contract tests, and 12 managed-Sheets/worktree tests pass. This does not replace the remaining live retry/webhook/email cases below.
+- No production payment, form submission, Sheet write, migration, Edge Function deployment, or Framer production publish was performed during this audit.
 
 All values recorded here must be staging-only. Never record API keys, service-account JSON, payment credentials, webhook secrets, or complete signed tokens.
 
