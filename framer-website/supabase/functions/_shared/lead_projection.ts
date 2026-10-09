@@ -39,11 +39,12 @@ export function masterLeadMatchKeys(
     values: (string | number | null)[],
 ): { column: string; value: string }[] {
     const emailIndex = MASTER_LEAD_HEADERS.indexOf("Email")
-    const phoneIndex = MASTER_LEAD_HEADERS.indexOf("Phone")
     const email = String(values[emailIndex] ?? "").trim().toLowerCase()
-    const phone = String(values[phoneIndex] ?? "").trim()
     if (email) return [{ column: "Email", value: email }]
-    return phone ? [{ column: "Phone", value: phone }] : []
+    // Phone is a display/contact field, not proof that two people are the
+    // same person. Email-less submissions are appended once per stable
+    // submission fingerprint instead of matching another contact by phone.
+    return []
 }
 
 function compact(value: unknown): string {
@@ -269,23 +270,48 @@ export async function projectLeadSheets(
                     latestSubmission: params.submission,
                     notes: params.notes,
                 })
+            const headers = isInviteRoute ? NTC_INVITE_HEADERS : LEAD_HEADERS
+            const currentKeys = masterLeadMatchKeys(values)
             await withSheetProjectionLock(params.supabase, route.sheetId, route.tab, () =>
                 runProjectionAttempt({
                     projection: params,
                     sheetId: route.sheetId,
                     tab: route.tab,
                     projectionType: "current",
-                    projectionKey: normalizeEmail(lead.email) ||
-                        compact(lead.phone || params.submission.phone),
+                    projectionKey: currentKeys.length > 0
+                        ? currentKeys[0].value
+                        : params.submissionId,
                     values,
-                    action: () =>
-                        upsertCurrentRowByAnyKey(
+                    action: () => currentKeys.length > 0
+                        ? upsertCurrentRowByAnyKey(
                             route.sheetId,
                             route.tab,
-                            masterLeadMatchKeys(values),
+                            currentKeys,
                             values,
-                            isInviteRoute ? NTC_INVITE_HEADERS : LEAD_HEADERS,
+                            headers,
                             { moveUpdatedRowToBottom: true },
+                        )
+                        : appendHistoryRowOnceByFingerprint(
+                            route.sheetId,
+                            route.tab,
+                            values,
+                            headers,
+                            isInviteRoute
+                                ? [
+                                    "Captured At",
+                                    "Name",
+                                    "Phone",
+                                    "Trip / Itinerary",
+                                    "Why They Want To Travel",
+                                ]
+                                : [
+                                    "Captured At",
+                                    "Name",
+                                    "Phone",
+                                    "Trip / Itinerary",
+                                    "Reason / Activity",
+                                    "Source",
+                                ],
                         ),
                 })
             )
@@ -331,6 +357,7 @@ export async function projectLeadSheets(
                                 [
                                     "Captured At",
                                     "Name",
+                                    "Phone",
                                     "Trip / Itinerary",
                                     "Reason / Activity",
                                     "Source",

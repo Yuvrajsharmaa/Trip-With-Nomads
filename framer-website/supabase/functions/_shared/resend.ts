@@ -17,6 +17,22 @@ export type ResendEmailResult = {
     data?: Record<string, unknown>
 }
 
+/**
+ * Resend returns this conflict when two equivalent payment events race to
+ * use the same idempotency key but serialize slightly different bodies (for
+ * example, because their signed status-token expiry differs by a second).
+ * The first request owns the key and has already been accepted; the later
+ * event must be treated as an idempotent duplicate, not as a retryable
+ * customer-email failure.
+ */
+export function isResendIdempotencyConflict(error: unknown): boolean {
+    const message = String((error as any)?.message || error || "").toLowerCase()
+    return message.includes("resend api 409") && (
+        message.includes("invalid_idempotent_request") ||
+        message.includes("idempotency key")
+    )
+}
+
 function firstNonEmpty(...values: unknown[]): string {
     for (const value of values) {
         const next = String(value || "").trim()
