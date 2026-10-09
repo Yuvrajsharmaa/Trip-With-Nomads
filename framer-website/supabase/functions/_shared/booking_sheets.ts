@@ -1,36 +1,36 @@
-const BOOKING_TIMEZONE = "Asia/Kolkata"
+import { dateToSheetSerial, timestampToSheetSerial } from "./sheet_dates.ts"
 
 // Current-state contract for the managed Bookings tab. Keep these labels
 // human-readable and gateway-neutral.
 export const BOOKING_HEADERS = [
-    "Last Updated (IST)",
+    "Last Updated",
     "Booking Ref",
-    "Booking ID",
-    "Trip Name",
-    "Trip ID",
+    "Trip",
     "Departure Date",
     "Guest Name",
     "Email",
     "Phone",
-    "Traveller Count",
-    "Traveller Summary",
-    "Coupon Code",
+    "Travellers",
     "Payment Plan",
-    "Subtotal",
-    "Discount",
-    "GST",
     "Trip Total",
-    "Payable Now",
-    "Paid Amount",
+    "Paid",
     "Balance Due",
     "Payment Status",
     "Settlement Status",
-    "Payment Provider",
-    "Payment Attempt",
-    "Provider Order/Reference",
-    "Provider Payment/Transaction ID",
-    "Last Payment Event",
-    "Last Payment Event At (IST)",
+    "Notes",
+]
+
+export const ABANDONED_BOOKING_HEADERS = [
+    "Captured At",
+    "Name",
+    "Email",
+    "Phone",
+    "Trip",
+    "Departure Date",
+    "Travellers",
+    "Payment Plan",
+    "Reason",
+    "Status",
     "Notes",
 ]
 
@@ -43,21 +43,45 @@ function compact(value: any): string {
     return String(value ?? "").trim()
 }
 
-function formatTimestampIST(value?: string): string {
-    const date = value ? new Date(value) : new Date()
-    if (Number.isNaN(date.getTime())) return compact(value)
-    const parts = new Intl.DateTimeFormat("en-CA", {
-        timeZone: BOOKING_TIMEZONE,
-        day: "2-digit",
-        month: "2-digit",
-        year: "numeric",
-        hour: "2-digit",
-        minute: "2-digit",
-        second: "2-digit",
-        hourCycle: "h23",
-    }).formatToParts(date)
-    const get = (type: string) => parts.find((part) => part.type === type)?.value || ""
-    return `${get("year")}-${get("month")}-${get("day")}T${get("hour")}:${get("minute")}:${get("second")}+05:30`
+function humanize(value: any): string {
+    return compact(value)
+        .replace(/[_-]+/g, " ")
+        .replace(/\s+/g, " ")
+        .trim()
+        .replace(/\b\w/g, (character) => character.toUpperCase())
+}
+
+function formatPhone(countryCode: unknown, phone: unknown): string {
+    const rawPhone = compact(phone)
+    if (!rawPhone) return ""
+    if (rawPhone.startsWith("+")) return rawPhone
+    const country = compact(countryCode)
+    if (!country) return rawPhone
+    const prefix = country.startsWith("+") ? country : `+${country.replace(/\D/g, "")}`
+    return prefix === "+" ? rawPhone : `${prefix} ${rawPhone}`
+}
+
+function humanizePaymentStatus(value: any): string {
+    const status = compact(value).toLowerCase()
+    const labels: Record<string, string> = {
+        pending: "Pending",
+        paid: "Paid",
+        failed: "Failed",
+        expired: "Expired",
+        cancelled: "Cancelled",
+    }
+    return labels[status] || humanize(status)
+}
+
+function humanizeSettlementStatus(value: any): string {
+    const status = compact(value).toLowerCase()
+    const labels: Record<string, string> = {
+        pending: "Pending",
+        partially_paid: "Partially paid",
+        fully_paid: "Fully paid",
+        failed: "Failed",
+    }
+    return labels[status] || humanize(status)
 }
 
 function normalizeSharing(value: any): string {
@@ -70,8 +94,11 @@ function normalizeSharing(value: any): string {
     return raw
 }
 
-function formatTravellerSummary(travellers: any[]): string {
-    if (!Array.isArray(travellers) || travellers.length === 0) return ""
+function formatTravellerSummary(travellers: any[], fallbackCount?: any): string {
+    if (!Array.isArray(travellers) || travellers.length === 0) {
+        const count = Number(fallbackCount)
+        return Number.isFinite(count) && count > 0 ? `${count} traveller${count === 1 ? "" : "s"}` : ""
+    }
     return travellers
         .map((traveller: any, index: number) => {
             const name = compact(traveller?.name) || `Traveller ${index + 1}`
@@ -88,25 +115,18 @@ function paymentPlan(value: any): string {
     return compact(value).toLowerCase() === "partial_25" ? "25% deposit" : "Full payment"
 }
 
-function providerOrderReference(booking: Record<string, any>): string {
-    return compact(
-        booking.payment_gateway_order_or_ref_id ||
-        booking.provider_order_id ||
-            booking.provider_order_reference ||
-            booking.razorpay_order_id ||
-            booking.payu_txnid
-    )
+function humanizeAbandonmentReason(value: any): string {
+    const raw = compact(value).toLowerCase()
+    if (raw === "checkout_abandoned_before_payment") {
+        return "Checkout abandoned before payment"
+    }
+    return humanize(value)
 }
 
-function providerPaymentReference(booking: Record<string, any>): string {
-    return compact(
-        booking.payment_gateway_payment_id ||
-            booking.payment_gateway_txn_id ||
-        booking.provider_payment_id ||
-            booking.provider_transaction_id ||
-            booking.razorpay_payment_id ||
-            booking.payu_mihpayid
-    )
+function humanizeAbandonmentStatus(value: any): string {
+    const raw = compact(value).toLowerCase()
+    if (raw === "abandoned_booking") return "Checkout abandoned"
+    return humanize(value)
 }
 
 export function buildBookingSheetRow(params: {
@@ -123,34 +143,43 @@ export function buildBookingSheetRow(params: {
     ].filter(Boolean).join(" | ")
 
     return [
-        formatTimestampIST(params.updatedAt || booking.updated_at || new Date().toISOString()),
-        compact(booking.booking_ref || booking.id),
-        compact(booking.id),
+        timestampToSheetSerial(params.updatedAt || booking.updated_at || new Date().toISOString()),
+        compact(booking.booking_ref),
         compact(booking.trip_name || booking.trip_title),
-        compact(booking.trip_id),
-        compact(booking.departure_date || booking.date),
+        dateToSheetSerial(booking.departure_date || booking.date),
         compact(booking.name || booking.guest_name),
         compact(booking.email).toLowerCase(),
-        compact(booking.phone),
-        travellers.length,
-        formatTravellerSummary(travellers),
-        compact(booking.coupon_code),
+        formatPhone(booking.country_code, booking.phone),
+        formatTravellerSummary(travellers, booking.traveller_count || booking.travellers_count),
         paymentPlan(booking.payment_mode),
-        toNumber(booking.subtotal_amount),
-        toNumber(booking.discount_amount),
-        toNumber(booking.tax_amount || booking.gst_amount),
         toNumber(booking.total_amount),
-        toNumber(booking.payable_now_amount || booking.amount),
         toNumber(booking.paid_amount),
         toNumber(booking.due_amount || booking.balance_due),
-        compact(booking.payment_status || "pending"),
-        compact(booking.settlement_status || "pending"),
-        compact(booking.payment_provider || booking.provider),
-        toNumber(booking.payment_attempt_number || booking.attempt_no),
-        providerOrderReference(booking),
-        providerPaymentReference(booking),
-        compact(booking.last_payment_event || params.eventStage),
-        booking.last_payment_event_at ? formatTimestampIST(booking.last_payment_event_at) : "",
+        humanizePaymentStatus(booking.payment_status || "pending"),
+        humanizeSettlementStatus(booking.settlement_status || "pending"),
         notes,
+    ]
+}
+
+export function buildAbandonedBookingSheetRow(params: {
+    submission: Record<string, any>
+    capturedAt?: string
+}) {
+    const submission = params.submission || {}
+    return [
+        timestampToSheetSerial(params.capturedAt || submission.captured_at || submission.created_at),
+        compact(submission.name),
+        compact(submission.email).toLowerCase(),
+        formatPhone(submission.country_code, submission.phone),
+        compact(submission.trip_name || submission.trip_title || submission.trip_slug),
+        dateToSheetSerial(submission.departure_date || submission.date),
+        formatTravellerSummary(
+            Array.isArray(submission.travellers) ? submission.travellers : [],
+            submission.traveller_count || submission.travellers_count,
+        ),
+        paymentPlan(submission.payment_mode),
+        humanizeAbandonmentReason(submission.reason),
+        humanizeAbandonmentStatus(submission.status),
+        compact(submission.notes),
     ]
 }

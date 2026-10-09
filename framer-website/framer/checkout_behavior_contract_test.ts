@@ -8,6 +8,12 @@ Deno.test("canonical checkout uses stable request ids, the active Razorpay gatew
     const source = await read("CheckoutPageOverrides.tsx")
 
     assertStringIncludes(source, "checkout_request_id")
+    assertStringIncludes(source, "trip_slug")
+    assertStringIncludes(source, "fetchTripContextBySlug")
+    assertStringIncludes(source, "fetchCheckoutRequest")
+    assertStringIncludes(source, "retrying once")
+    assertStringIncludes(source, "canonical public route identity")
+    assertStringIncludes(source, "This trip is not available for online booking")
     assertStringIncludes(source, "sessionStorage")
     assertStringIncludes(source, "crypto.randomUUID")
     assertStringIncludes(source, "Razorpay")
@@ -25,8 +31,9 @@ Deno.test("canonical checkout uses stable request ids, the active Razorpay gatew
     assertStringIncludes(source, "BOOKING_ABANDON_LEAD_SOURCE")
     assertStringIncludes(source, "checkout_abandoned_before_payment")
     assertStringIncludes(source, "getStableBookingAbandonId")
-    assert(!source.includes('const leadId = getStableBookingAbandonId("lead", identity)'))
-    assert(!source.includes("lead_id: leadId"))
+    assertStringIncludes(source, "departure_date")
+    assertStringIncludes(source, "travellers")
+    assertStringIncludes(source, "payment_mode")
     assertStringIncludes(source, "pagehide")
 })
 
@@ -57,21 +64,28 @@ Deno.test("status UI renders payment and settlement state from the signed respon
 Deno.test("all legacy lead routes remain exported and use one guarded submission path", async () => {
     const source = await read("EmailPopupOverride.tsx")
 
-    for (const exportName of [
-        "withCustomTripTracking",
-        "withWaitlistTracking",
-        "withWaitlistAbandonTracking",
-        "withLeadAbandonTrackingGeneric",
-        "withLeadTracking",
-        "withFormTracking",
-        "withBookingInviteTracking",
-        "withTripPageLeadTracking",
-        "withPartialFillTracking",
-    ]) {
+    for (
+        const exportName of [
+            "withCustomTripTracking",
+            "withWaitlistTracking",
+            "withWaitlistAbandonTracking",
+            "withLeadAbandonTrackingGeneric",
+            "withLeadTracking",
+            "withFormTracking",
+            "withBookingInviteTracking",
+            "withTripPageLeadTracking",
+            "withTripItineraryFormTracking",
+            "withTripItineraryDownloadTracking",
+            "withPartialFillTracking",
+        ]
+    ) {
         assertStringIncludes(source, `export function ${exportName}`)
     }
     assertStringIncludes(source, "submission_id")
     assertStringIncludes(source, "SUBMIT_LOCK_KEY")
     assertStringIncludes(source, "onSubmit={undefined}")
     assertStringIncludes(source, "partial_fill")
+    assertStringIncludes(source, "querySelectorAll(selector)")
+    assertStringIncludes(source, 'input[name*="company" i]')
+    assertStringIncludes(source, 'Company: ${companyName}')
 })

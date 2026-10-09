@@ -1,130 +1,276 @@
-const LEAD_TIMEZONE = "Asia/Kolkata"
+import { timestampToSheetSerial } from "./sheet_dates.ts"
 
 export const LEAD_HEADERS = [
-    "Lead ID",
-    "First Seen At",
-    "Last Seen At",
+    "Captured At",
+    "Last Activity",
     "Name",
     "Email",
     "Phone",
-    "Instagram ID",
-    "Latest Source",
-    "Latest Page URL",
-    "Latest Trip ID",
-    "Latest Trip Slug",
-    "Latest UTM Source",
-    "Latest UTM Medium",
-    "Latest UTM Campaign",
-    "Latest UTM Term",
-    "Latest UTM Content",
-    "Submission Count",
-    "Current Status",
-    "Latest Submission ID",
+    "Company / Group",
+    "Trip / Itinerary",
+    "Reason / Activity",
+    "Source",
+    "Status",
     "Notes",
 ]
 
-// NTC - Invites predates the normalized Leads contract. Keep that existing
-// route and its human-readable columns intact while making its row writes
-// idempotent by email.
 export const NTC_INVITE_HEADERS = [
-    "Lead ID",
-    "Created At",
+    "Captured At",
+    "Last Activity",
     "Name",
     "Email",
     "Phone",
-    "Country Code",
-    "Instagram ID",
-    "Reason",
-    "Source",
-    "Page URL",
-    "Trip ID",
-    "Trip Slug",
-    "UTM Source",
-    "UTM Medium",
-    "UTM Campaign",
+    "Instagram",
+    "Why They Want To Travel",
+    "Trip / Itinerary",
     "Status",
+    "Notes",
 ]
 
-// Existing cross-route destination retained from the historical lead flow.
-// Routed current tabs use LEAD_HEADERS; Master Leads keeps its established
-// human-readable contract and is updated idempotently when configured.
-export const MASTER_LEAD_HEADERS = [
-    "Lead ID",
-    "Created At",
-    "Name",
-    "Email",
-    "Phone",
-    "Country Code",
-    "Source",
-    "Status",
-    "Page URL",
-    "Trip ID",
-    "Trip Slug",
-]
+export const MASTER_LEAD_HEADERS = [...LEAD_HEADERS]
 
 export const ABANDONED_LEAD_HEADERS = [
-    "Submission ID",
-    "Lead ID",
     "Captured At",
     "Name",
     "Email",
     "Phone",
+    "Trip / Itinerary",
     "Source",
-    "Page URL",
-    "Trip ID",
-    "Trip Slug",
+    "Reason / Activity",
     "Status",
-    "Reason",
+    "Notes",
 ]
 
 function compact(value: any): string {
     return String(value ?? "").trim()
 }
 
-function formatTimestampIST(value?: string): string {
-    const date = value ? new Date(value) : new Date()
-    if (Number.isNaN(date.getTime())) return compact(value)
-    const parts = new Intl.DateTimeFormat("en-CA", {
-        timeZone: LEAD_TIMEZONE,
-        day: "2-digit",
-        month: "2-digit",
-        year: "numeric",
-        hour: "2-digit",
-        minute: "2-digit",
-        second: "2-digit",
-        hourCycle: "h23",
-    }).formatToParts(date)
-    const get = (type: string) => parts.find((part) => part.type === type)?.value || ""
-    return `${get("year")}-${get("month")}-${get("day")}T${get("hour")}:${get("minute")}:${get("second")}+05:30`
+function firstNonEmpty(...values: unknown[]): string {
+    for (const value of values) {
+        const next = compact(value)
+        if (next) return next
+    }
+    return ""
+}
+
+function uniqueStrings(values: unknown[]): string[] {
+    const output: string[] = []
+    const seen = new Set<string>()
+    for (const value of values) {
+        const text = compact(value)
+        if (!text) continue
+        const key = text.toLowerCase()
+        if (seen.has(key)) continue
+        seen.add(key)
+        output.push(text)
+    }
+    return output
+}
+
+function humanize(value: unknown, fallback = ""): string {
+    const text = compact(value)
+    if (!text) return fallback
+    return text
+        .replace(/[_-]+/g, " ")
+        .replace(/\s+/g, " ")
+        .trim()
+        .replace(/\b\w/g, (character) => character.toUpperCase())
+}
+
+export function humanizeLeadSource(value: unknown): string {
+    const source = compact(value).toLowerCase()
+    const labels: Record<string, string> = {
+        waitlist_popup: "Waitlist form",
+        booking_invite: "NTC invite",
+        trip_page_lead: "Trip page form",
+        trip_itinerary_download: "Itinerary download",
+        general_lead: "General enquiry",
+        generic_form: "General enquiry",
+        corporate_lead: "Corporate enquiry",
+        custom_trip_lead: "Custom trip enquiry",
+        booking_abandoned: "Checkout abandoned",
+    }
+    return labels[source] ||
+        (source ? `Unknown source: ${humanize(source)}` : "")
+}
+
+export function humanizeLeadStatus(value: unknown): string {
+    const status = compact(value).toLowerCase()
+    const labels: Record<string, string> = {
+        submitted: "Submitted",
+        partial_fill: "Partially filled",
+        abandoned_booking: "Checkout abandoned",
+        converted: "Converted",
+        booked: "Booked",
+        paid: "Paid",
+        customer: "Customer",
+        closed_won: "Closed won",
+        closed_lost: "Closed lost",
+        won: "Won",
+        lost: "Lost",
+    }
+    return labels[status] || (status ? humanize(status) : "")
+}
+
+export function humanizeTrip(value: unknown): string {
+    const raw = compact(value)
+    if (!raw) return ""
+    return humanize(raw.replace(/-twn$/i, ""))
+}
+
+function formatPhone(countryCode: unknown, phone: unknown): string {
+    const rawPhone = compact(phone)
+    if (!rawPhone) return ""
+    if (rawPhone.startsWith("+")) return rawPhone
+    const country = compact(countryCode)
+    if (!country) return rawPhone
+    const prefix = country.startsWith("+") ? country : `+${country.replace(/\D/g, "")}`
+    return prefix === "+" ? rawPhone : `${prefix} ${rawPhone}`
+}
+
+function cleanNotes(value: unknown): string {
+    const text = compact(value)
+    if (!text) return ""
+    return text
+        .split("|")
+        .map((part) => part.trim())
+        .filter((part) => !/^legacy\s+(country code|utm|reason)/i.test(part))
+        .filter((part) => !/^(lead|submission|trip|source|status)\s+id\s*:/i.test(part))
+        .filter((part) => !/^country code\s*:/i.test(part))
+        .filter((part) => !/^utm\s+(source|medium|campaign|term|content)\s*:/i.test(part))
+        .filter(Boolean)
+        .join(" | ")
+}
+
+function companyName(lead: Record<string, any>, submission: Record<string, any>): string {
+    const fromNotes = [lead.notes, submission.notes]
+        .map((value) => compact(value).match(/(?:^|\|)\s*company\s*:\s*([^|]+)/i)?.[1] || "")
+    return firstNonEmpty(
+        lead.company_name,
+        lead.company,
+        lead.group_name,
+        submission.company_name,
+        submission.company,
+        ...fromNotes,
+    )
+}
+
+function itineraryNames(lead: Record<string, any>, submission: Record<string, any>): string {
+    const arrayValues = [
+        ...(Array.isArray(lead.downloaded_itineraries) ? lead.downloaded_itineraries : []),
+        ...(Array.isArray(submission.downloaded_itineraries)
+            ? submission.downloaded_itineraries
+            : []),
+    ]
+    const values = uniqueStrings([
+        ...arrayValues,
+        lead.latest_itinerary_name,
+        submission.itinerary_name,
+        lead.latest_trip_name,
+        submission.trip_name,
+        lead.latest_trip_slug,
+        lead.trip_slug,
+        submission.trip_slug,
+    ])
+    return uniqueStrings(values.map(humanizeTrip)).join(", ")
+}
+
+function activityText(lead: Record<string, any>, submission: Record<string, any>): string {
+    const source = compact(submission.source || lead.latest_source).toLowerCase()
+    const reason = firstNonEmpty(
+        submission.reason,
+        lead.latest_reason,
+        lead.reason,
+    )
+    const activity = firstNonEmpty(
+        submission.activity_label,
+        submission.activity,
+        lead.latest_activity,
+    )
+    const values = uniqueStrings([
+        reason === "partial_fill" ? "" : reason,
+        activity,
+        source === "trip_itinerary_download" ? "Downloaded itinerary" : "",
+    ])
+    return values.join(" | ")
+}
+
+function leadFields(params: {
+    lead: Record<string, any>
+    latestSubmissionId?: string
+    latestSubmission?: Record<string, any>
+    notes?: string | null
+    status?: string
+}) {
+    const lead = params.lead || {}
+    const submission = params.latestSubmission || {}
+    const sourceKey = firstNonEmpty(lead.latest_source, lead.source, submission.source)
+    const statusKey = firstNonEmpty(
+        params.status,
+        lead.current_status,
+        lead.status,
+        submission.status,
+        "submitted",
+    )
+    const company = companyName(lead, submission)
+    const source = sourceKey === "general_lead" && company
+        ? "Corporate enquiry"
+        : humanizeLeadSource(sourceKey)
+    const notes = cleanNotes(
+        [lead.notes, submission.notes, params.notes]
+            .filter(Boolean)
+            .join(" | ")
+            .replace(/(?:^|\|)\s*company\s*:\s*[^|]+/gi, ""),
+    )
+
+    return {
+        capturedAt: timestampToSheetSerial(firstNonEmpty(
+            lead.first_seen_at,
+            lead.created_at,
+            submission.captured_at,
+            submission.created_at,
+        )),
+        lastActivity: timestampToSheetSerial(firstNonEmpty(
+            lead.last_seen_at,
+            lead.updated_at,
+            lead.created_at,
+            submission.captured_at,
+            submission.created_at,
+        )),
+        name: firstNonEmpty(lead.name, submission.name),
+        email: firstNonEmpty(lead.email, submission.email).toLowerCase(),
+        phone: formatPhone(
+            firstNonEmpty(lead.country_code, submission.country_code),
+            firstNonEmpty(lead.phone, submission.phone),
+        ),
+        company,
+        trip: itineraryNames(lead, submission),
+        activity: activityText(lead, submission),
+        source,
+        status: humanizeLeadStatus(statusKey),
+        notes,
+    }
 }
 
 export function buildLeadSheetRow(params: {
     lead: Record<string, any>
     latestSubmissionId?: string
+    latestSubmission?: Record<string, any>
     notes?: string | null
 }) {
-    const lead = params.lead || {}
+    const fields = leadFields(params)
     return [
-        compact(lead.id),
-        formatTimestampIST(lead.first_seen_at || lead.created_at),
-        formatTimestampIST(lead.last_seen_at || lead.updated_at || lead.created_at),
-        compact(lead.name),
-        compact(lead.email).toLowerCase(),
-        compact(lead.phone),
-        compact(lead.instagram_id),
-        compact(lead.latest_source || lead.source),
-        compact(lead.latest_page_url || lead.page_url),
-        compact(lead.latest_trip_id || lead.trip_id),
-        compact(lead.latest_trip_slug || lead.trip_slug),
-        compact(lead.latest_utm_source || lead.utm_source),
-        compact(lead.latest_utm_medium || lead.utm_medium),
-        compact(lead.latest_utm_campaign || lead.utm_campaign),
-        compact(lead.latest_utm_term || lead.utm_term),
-        compact(lead.latest_utm_content || lead.utm_content),
-        Math.max(0, Number(lead.submission_count || 0)),
-        compact(lead.current_status || lead.status || "submitted"),
-        compact(params.latestSubmissionId || lead.latest_submission_id),
-        compact(params.notes || lead.notes),
+        fields.capturedAt,
+        fields.lastActivity,
+        fields.name,
+        fields.email,
+        fields.phone,
+        fields.company,
+        fields.trip,
+        fields.activity,
+        fields.source,
+        fields.status,
+        fields.notes,
     ]
 }
 
@@ -133,65 +279,66 @@ export function buildAbandonedLeadSheetRow(params: {
     capturedAt?: string
 }) {
     const submission = params.submission || {}
+    const sourceKey = compact(submission.source)
+    const fields = leadFields({
+        lead: {},
+        latestSubmission: submission,
+    })
     return [
-        compact(submission.submission_id),
-        compact(submission.lead_id),
-        formatTimestampIST(params.capturedAt || submission.captured_at),
-        compact(submission.name),
-        compact(submission.email).toLowerCase(),
-        compact(submission.phone),
-        compact(submission.source),
-        compact(submission.page_url),
-        compact(submission.trip_id),
-        compact(submission.trip_slug),
-        compact(submission.status || "partial_fill"),
-        compact(submission.reason),
+        timestampToSheetSerial(params.capturedAt || submission.captured_at || submission.created_at),
+        fields.name,
+        fields.email,
+        fields.phone,
+        fields.trip,
+        fields.source,
+        fields.activity ||
+        (sourceKey === "booking_abandoned"
+            ? "Checkout abandoned before payment"
+            : "Partially filled form"),
+        humanizeLeadStatus(submission.status || "partial_fill"),
+        fields.notes,
     ]
 }
 
 export function buildInviteLeadSheetRow(params: {
     lead: Record<string, any>
     submission: Record<string, any>
+    latestSubmissionId?: string
     notes?: string | null
 }) {
-    const lead = params.lead || {}
-    const submission = params.submission || {}
+    const fields = leadFields({
+        lead: params.lead,
+        latestSubmissionId: params.latestSubmissionId,
+        latestSubmission: params.submission,
+        notes: params.notes,
+    })
     return [
-        compact(lead.id),
-        formatTimestampIST(lead.first_seen_at || lead.created_at),
-        compact(lead.name),
-        compact(lead.email).toLowerCase(),
-        compact(lead.phone),
-        compact(lead.country_code || submission.country_code),
-        compact(lead.instagram_id || submission.instagram_id),
-        compact(submission.reason || params.notes),
-        compact(lead.latest_source || lead.source || submission.source),
-        compact(lead.latest_page_url || lead.page_url || submission.page_url),
-        compact(lead.latest_trip_id || lead.trip_id || submission.trip_id),
-        compact(lead.latest_trip_slug || lead.trip_slug || submission.trip_slug),
-        compact(lead.latest_utm_source || lead.utm_source || submission.utm_source),
-        compact(lead.latest_utm_medium || lead.utm_medium || submission.utm_medium),
-        compact(lead.latest_utm_campaign || lead.utm_campaign || submission.utm_campaign),
-        compact(lead.current_status || lead.status || submission.status || "submitted"),
+        fields.capturedAt,
+        fields.lastActivity,
+        fields.name,
+        fields.email,
+        fields.phone,
+        firstNonEmpty(params.lead.instagram_id, params.submission.instagram_id),
+        firstNonEmpty(params.submission.reason, params.lead.latest_reason, params.lead.reason),
+        fields.trip,
+        fields.status,
+        fields.notes,
     ]
 }
 
 export function buildMasterLeadSheetRow(params: {
     lead: Record<string, any>
     status?: string
+    latestSubmissionId?: string
+    latestSubmission?: Record<string, any>
+    notes?: string | null
 }) {
-    const lead = params.lead || {}
-    return [
-        compact(lead.id),
-        formatTimestampIST(lead.first_seen_at || lead.created_at),
-        compact(lead.name),
-        compact(lead.email).toLowerCase(),
-        compact(lead.phone),
-        compact(lead.country_code),
-        compact(lead.latest_source || lead.source),
-        compact(params.status || lead.current_status || lead.status || "submitted"),
-        compact(lead.latest_page_url || lead.page_url),
-        compact(lead.latest_trip_id || lead.trip_id),
-        compact(lead.latest_trip_slug || lead.trip_slug),
-    ]
+    return buildLeadSheetRow({
+        lead: params.lead,
+        latestSubmissionId: params.latestSubmissionId,
+        latestSubmission: params.latestSubmission,
+        notes: params.notes,
+    }).map((value, index) =>
+        index === 9 && params.status ? humanizeLeadStatus(params.status) : value
+    )
 }
