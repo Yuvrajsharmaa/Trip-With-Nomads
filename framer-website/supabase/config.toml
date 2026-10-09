@@ -1,6 +1,12 @@
 [functions.razorpay-webhook]
 verify_jwt = false
 
+# Razorpay posts the browser callback without a Supabase auth header. The
+# callback remains redirect-only; payment authority stays with the signed
+# webhook and the status page still requires its signed booking token.
+[functions.handle-payment]
+verify_jwt = false
+
 # Lead capture is called directly by the public Framer forms. The function
 # performs its own input validation and uses the server-side service role for
 # persistence, so the public edge endpoint must not reject browser requests

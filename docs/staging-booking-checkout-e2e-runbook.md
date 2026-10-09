@@ -35,7 +35,16 @@ Payment history now prefers the existing combined `Payment History` tab when ava
 - Local verification: 103 Framer/function contract tests, 8 migration-contract tests, and 12 managed-Sheets/worktree tests pass. This does not replace the remaining live retry/webhook/email cases below.
 - No new payment or form submission was created for this read-back, and no Google Sheet rows were edited or deleted. Live full/partial/failure payment, inbox delivery, and retry/replay cases remain unsatisfied release evidence.
 
-Never record API keys, service-account JSON, payment credentials, webhook secrets, or complete signed tokens.
+### 2026-10-09 integration and staging verification
+
+- Restored the accessible, responsive checkout error toast in the Framer source and added a contract test; staging preview verification is recorded above.
+- Added durable per-tab Sheet write locks and Supabase payment-event-to-Sheet-row reservations. This keeps retries idempotent without exposing technical event IDs in the visible workbook.
+- Updated the payment-history route to inspect existing tab names before choosing a destination. The current workbook audit found an existing `Payment History` tab, so no new tab is required.
+- Checkout-abandoned submissions now also appear in Master Leads as a follow-up activity; terminal CRM status is retained.
+- Razorpay browser success and failure callbacks now pass through the public redirect adapter on staging; webhook verification remains authoritative for payment state.
+- Local verification and staging deployments are recorded in the PR checks; none of these bullets is proof of a new production payment or an independent Sheet write.
+
+All values recorded here must be staging-only. Never record API keys, service-account JSON, payment credentials, webhook secrets, or complete signed tokens.
 
 ## Environment map
 
