@@ -1,5 +1,6 @@
 import {
     assert,
+    assertEquals,
     assertFalse,
     assertStringIncludes,
 } from "https://deno.land/std@0.224.0/assert/mod.ts"
@@ -39,8 +40,9 @@ Deno.test("checkout links and display pricing are ID-first", () => {
         displayStart,
     )
     const display = source.slice(displayStart, displayEnd)
-    assertStringIncludes(display, 'const slug = tripId ? "" :')
-    assertStringIncludes(display, "slugFromPath || propSlug")
+    assertStringIncludes(display, "await resolveTripDisplayIdentity")
+    assertStringIncludes(display, "pathname: window.location.pathname")
+    assertStringIncludes(display, "query: new URLSearchParams(window.location.search)")
     assertStringIncludes(display, "const [locationKey, setLocationKey]")
 
     const bootstrapStart = source.indexOf(
@@ -54,6 +56,31 @@ Deno.test("checkout links and display pricing are ID-first", () => {
     assertStringIncludes(bootstrap, "if (ctx.tripId && !tripContext)")
     assertStringIncludes(bootstrap, "slug = tripId")
     assertStringIncludes(bootstrap, 'String(tripContext?.slug || "").trim()')
+})
+
+Deno.test("trip page pricing effect starts its asynchronous lookup", () => {
+    const displayStart = source.indexOf("function useTripDisplayData")
+    const displayEnd = source.indexOf(
+        "export function withTripPrimaryPrice",
+        displayStart,
+    )
+    const display = source.slice(displayStart, displayEnd)
+
+    assertStringIncludes(display, "const run = async () => {")
+    assertStringIncludes(display, "await fetchTripDisplayPrice(identity)")
+    assertStringIncludes(display, "run()")
+    assertStringIncludes(
+        source,
+        "async function resolveTripDisplayIdentity(params: {",
+    )
+    assertEquals(
+        source.match(/function readBrowserLocationKey\(\)/g)?.length || 0,
+        1,
+    )
+    assertEquals(
+        display.match(/window\.setInterval\(refreshLocationKey, 500\)/g)?.length || 0,
+        1,
+    )
 })
 
 Deno.test("Total trip cost is pre-tax while payable now remains final", () => {

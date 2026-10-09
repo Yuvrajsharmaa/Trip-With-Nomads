@@ -1160,47 +1160,168 @@ function getValidationErrors(store: any): string[] {
 }
 
 function showInlineError(errors: string | string[]) {
-    const existing = document.getElementById("__checkout_error_toast")
-    if (existing) existing.remove()
+    if (typeof document === "undefined") return
 
-    const messages = Array.isArray(errors) ? errors : [errors]
-    const toast = document.createElement("div")
-    toast.id = "__checkout_error_toast"
+    const messages = (Array.isArray(errors) ? errors : [errors])
+        .map((message) => String(message || "").trim())
+        .filter(Boolean)
+    if (!messages.length) return
 
-    toast.innerHTML = `
-        <div style="font-weight:700; margin-bottom:${messages.length > 1 ? "8px" : "0"};">⚠️ ${
-        messages.length === 1 ? messages[0] : "Please complete:"
-    }</div>
-        ${
-        messages.length > 1
-            ? '<div style="opacity:.9;font-size:13px;line-height:1.5;">' +
-                messages.map((m) => `• ${m}`).join("<br>") +
-                "</div>"
-            : ""
+    const technicalFailure = messages.some((message) =>
+        /payment_attempts|txnid|not-null|constraint|edge function error/i.test(message)
+    )
+    const titleText = technicalFailure
+        ? "Payment could not start"
+        : messages.length > 1
+        ? "Please check your details"
+        : "Checkout needs attention"
+    const detailText = technicalFailure
+        ? "We couldn't start the payment. Please try again. If it keeps happening, contact us."
+        : messages.length > 1
+        ? messages.join(" ")
+        : messages[0]
+
+    const toastId = "__checkout_validation_toast"
+    document.getElementById(toastId)?.remove()
+
+    const styleId = "__checkout_validation_toast_styles"
+    if (!document.getElementById(styleId)) {
+        const style = document.createElement("style")
+        style.id = styleId
+        style.textContent = [
+            "#__checkout_validation_toast {",
+            "  transition: opacity 180ms cubic-bezier(0.23, 1, 0.32, 1), transform 180ms cubic-bezier(0.23, 1, 0.32, 1);",
+            "}",
+            "#__checkout_validation_toast button:hover {",
+            "  background: var(--token-f4eaf121-3b68-4679-bb26-dd7f8d850793, #f0f0f0) !important;",
+            "}",
+            "#__checkout_validation_toast button:focus-visible {",
+            "  outline: 2px solid var(--token-c9c5f521-19b8-44ca-852a-18e01b3c96c0, #8c8c8c);",
+            "  outline-offset: 2px;",
+            "}",
+            "@media (max-width: 767px) {",
+            "  #__checkout_validation_toast { left: 16px; right: 16px; max-width: none; }",
+            "}",
+            "@media (prefers-reduced-motion: reduce) {",
+            "  #__checkout_validation_toast { transition: none; }",
+            "}",
+        ].join("\n")
+        document.head.appendChild(style)
     }
-    `
 
-    Object.assign(toast.style, {
-        position: "fixed",
-        top: "20px",
-        left: "50%",
-        transform: "translateX(-50%)",
-        background: "rgba(30,30,50,.95)",
-        color: "#fff",
-        padding: "14px 20px",
-        borderRadius: "12px",
-        fontSize: "14px",
-        zIndex: "99999",
-        boxShadow: "0 10px 28px rgba(0,0,0,.28)",
-        maxWidth: "92vw",
-    })
+    const toast = document.createElement("div")
+    toast.id = toastId
+    toast.setAttribute("role", "alert")
+    toast.setAttribute("aria-live", "assertive")
+    toast.setAttribute("aria-atomic", "true")
+    toast.style.cssText = [
+        "position:fixed",
+        "top:calc(76px + env(safe-area-inset-top, 0px))",
+        "right:16px",
+        "z-index:99999",
+        "box-sizing:border-box",
+        "width:min(390px, calc(100vw - 32px))",
+        "padding:14px 14px 14px 16px",
+        "display:grid",
+        "grid-template-columns:34px minmax(0, 1fr) 24px",
+        "gap:12px",
+        "align-items:start",
+        "border:1px solid var(--token-3b770823-4283-4ef8-b764-0396a33ab8af, #e8e8e8)",
+        "border-radius:14px",
+        "background:var(--token-46a66e62-66c2-4a18-b691-af6d779f7282, #ffffff)",
+        "color:var(--token-38ce78f5-c058-4ca0-bf76-b3ab4f1a6a76, #111111)",
+        "font-family:Manrope, sans-serif",
+        "box-shadow:0 12px 28px rgba(0,0,0,0.16)",
+        "opacity:0",
+        "transform:translateY(-6px)",
+        "pointer-events:auto",
+    ].join(";")
 
+    const icon = document.createElement("div")
+    icon.setAttribute("aria-hidden", "true")
+    icon.textContent = "!"
+    icon.style.cssText = [
+        "width:34px",
+        "height:34px",
+        "display:grid",
+        "place-items:center",
+        "box-sizing:border-box",
+        "border-radius:50%",
+        "background:var(--token-f4eaf121-3b68-4679-bb26-dd7f8d850793, #f0f0f0)",
+        "color:var(--token-38ce78f5-c058-4ca0-bf76-b3ab4f1a6a76, #111111)",
+        "font-size:18px",
+        "font-weight:700",
+        "line-height:1",
+    ].join(";")
+
+    const copy = document.createElement("div")
+    copy.style.cssText = [
+        "min-width:0",
+        "display:flex",
+        "flex-direction:column",
+        "gap:3px",
+        "padding-top:1px",
+    ].join(";")
+
+    const title = document.createElement("div")
+    title.textContent = titleText
+    title.style.cssText = [
+        "font-size:14px",
+        "font-weight:700",
+        "line-height:1.3",
+        "letter-spacing:-0.01em",
+    ].join(";")
+
+    const detail = document.createElement("div")
+    detail.textContent = detailText
+    detail.style.cssText = [
+        "font-size:12px",
+        "font-weight:500",
+        "line-height:1.45",
+        "color:var(--token-3ff813c5-4475-4ced-a46c-f14c557a4dd6, #636363)",
+    ].join(";")
+
+    const closeButton = document.createElement("button")
+    closeButton.type = "button"
+    closeButton.setAttribute("aria-label", "Dismiss message")
+    closeButton.textContent = "×"
+    closeButton.style.cssText = [
+        "width:24px",
+        "height:24px",
+        "display:grid",
+        "place-items:center",
+        "padding:0",
+        "border:0",
+        "border-radius:7px",
+        "background:transparent",
+        "color:var(--token-3ff813c5-4475-4ced-a46c-f14c557a4dd6, #636363)",
+        "font-family:inherit",
+        "font-size:20px",
+        "font-weight:400",
+        "line-height:1",
+        "cursor:pointer",
+    ].join(";")
+
+    copy.append(title, detail)
+    toast.append(icon, copy, closeButton)
     document.body.appendChild(toast)
-    setTimeout(() => {
+
+    let dismissed = false
+    const dismiss = () => {
+        if (dismissed || !toast.isConnected) return
+        dismissed = true
         toast.style.opacity = "0"
-        toast.style.transition = "opacity .25s ease"
-        setTimeout(() => toast.remove(), 250)
-    }, 3200)
+        toast.style.transform = "translateY(-4px)"
+        window.setTimeout(() => toast.remove(), 180)
+    }
+    closeButton.addEventListener("click", dismiss)
+
+    window.requestAnimationFrame(() => {
+        if (!toast.isConnected) return
+        toast.style.opacity = "1"
+        toast.style.transform = "translateY(0)"
+    })
+    window.setTimeout(dismiss, 6000)
 }
 
 function firstNonEmpty(...values: any[]): string {
@@ -3593,11 +3714,6 @@ function getTripSlugFromPathname(pathname: string): string {
     return match?.[1] ? decodeURIComponent(match[1]) : ""
 }
 
-function readBrowserLocationKey(): string {
-    if (typeof window === "undefined") return ""
-    return String(window.location.pathname || "") + "|" + String(window.location.search || "")
-}
-
 function normalizeSlug(value: any): string {
     const raw = String(value || "").trim().toLowerCase()
     if (!raw) return ""
@@ -3616,6 +3732,93 @@ function normalizeTripId(value: any): string {
         return ""
     }
     return clean
+}
+
+function tripDisplayIdentityKey(params: {
+    pathname: string
+    query: URLSearchParams
+    propTripId: string
+    propSlug: string
+}): string {
+    const pathname = String(params.pathname || "")
+    const pathSlug = normalizeSlug(getTripSlugFromPathname(pathname))
+    const isCheckoutPath = pathname.toLowerCase().startsWith("/checkout")
+    return [
+        pathname,
+        pathSlug,
+        normalizeTripId(params.propTripId),
+        normalizeSlug(params.propSlug),
+        getPageScopedTripId(),
+        isCheckoutPath
+            ? normalizeTripId(params.query.get("tripId") || params.query.get("trip_id"))
+            : "",
+        isCheckoutPath ? normalizeSlug(params.query.get("slug")) : "",
+    ].join("::")
+}
+
+async function resolveTripDisplayIdentity(params: {
+    pathname: string
+    query: URLSearchParams
+    propTripId: string
+    propSlug: string
+}): Promise<TripDisplayIdentity> {
+    const cacheKey = tripDisplayIdentityKey(params)
+    const now = Date.now()
+    const cached = tripDisplayIdentityCache.get(cacheKey)
+    if (cached && now - cached.ts < 120000) return cached.data
+
+    const inFlight = tripDisplayIdentityInFlight.get(cacheKey)
+    if (inFlight) return inFlight
+
+    const request = (async (): Promise<TripDisplayIdentity> => {
+        const pathname = String(params.pathname || "")
+        const pathSlug = normalizeSlug(getTripSlugFromPathname(pathname))
+
+        if (pathSlug) {
+            const pageTripId = normalizeTripId(params.propTripId || getPageScopedTripId())
+            if (pageTripId) {
+                try {
+                    const pageContext = await fetchTripContextById(pageTripId)
+                    if (normalizeSlug(pageContext?.slug) === pathSlug) {
+                        return { tripId: pageTripId, slug: "" }
+                    }
+                } catch (_) {
+                    // Resolve the current detail route below when the page ID is stale.
+                }
+            }
+
+            try {
+                const tripId = normalizeTripId(await fetchTripIdBySlug(pathSlug))
+                return tripId ? { tripId, slug: "" } : { tripId: "", slug: pathSlug }
+            } catch (_) {
+                return { tripId: "", slug: pathSlug }
+            }
+        }
+
+        const isCheckoutPath = pathname.toLowerCase().startsWith("/checkout")
+        const tripId = normalizeTripId(
+            (isCheckoutPath
+                ? params.query.get("tripId") || params.query.get("trip_id")
+                : "") ||
+                params.propTripId ||
+                getPageScopedTripId(),
+        )
+        const slug = tripId
+            ? ""
+            : params.propSlug || (isCheckoutPath ? String(params.query.get("slug") || "").trim() : "")
+
+        return { tripId, slug }
+    })()
+        .then((identity) => {
+            tripDisplayIdentityCache.set(cacheKey, { ts: Date.now(), data: identity })
+            return identity
+        })
+        .finally(() => {
+            tripDisplayIdentityInFlight.delete(cacheKey)
+        })
+
+    tripDisplayIdentityInFlight.set(cacheKey, request)
+    return request
 }
 
 function readTripIdCandidate(props: any): string {
@@ -3689,28 +3892,6 @@ function useTripDisplayData(props?: any) {
     useEffect(() => {
         let disposed = false
         setState({ data: null, status: "loading" })
-        const query = new URLSearchParams(window.location.search)
-        const slugFromPath = getTripSlugFromPathname(window.location.pathname)
-        const tripId = normalizeTripId(
-            query.get("tripId") ||
-                query.get("trip_id") ||
-                (slugFromPath ? "" : propTripId) ||
-                (slugFromPath ? "" : getPageScopedTripId()),
-        )
-        const slug = tripId ? "" : slugFromPath || propSlug || query.get("slug") || ""
-
-        const interval = window.setInterval(refreshLocationKey, 500)
-        window.addEventListener("popstate", refreshLocationKey)
-        refreshLocationKey()
-
-        return () => {
-            window.clearInterval(interval)
-            window.removeEventListener("popstate", refreshLocationKey)
-        }
-    }, [])
-
-    useEffect(() => {
-        let disposed = false
         const run = async () => {
             try {
                 const identity = await resolveTripDisplayIdentity({
@@ -3723,11 +3904,13 @@ function useTripDisplayData(props?: any) {
                 if (disposed) return
                 const available = toNumber(payload?.display_summary?.payable_price) > 0
                 setState({ data: payload || null, status: available ? "ready" : "unavailable" })
-            })
-            .catch(() => {
+            } catch (_) {
                 if (disposed) return
                 setState({ data: null, status: "unavailable" })
-            })
+            }
+        }
+
+        void run()
 
         return () => {
             disposed = true

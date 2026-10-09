@@ -89,3 +89,17 @@ Deno.test("all legacy lead routes remain exported and use one guarded submission
     assertStringIncludes(source, 'input[name*="company" i]')
     assertStringIncludes(source, 'Company: ${companyName}')
 })
+
+Deno.test("checkout errors use the accessible responsive toast with safe text rendering", async () => {
+    const source = await read("CheckoutPageOverrides.tsx")
+
+    assertStringIncludes(source, 'const toastId = "__checkout_validation_toast"')
+    assertStringIncludes(source, 'toast.setAttribute("role", "alert")')
+    assertStringIncludes(source, 'toast.setAttribute("aria-live", "assertive")')
+    assertStringIncludes(source, 'title.textContent = titleText')
+    assertStringIncludes(source, 'detail.textContent = detailText')
+    assertStringIncludes(source, 'closeButton.setAttribute("aria-label", "Dismiss message")')
+    assertStringIncludes(source, "@media (max-width: 767px)")
+    assertStringIncludes(source, "@media (prefers-reduced-motion: reduce)")
+    assertStringIncludes(source, "window.setTimeout(dismiss, 6000)")
+})
