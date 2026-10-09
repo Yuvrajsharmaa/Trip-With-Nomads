@@ -1,8 +1,12 @@
 # Feature Preservation Manifest
 
-Status: recovered, staging-verified, merged to `main`, and deployed to production.
+Status: recovered and staging-verified. The 2026-10-09 staging/main source reconciliation was squash-merged to `main` via PR #57; this follow-up Razorpay callback fix is verified on staging and is being promoted through the protected `main` PR before production deployment. Remaining live sign-off items are recorded below rather than being implied by local tests.
 
-Baseline: `origin/main` / `59f8cab2d29b039d2bc59b8965bb45c6ea3b7b35`
+Baseline before the 2026-10-09 reconciliation: `origin/main` / `aa1ea63a5372de804b7b1ac37faf74a3803a1b50`.
+
+Earlier recovery baseline: `origin/main` / `59f8cab2d29b039d2bc59b8965bb45c6ea3b7b35`.
+
+Staging source snapshot: `origin/staging` / `a4e3e42bf10445d5a404c4a229a79129281785fc`.
 
 Recovery source: `/Users/yuvrajsharma/Downloads/Trip-With-Nomads` on `codex/resend-payment-notifications`, intentionally left untouched.
 
@@ -89,6 +93,17 @@ This manifest is the release gate for recovery. A behavior may be changed only w
 
 ## Release sign-off
 
+- [x] This linear reconciliation commit preserves the current staging source tree on top of `main`; both original protected branches and the earlier merge snapshot remain available as separate recovery refs, and no source files are deleted.
+- [x] Local contract suites pass: 103 Framer/function tests, 8 migration-contract tests, and 12 managed-Sheets/worktree tests.
+- [x] Live staging checkout displays the refreshed accessible toast and a valid future trip price; production still displays the older toast design.
+- [x] The prior dirty checkout remains available and untouched; its recovery snapshot is recorded separately.
+- [ ] Complete remaining staging retry, webhook-ordering, Sheet-replay, and email-retry scenarios against the current deployment.
+- [x] Apply the two staging-verified Sheet-projection migrations to production; read-only schema verification confirmed both tables and lock RPCs.
+- [x] Deploy and compare nine relevant production Edge Function bundles against staging; version hashes and JWT settings match.
+- [x] Promote Framer version `8abe561bd` to production; a missing-trip checkout visibly showed the refreshed dismissible toast, and a future Vietnam checkout showed ₹54,999 + ₹2,749.95 GST = ₹57,748.95.
+- [x] Complete the required PR-to-`main` release through policy-compliant squash PR #57.
+- [ ] Final production sign-off still requires live full/partial/failure payment journeys, email-inbox confirmation, and Sheet-replay checks; contract tests and database `synced` state do not substitute for these.
+- [x] No new Google Sheets workbook or tab was created by this reconciliation.
 - [x] Every manifest row has a source review and local contract evidence; staging evidence is recorded in the runbook.
 - [x] No current hardening migration/function was replaced by historical code.
 - [x] Full, failed, and 25% staging payment journeys pass through Razorpay Test Mode; retry/idempotency behavior is covered by contract tests and staging replay checks.
@@ -97,3 +112,5 @@ This manifest is the release gate for recovery. A behavior may be changed only w
 - [x] Every configured lead route and existing Sheet destination passes normalization/idempotency checks; conflicting lead IDs return HTTP 409.
 - [x] No new Google Sheet tab/workbook was created.
 - [x] The dirty checkout remains available and unchanged; its recovery snapshot is recorded separately.
+- [x] Razorpay browser success and failure callbacks return signed status-page redirects on staging without changing payment authority from the verified webhook.
+- [ ] Deploy the callback gateway setting to production and verify fresh success/failure redirect responses before final production sign-off.
