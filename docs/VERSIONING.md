@@ -2,6 +2,13 @@
 
 This repo is set up to prefer a **linear git history** (no merge commits) on protected branches.
 
+When working from the parent Trip With Nomads folder, this repository is only
+one half of a two-repository workspace. The CRM has its own remote, protected
+branches, worktrees, PRs, and release checks. Follow
+[docs/CROSS_REPO_WORKFLOW.md](CROSS_REPO_WORKFLOW.md) for feature classification,
+paired changes, and safe handoff. Never assume a website branch or merge carries
+CRM work with it.
+
 ## Branches
 
 - `staging`: staging-first integration branch.

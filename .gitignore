@@ -60,3 +60,6 @@ framer-website/supabase/supabase/.temp/
 
 # Local scratch repos
 skills-main/
+
+# Separate CRM repository when checked out for shared context
+/trip-with-nomads-crm/

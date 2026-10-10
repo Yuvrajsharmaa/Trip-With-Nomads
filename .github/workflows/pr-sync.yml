@@ -20,13 +20,20 @@ jobs:
           script: |
             const owner = context.repo.owner;
             const repo = context.repo.repo;
-            const sha = context.sha; // PR merge commit sha (strict checks) or pushed sha
+            const pullRequest = context.payload.pull_request;
+            const statusShas = [...new Set([
+              context.sha,
+              pullRequest?.head?.sha,
+              pullRequest?.merge_commit_sha,
+            ].filter(Boolean))];
 
-            await github.rest.repos.createCommitStatus({
-              owner,
-              repo,
-              sha,
-              state: "success",
-              context: "pr-sync",
-              description: "PR sync policy satisfied",
-            });
+            for (const sha of statusShas) {
+              await github.rest.repos.createCommitStatus({
+                owner,
+                repo,
+                sha,
+                state: "success",
+                context: "pr-sync",
+                description: "PR sync policy satisfied",
+              });
+            }
