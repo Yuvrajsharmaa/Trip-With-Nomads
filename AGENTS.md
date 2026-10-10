@@ -1,5 +1,15 @@
 # Repo Guardrails (Read Me First)
 
+## Two-repository workspace
+
+This project is used from a parent workspace that also contains the separate
+`trip-with-nomads-crm` repository. The parent folder is shared context, not a
+single Git repository. Read [docs/CROSS_REPO_WORKFLOW.md](docs/CROSS_REPO_WORKFLOW.md)
+before changing either product, and read the CRM repository's own `AGENTS.md`
+before changing CRM files. Never use `git add .` at the parent, never treat the
+nested CRM folder as website-owned, and never assume a website merge also merges
+CRM. Shared behavior requires a paired branch/PR/checklist in both repositories.
+
 ## Branching / versioning
 
 - Do **not** push directly to `main` or `staging`.
