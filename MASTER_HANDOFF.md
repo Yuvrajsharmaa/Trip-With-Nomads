@@ -1,5 +1,14 @@
 # 🚀 Trip With Nomads — Master Workspace Handoff
 
+> **Current workflow contract:** This folder is the public website/Supabase
+> repository. The adjacent `trip-with-nomads-crm/` folder is a separate GitHub
+> repository with independent branches and deployments. The parent checkout is
+> context-only for agent threads; do not edit or use `git add .` there. Read
+> [docs/CROSS_REPO_WORKFLOW.md](docs/CROSS_REPO_WORKFLOW.md) and the CRM
+> `AGENTS.md` before work that touches both products. The historical notes below
+> are retained for provenance and are not the current payment or branching
+> contract.
+
 This document summarizes the current state of the **Trip with Nomads** project for use in the Framer website workspace.
 
 ## 📂 Project Organization
