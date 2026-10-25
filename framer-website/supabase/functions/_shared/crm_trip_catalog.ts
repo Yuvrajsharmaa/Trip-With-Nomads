@@ -17,6 +17,7 @@ type CatalogTrip = {
 export type WebsiteTripCatalog = {
     id: string
     website_trip_id: string | null
+    is_active: boolean
     title: string
     slug: string
     trip_type: string | null
@@ -66,6 +67,20 @@ function getCatalogPool(): Pool {
 
 function text(value: unknown): string {
     return String(value ?? "").trim()
+}
+
+export function mapWebsiteTripCatalogRow(row: CatalogTrip): WebsiteTripCatalog {
+    return {
+        id: text(row.id),
+        website_trip_id: text(row.website_trip_id) || null,
+        is_active: row.is_active === true,
+        title: text(row.title),
+        slug: text(row.slug),
+        trip_type: text(row.trip_type) || null,
+        region: text(row.region) || null,
+        billing_entity: text(row.billing_entity) || null,
+        is_custom: row.is_custom === true,
+    }
 }
 
 function positiveAmount(value: unknown): number | null {
@@ -131,6 +146,7 @@ export async function loadWebsiteTripCatalogPricing(
             select
               catalog.id::text as id,
               catalog.website_trip_id::text as website_trip_id,
+              catalog.is_active,
               catalog.title,
               catalog.slug,
               catalog.trip_type,
@@ -209,16 +225,7 @@ export async function loadWebsiteTripCatalogPricing(
         if (catalogIds.size !== 1) return null
 
         const first = rows[0]
-        const catalogTrip: WebsiteTripCatalog = {
-            id: first.id,
-            website_trip_id: first.website_trip_id,
-            title: text(first.title),
-            slug: text(first.slug),
-            trip_type: first.trip_type,
-            region: first.region,
-            billing_entity: first.billing_entity,
-            is_custom: first.is_custom === true,
-        }
+        const catalogTrip = mapWebsiteTripCatalogRow(first)
         const departures: WebsiteTripDeparture[] = rows.map((row) => ({
             id: row.departure_id,
             departure_date: row.departure_date,

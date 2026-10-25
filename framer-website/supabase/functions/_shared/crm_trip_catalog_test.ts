@@ -2,6 +2,7 @@ import { assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts"
 import {
     buildWebsiteTripPricingRows,
     buildWebsiteCommercialSnapshot,
+    mapWebsiteTripCatalogRow,
     resolveWebsiteFinanceIssuer,
     validateWebsiteDepartureSelection,
     resolveWebsiteTripCatalog,
@@ -47,6 +48,36 @@ Deno.test("new website trips resolve by the shared ID when no legacy mapping exi
         resolveWebsiteTripCatalog(publicTrip, [{ ...catalogTrip, is_custom: true }]),
         null,
     )
+})
+
+Deno.test("database catalog mapping keeps active state for live website pricing", () => {
+    const catalogTrip = mapWebsiteTripCatalogRow({
+        id: "shared-id",
+        website_trip_id: null,
+        is_active: true,
+        title: "Mapped trip",
+        slug: "mapped-trip",
+        trip_type: "domestic",
+        region: "domestic",
+        billing_entity: "TWN",
+        is_custom: false,
+    })
+
+    assertEquals(catalogTrip.is_active, true)
+    assertEquals(buildWebsiteTripPricingRows({
+        publicTripId: "shared-id",
+        today: "2026-10-26",
+        catalogTrip,
+        departures: [{
+            id: "departure-id",
+            departure_date: "2026-11-22",
+            status: "open",
+            capacity: 12,
+            reserved_count: 0,
+            unverified_booking_count: 0,
+            pricing_options: [{ sharing: "Double", transport: "Ex. Delhi", price: 17499 }],
+        }],
+    }).map((row) => [row.departure_id, row.price]), [["departure-id", 17499]])
 })
 
 Deno.test("custom CRM-only trips cannot be sold through public website checkout", () => {
