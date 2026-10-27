@@ -19,6 +19,15 @@ When the repositories are checked out together, the CRM appears at
 repository and must never be included in a website commit. The two remotes,
 branches, PRs, CI checks, deployments, and worktrees remain independent.
 
+## Email testing safety
+
+For email tests in either repository and in any environment, the only permitted
+recipient is `yuvrajsharma6367@gmail.com`. Never send test emails to random,
+fabricated, customer, or other third-party addresses. Prefer mocks or captured
+messages with delivery disabled. Before running any test that can deliver
+email, enforce and verify that every resolved recipient is the approved
+address. If that cannot be guaranteed, do not send.
+
 ## Parent directory versus editable worktrees
 
 - Treat `/Users/yuvrajsharma/Downloads/Trip-With-Nomads` as a context and
