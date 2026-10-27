@@ -45,6 +45,7 @@ import {
     issueBookingStatusToken,
     resolveBookingStatusSecret,
 } from "../_shared/booking_status_token.ts"
+import { isCrmFinancePaymentEvent } from "./crm_payment_event.ts"
 
 const corsHeaders = {
     "Access-Control-Allow-Origin": "*",
@@ -1041,6 +1042,10 @@ serve(async (req) => {
         event = JSON.parse(rawBody)
     } catch {
         return jsonResponse({ error: "Invalid JSON payload" }, 400)
+    }
+
+    if (isCrmFinancePaymentEvent(event)) {
+        return jsonResponse({ ok: true, ignored: true, reason: "CRM Finance payment event" })
     }
 
     const eventName = firstNonEmpty(event?.event)
