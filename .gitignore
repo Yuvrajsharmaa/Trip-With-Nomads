@@ -17,6 +17,7 @@ dist/
 .env.test.local
 .env.production.local
 *.env*
+/Resend api key.md
 supabase/.temp/
 .supabase/
 framer-website/supabase/.temp/
