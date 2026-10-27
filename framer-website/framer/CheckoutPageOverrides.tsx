@@ -382,12 +382,9 @@ async function openRazorpayCheckout(
 type Traveller = {
     id: number
     name: string
-    gender: string
     transport: string
     sharing: SharingValue | ""
 }
-
-const TRAVELLER_GENDER_OPTIONS = ["Female", "Male", "Non-binary", "Prefer not to say"] as const
 
 type CouponResult = {
     valid: boolean
@@ -455,7 +452,7 @@ const useStore = createStore({
     financeIssuer: null as WebsiteFinanceIssuer | null,
     date: "",
     transport: "",
-    travellers: [{ id: 1, name: "", gender: "", transport: "", sharing: "" }] as Traveller[],
+    travellers: [{ id: 1, name: "", transport: "", sharing: "" }] as Traveller[],
     inviteOnly: false,
     contactName: "",
     contactPhone: "",
@@ -638,7 +635,6 @@ function normalizeTravellers(input: any[]): Traveller[] {
         return {
             id,
             name: typeof item?.name === "string" ? item.name : "",
-            gender: typeof item?.gender === "string" ? item.gender : "",
             transport: typeof item?.transport === "string" ? item.transport : "",
             sharing: normalizeSharing(
                 typeof item?.sharing === "string" ? item.sharing : "",
@@ -647,7 +643,7 @@ function normalizeTravellers(input: any[]): Traveller[] {
     })
 
     if (out.length === 0) {
-        return [{ id: 1, name: "", gender: "", transport: "", sharing: "" }]
+        return [{ id: 1, name: "", transport: "", sharing: "" }]
     }
 
     return out
@@ -2363,36 +2359,6 @@ export function withTravellerList(Component): ComponentType {
                         >
                             <div style={{ display: "grid", gap: "12px", width: "100%" }}>
                                 {row}
-                                <label style={{ display: "grid", gap: "6px", width: "100%", maxWidth: "260px" }}>
-                                    <span style={{ fontSize: "13px", lineHeight: 1.3 }}>Gender</span>
-                                    <select
-                                        aria-label={`Gender for traveller ${index + 1}`}
-                                        aria-required="true"
-                                        required
-                                        value={traveller.gender || ""}
-                                        onChange={(event) => {
-                                            const next = updateTravellerById(store, traveller.id, { gender: event.target.value })
-                                            setStore({ travellers: next })
-                                        }}
-                                        style={{
-                                            appearance: "auto",
-                                            border: "1px solid rgba(20, 20, 20, 0.22)",
-                                            borderRadius: "8px",
-                                            background: "#fff",
-                                            color: "inherit",
-                                            font: "inherit",
-                                            fontSize: "14px",
-                                            minHeight: "44px",
-                                            padding: "0 12px",
-                                            width: "100%",
-                                        }}
-                                    >
-                                        <option value="">Select gender</option>
-                                        {TRAVELLER_GENDER_OPTIONS.map((gender) => (
-                                            <option key={gender} value={gender}>{gender}</option>
-                                        ))}
-                                    </select>
-                                </label>
                             </div>
                         </TravellerContext.Provider>
                     )
@@ -3411,13 +3377,6 @@ export function withCheckoutPayButton(Component): ComponentType {
                 )
                 return
             }
-            const incompleteTraveller = normalizeTravellers(store.travellers || []).some(
-                (traveller) => !String(traveller.name || "").trim() || !String(traveller.gender || "").trim(),
-            )
-            if (incompleteTraveller) {
-                showInlineError("Complete each traveller's name and gender to continue.")
-                return
-            }
             if (!isValid || store.submitting || submitLockRef.current) return
 
             if (store?.inviteOnly) {
@@ -3467,7 +3426,6 @@ export function withCheckoutPayButton(Component): ComponentType {
                 .map((t) => ({
                     id: t.id,
                     name: String(t.name || "").trim(),
-                    gender: String(t.gender || "").trim(),
                     sharing: String(t.sharing || "").trim(),
                     transport: String(t.transport || "").trim(),
                 }))

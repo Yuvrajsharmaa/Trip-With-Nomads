@@ -26,7 +26,19 @@ Deno.test("create-booking persists a checkout request and replays its attempt", 
     assertStringIncludes(source, "billing_snapshot: billingSnapshot")
     assertStringIncludes(source, "commercial_snapshot: commercialSnapshot")
     assertStringIncludes(source, "couponCompatibilityPayload")
-    assertStringIncludes(source, "Enter a name and gender for every traveller")
+    assertStringIncludes(source, "Enter a name for every traveller")
+    if (source.includes("Enter a name and gender for every traveller")) {
+        throw new Error("Website booking must not require gender at checkout")
+    }
+    const travellerValidationStart = source.indexOf(
+        "if (!existingBooking && canonicalTravellers.some",
+    )
+    const travellerValidationEnd = source.indexOf("let billingSnapshot", travellerValidationStart)
+    const travellerValidation = source.slice(travellerValidationStart, travellerValidationEnd)
+    assertStringIncludes(travellerValidation, "(traveller) => !traveller.name")
+    if (travellerValidation.includes("gender")) {
+        throw new Error("Website booking validation must leave gender for CRM follow-up")
+    }
     assertStringIncludes(source, "gender: String(source?.gender || \"\").trim()")
     const localBreakdownSource = source.slice(
         source.indexOf("function buildLocalPricingBreakdown"),
