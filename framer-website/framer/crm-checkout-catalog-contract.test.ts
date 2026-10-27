@@ -15,24 +15,25 @@ Deno.test("checkout gets prices and billing issuer from the shared CRM catalogue
     }
 })
 
-Deno.test("checkout lets customers continue without traveller gender", async () => {
+Deno.test("website checkout does not collect or send traveller gender", async () => {
     const source = await Deno.readTextFile(new URL("./CheckoutPageOverrides.tsx", import.meta.url))
 
-    assertStringIncludes(source, "gender: String(t.gender || \"\").trim()")
-    assertStringIncludes(source, "traveller.gender || \"\"")
-    assertStringIncludes(source, "Gender (optional)")
-    const genderFieldStart = source.indexOf("aria-label={`Gender for traveller")
-    const genderFieldEnd = source.indexOf("</select>", genderFieldStart)
-    const genderField = source.slice(genderFieldStart, genderFieldEnd)
-    if (/aria-required="true"|\brequired\b/.test(genderField)) {
-        throw new Error("Website traveller gender must remain optional")
+    if (source.includes("aria-label={`Gender for traveller") || source.includes("TRAVELLER_GENDER_OPTIONS")) {
+        throw new Error("Website checkout must not render a traveller gender field")
     }
 
     const submitStart = source.indexOf("const submit = async () =>")
     const submitEnd = source.indexOf("submitLockRef.current = true", submitStart)
     const submitGuards = source.slice(submitStart, submitEnd)
     if (submitGuards.includes(".gender")) {
-        throw new Error("Website checkout must not block on gender; Sales collects it in CRM")
+        throw new Error("Website checkout must not validate traveller gender")
+    }
+
+    const travellerPayloadStart = source.indexOf("const normalizedTravellers = normalizeTravellers(store.travellers || [])")
+    const travellerPayloadEnd = source.indexOf("const payload: any = {", travellerPayloadStart)
+    const travellerPayload = source.slice(travellerPayloadStart, travellerPayloadEnd)
+    if (/\bgender\s*:/.test(travellerPayload)) {
+        throw new Error("Website checkout must not send traveller gender")
     }
 })
 
