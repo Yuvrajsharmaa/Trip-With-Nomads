@@ -5,6 +5,7 @@ Deno.test("create-booking persists a checkout request and replays its attempt", 
         new URL("./index.ts", import.meta.url),
     )
 
+    assertStringIncludes(source, 'from "../../../framer/booking-tax.ts"')
     assertStringIncludes(source, "checkout_request_id")
     assertStringIncludes(source, "trip_slug")
     assertStringIncludes(source, "canonicalizing trip ID from slug")
@@ -16,6 +17,29 @@ Deno.test("create-booking persists a checkout request and replays its attempt", 
     assertStringIncludes(source, "gateway: activeProvider")
     assertStringIncludes(source, "todayISTDateKey")
     assertStringIncludes(source, "computeBasePricing")
+    assertStringIncludes(source, "loadWebsiteTripCatalogPricing")
+    assertStringIncludes(source, "validateWebsiteDepartureSelection")
+    assertStringIncludes(source, 'schema("crm").rpc("create_booking_draft"')
+    assertStringIncludes(source, "p_request_key: checkoutRequestId")
+    assertStringIncludes(source, "p_booking: insertPayload")
+    assertStringIncludes(source, "trip_catalog_id: crmTripCatalogId")
+    assertStringIncludes(source, "billing_snapshot: billingSnapshot")
+    assertStringIncludes(source, "commercial_snapshot: commercialSnapshot")
+    assertStringIncludes(source, "couponCompatibilityPayload")
+    assertStringIncludes(source, "Enter a name and gender for every traveller")
+    assertStringIncludes(source, "gender: String(source?.gender || \"\").trim()")
+    const localBreakdownSource = source.slice(
+        source.indexOf("function buildLocalPricingBreakdown"),
+        source.indexOf("function isInviteOnlyTrip"),
+    )
+    assertStringIncludes(localBreakdownSource, "gender: String(traveller.gender || \"\").trim()")
+    assertStringIncludes(source, "buildWebsiteBillingSnapshot")
+    if (source.includes('.from("trip_pricing")')) {
+        throw new Error("create-booking must use Operations catalogue rates, not legacy website pricing")
+    }
+    if (source.includes('.from("bookings")\n                .insert(insertPayload)')) {
+        throw new Error("new website bookings must go through the CRM shared booking RPC")
+    }
     assertStringIncludes(source, "already_paid")
     assertStringIncludes(source, "PAYMENT_PROVIDER_UNSUPPORTED")
     assertStringIncludes(source, "BOOKING_CALLBACK_SHEET_ID")
