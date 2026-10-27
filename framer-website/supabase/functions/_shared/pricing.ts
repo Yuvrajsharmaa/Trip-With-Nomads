@@ -1,11 +1,18 @@
+import {
+    calculateWebsiteBookingTotals,
+    selectWebsiteDiscount,
+    type WebsiteFinanceIssuer,
+} from "../../../framer/booking-tax.ts"
+
 export const TAX_RATE = 0.05
 
-export const SHARING_VALUES = ["Quad", "Triple", "Double"] as const
+export const SHARING_VALUES = ["Quad", "Triple", "Double", "Single"] as const
 export type SharingValue = (typeof SHARING_VALUES)[number]
 
 export type TravellerInput = {
     id?: number
     name?: string
+    gender?: string
     sharing?: string
     transport?: string
     vehicle?: string
@@ -38,6 +45,10 @@ export type PricingQuote = {
     discount_amount_total: number
     taxable_amount: number
     tax_amount: number
+    gst_amount: number
+    tcs_basis: number
+    tcs_amount: number
+    finance_issuer: WebsiteFinanceIssuer
     total_amount: number
     line_items: PricingLineItem[]
     coupon_wins: boolean
@@ -90,6 +101,7 @@ export function normalizeSharing(value: unknown): SharingValue | "" {
     if (lowered.includes("quad")) return "Quad"
     if (lowered.includes("triple")) return "Triple"
     if (lowered.includes("double")) return "Double"
+    if (lowered.includes("single")) return "Single"
 
     return ""
 }
@@ -136,6 +148,9 @@ export function normalizeTravellers(input: any[]): TravellerInput[] {
         return {
             id: parsePositiveId(item?.id, index + 1),
             name: typeof item?.name === "string" ? item.name.trim() : "",
+            ...(typeof item?.gender === "string" && item.gender.trim()
+                ? { gender: item.gender.trim() }
+                : {}),
             sharing: normalizedSharing,
             transport: normalizeVehicle(item?.transport || item?.vehicle),
         }
@@ -188,13 +203,14 @@ function getSharingOptions(pricingRows: any[], departureDate: string, transport:
     const set = new Set<SharingValue>(
         rows
             .map((row: any) => normalizeSharing(row?.sharing || row?.variant_name))
-            .filter((value: SharingValue | ""): value is SharingValue => value === "Quad" || value === "Triple" || value === "Double")
+            .filter((value: SharingValue | ""): value is SharingValue => Boolean(value))
     )
 
     const ordered: SharingValue[] = []
     if (set.has("Quad")) ordered.push("Quad")
     if (set.has("Triple")) ordered.push("Triple")
     if (set.has("Double")) ordered.push("Double")
+    if (set.has("Single")) ordered.push("Single")
     return ordered
 }
 
@@ -537,43 +553,36 @@ export function selectBestDiscount(params: {
     subtotal: number
     earlyBirdDiscountAmount: number
     couponResult: CouponValidationResult
+    issuer?: WebsiteFinanceIssuer
 }) {
     const { subtotal, earlyBirdDiscountAmount, couponResult } = params
     const safeSubtotal = round2(Math.max(0, subtotal))
-    const early = round2(Math.max(0, Math.min(earlyBirdDiscountAmount || 0, safeSubtotal)))
-    const coupon = round2(
-        Math.max(0, Math.min(toNumber(couponResult?.discount_amount || 0), safeSubtotal))
-    )
+    const discount = selectWebsiteDiscount({
+        subtotal: safeSubtotal,
+        earlyBirdDiscount: earlyBirdDiscountAmount,
+        couponDiscount: toNumber(couponResult?.discount_amount || 0),
+    })
+    const source = discount.appliedDiscountSource
+    const appliedCode = source === "coupon" ? couponResult?.code || null : null
 
-    let source: "none" | "early_bird" | "coupon" = "none"
-    let discount = 0
-    let appliedCode: string | null = null
-
-    if (coupon > early && coupon > 0) {
-        source = "coupon"
-        discount = coupon
-        appliedCode = couponResult?.code || null
-    } else if (early > 0) {
-        source = "early_bird"
-        discount = early
-    } else if (coupon > 0) {
-        source = "coupon"
-        discount = coupon
-        appliedCode = couponResult?.code || null
-    }
-
-    const taxable = round2(Math.max(0, safeSubtotal - discount))
-    const tax = round2(taxable * TAX_RATE)
-    const total = round2(taxable + tax)
+    const totals = calculateWebsiteBookingTotals({
+        issuer: params.issuer || "TWN",
+        taxableAmount: safeSubtotal,
+        discountAmount: discount.discountAmountTotal,
+    })
 
     return {
         applied_discount_source: source,
         applied_discount_code: appliedCode,
-        discount_amount_total: round2(discount),
-        taxable_amount: taxable,
-        tax_amount: tax,
-        total_amount: total,
-        coupon_wins: source === "coupon" && coupon > 0,
+        discount_amount_total: discount.discountAmountTotal,
+        taxable_amount: totals.taxableAmount,
+        tax_amount: totals.taxAmount,
+        gst_amount: totals.gstAmount,
+        tcs_basis: totals.tcsBasis,
+        tcs_amount: totals.tcsAmount,
+        finance_issuer: totals.issuer,
+        total_amount: totals.totalAmount,
+        coupon_wins: source === "coupon" && discount.couponDiscountAmount > 0,
     }
 }
 
@@ -582,12 +591,14 @@ export function buildPricingQuote(params: {
     earlyBirdDiscountAmount: number
     couponResult: CouponValidationResult
     lineItems: PricingLineItem[]
+    issuer?: WebsiteFinanceIssuer
 }) {
     const { baseSubtotal, earlyBirdDiscountAmount, couponResult, lineItems } = params
     const selected = selectBestDiscount({
         subtotal: baseSubtotal,
         earlyBirdDiscountAmount,
         couponResult,
+        issuer: params.issuer,
     })
 
     const couponDiscountAmount =
@@ -614,6 +625,10 @@ export function buildPricingQuote(params: {
         discount_amount_total: selected.discount_amount_total,
         taxable_amount: selected.taxable_amount,
         tax_amount: selected.tax_amount,
+        gst_amount: selected.gst_amount,
+        tcs_basis: selected.tcs_basis,
+        tcs_amount: selected.tcs_amount,
+        finance_issuer: selected.finance_issuer,
         total_amount: selected.total_amount,
         line_items: lineItems,
         coupon_wins: selected.coupon_wins,

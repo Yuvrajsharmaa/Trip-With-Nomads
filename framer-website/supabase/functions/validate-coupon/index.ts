@@ -7,6 +7,7 @@ import {
     normalizeTravellers,
     validateCouponAgainstSubtotal,
 } from "../_shared/pricing.ts"
+import { loadWebsiteTripCatalogPricing, resolveWebsiteFinanceIssuer } from "../_shared/crm_trip_catalog.ts"
 
 const corsHeaders = {
     "Access-Control-Allow-Origin": "*",
@@ -56,19 +57,30 @@ Deno.serve(async (req) => {
 
         const supabase = createClient(supabaseUrl, serviceRole)
 
-        const { data: pricingRows, error: pricingError } = await supabase
-            .from("trip_pricing")
-            .select("*")
-            .eq("trip_id", tripId)
+        const { data: publicTrip, error: tripError } = await supabase
+            .from("trips")
+            .select("id, active")
+            .eq("id", tripId)
+            .maybeSingle()
 
-        if (pricingError) {
-            console.error("[validate-coupon] pricing fetch error", pricingError)
-            return json({ valid: false, message: "Could not load pricing" }, 500)
+        if (tripError) {
+            console.error("[validate-coupon] trip lookup error", tripError)
+            return json({ valid: false, message: "Could not load this trip" }, 500)
+        }
+        if (!publicTrip?.id || publicTrip.active !== true) {
+            return json({ valid: false, code: couponCode, message: "This trip is not available for booking" })
         }
 
-        const pricing = Array.isArray(pricingRows) ? pricingRows : []
+        const catalogPricing = await loadWebsiteTripCatalogPricing(tripId)
+        const pricingRows = catalogPricing?.pricingRows || []
+        const issuer = catalogPricing ? resolveWebsiteFinanceIssuer(catalogPricing.catalogTrip) : null
+
+        const pricing = pricingRows
         if (pricing.length === 0) {
-            return json({ valid: false, code: couponCode, message: "No pricing found for this trip" })
+            return json({ valid: false, code: couponCode, message: "No open departures are available for this trip" })
+        }
+        if (!issuer) {
+            return json({ valid: false, code: couponCode, message: "Trip billing details are incomplete" })
         }
         const hasStructuredSharing = pricing.some((row: any) => Boolean(normalizeSharing(row?.sharing)))
         if (!hasStructuredSharing) {
@@ -125,6 +137,7 @@ Deno.serve(async (req) => {
             earlyBirdDiscountAmount: basePricing.earlyBirdDiscountAmount,
             couponResult,
             lineItems: basePricing.lineItems,
+            issuer,
         })
 
         const couponWins = quote.applied_discount_source === "coupon"
@@ -151,6 +164,10 @@ Deno.serve(async (req) => {
             discount_amount_total: quote.discount_amount_total,
             taxable_amount: quote.taxable_amount,
             tax_amount: quote.tax_amount,
+            gst_amount: quote.gst_amount,
+            tcs_basis: quote.tcs_basis,
+            tcs_amount: quote.tcs_amount,
+            finance_issuer: quote.finance_issuer,
             total_amount: quote.total_amount,
             line_items: quote.line_items,
             message,

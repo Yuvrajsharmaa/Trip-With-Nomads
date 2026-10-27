@@ -1,6 +1,11 @@
 import React from "react"
 import type { ComponentType } from "react"
 import { createStore } from "https://framer.com/m/framer/store.js@^1.0.0"
+import {
+    calculateWebsiteBookingTotals,
+    selectWebsiteDiscount,
+    type WebsiteFinanceIssuer,
+} from "./booking-tax.ts"
 
 const CHECKOUT_TIMEZONE = "Asia/Kolkata"
 const CHECKOUT_DATA_REQUEST_TIMEOUT_MS = 8000
@@ -198,7 +203,7 @@ const SUPABASE_KEY = CURRENT_RUNTIME.supabaseAnonKey
 const TAX_RATE = 0.05
 const CHECKOUT_PAGE_URL = `${CURRENT_RUNTIME.siteBaseUrl}/checkout`
 const UPCOMING_TRIPS_BASE_URL = `${CURRENT_RUNTIME.siteBaseUrl}/upcoming-trips`
-const SHARING_VALUES = ["Quad", "Triple", "Double"] as const
+const SHARING_VALUES = ["Quad", "Triple", "Double", "Single"] as const
 type SharingValue = (typeof SHARING_VALUES)[number]
 type PaymentMode = "full" | "partial_25"
 
@@ -377,9 +382,12 @@ async function openRazorpayCheckout(
 type Traveller = {
     id: number
     name: string
+    gender: string
     transport: string
     sharing: SharingValue | ""
 }
+
+const TRAVELLER_GENDER_OPTIONS = ["Female", "Male", "Non-binary", "Prefer not to say"] as const
 
 type CouponResult = {
     valid: boolean
@@ -398,6 +406,10 @@ type CouponResult = {
     discount_amount_total?: number
     taxable_amount?: number
     tax_amount?: number
+    gst_amount?: number
+    tcs_basis?: number
+    tcs_amount?: number
+    finance_issuer?: WebsiteFinanceIssuer
     total_amount?: number
     line_items?: Array<{
         traveller_id: number
@@ -417,6 +429,10 @@ type PricingBreakdown = {
     discount_amount_total: number
     taxable_amount: number
     tax_amount: number
+    gst_amount: number
+    tcs_basis: number
+    tcs_amount: number
+    finance_issuer: WebsiteFinanceIssuer
     total_amount: number
     line_items: Array<{
         traveller_id: number
@@ -436,9 +452,10 @@ const useStore = createStore({
     slug: "",
     tripName: "",
     pricingData: [] as any[],
+    financeIssuer: null as WebsiteFinanceIssuer | null,
     date: "",
     transport: "",
-    travellers: [{ id: 1, name: "", transport: "", sharing: "" }] as Traveller[],
+    travellers: [{ id: 1, name: "", gender: "", transport: "", sharing: "" }] as Traveller[],
     inviteOnly: false,
     contactName: "",
     contactPhone: "",
@@ -473,17 +490,30 @@ function round2(value: number): number {
     return Math.round((Number(value) + Number.EPSILON) * 100) / 100
 }
 
-function calculateTaxInclusiveTotal(taxableAmount: any): {
+function calculateTaxInclusiveTotal(
+    taxableAmount: any,
+    discountAmount: any,
+    issuer: WebsiteFinanceIssuer,
+): {
     taxableAmount: number
     taxAmount: number
+    gstAmount: number
+    tcsBasis: number
+    tcsAmount: number
     totalAmount: number
 } {
-    const taxable = round2(Math.max(0, toNumber(taxableAmount)))
-    const tax = round2(taxable * TAX_RATE)
+    const totals = calculateWebsiteBookingTotals({
+        issuer,
+        taxableAmount: round2(Math.max(0, toNumber(taxableAmount))),
+        discountAmount: round2(Math.max(0, toNumber(discountAmount))),
+    })
     return {
-        taxableAmount: taxable,
-        taxAmount: tax,
-        totalAmount: round2(taxable + tax),
+        taxableAmount: totals.taxableAmount,
+        taxAmount: totals.taxAmount,
+        gstAmount: totals.gstAmount,
+        tcsBasis: totals.tcsBasis,
+        tcsAmount: totals.tcsAmount,
+        totalAmount: totals.totalAmount,
     }
 }
 
@@ -562,13 +592,13 @@ function buildPricingBreakdownFromQuote(
         pickFirstNumber(
             source,
             ["taxable_amount", "taxableSubtotal"],
-            Math.max(0, baseSubtotal - discountAmountTotal),
+            baseSubtotal,
         ),
     )
-    // The quote endpoint is not the final pricing source of truth for GST.
-    // Recompute the inclusive amount so an older response cannot surface or
-    // charge a pre-GST total.
-    const taxInclusive = calculateTaxInclusiveTotal(rawTaxableAmount)
+    const issuer: WebsiteFinanceIssuer = source?.finance_issuer === "NTC" || fallbackStore?.financeIssuer === "NTC"
+        ? "NTC"
+        : "TWN"
+    const taxInclusive = calculateTaxInclusiveTotal(rawTaxableAmount, discountAmountTotal, issuer)
     const taxableAmount = taxInclusive.taxableAmount
     const taxAmount = taxInclusive.taxAmount
     const totalAmount = taxInclusive.totalAmount
@@ -582,6 +612,10 @@ function buildPricingBreakdownFromQuote(
         discount_amount_total: discountAmountTotal,
         taxable_amount: taxableAmount,
         tax_amount: taxAmount,
+        gst_amount: taxInclusive.gstAmount,
+        tcs_basis: taxInclusive.tcsBasis,
+        tcs_amount: taxInclusive.tcsAmount,
+        finance_issuer: issuer,
         total_amount: totalAmount,
         line_items: Array.isArray(source?.line_items) ? source.line_items : fallback.line_items,
     }
@@ -604,6 +638,7 @@ function normalizeTravellers(input: any[]): Traveller[] {
         return {
             id,
             name: typeof item?.name === "string" ? item.name : "",
+            gender: typeof item?.gender === "string" ? item.gender : "",
             transport: typeof item?.transport === "string" ? item.transport : "",
             sharing: normalizeSharing(
                 typeof item?.sharing === "string" ? item.sharing : "",
@@ -612,7 +647,7 @@ function normalizeTravellers(input: any[]): Traveller[] {
     })
 
     if (out.length === 0) {
-        return [{ id: 1, name: "", transport: "", sharing: "" }]
+        return [{ id: 1, name: "", gender: "", transport: "", sharing: "" }]
     }
 
     return out
@@ -664,6 +699,7 @@ function normalizeSharing(value: string): SharingValue | "" {
     if (lower.includes("quad")) return "Quad"
     if (lower.includes("triple")) return "Triple"
     if (lower.includes("double")) return "Double"
+    if (lower.includes("single")) return "Single"
     return ""
 }
 
@@ -926,33 +962,34 @@ function buildLocalPricingBreakdown(store: any): PricingBreakdown {
         Math.max(0, Math.min(earlyBirdDiscount, subtotal)),
     )
 
-    const appliedSource: "none" | "early_bird" | "coupon" = couponDiscount > 0
-        ? "coupon"
-        : earlyDiscount > 0
-        ? "early_bird"
-        : "none"
-
-    const discountTotal = round2(
-        Math.max(0, Math.min(subtotal, earlyDiscount + couponDiscount)),
-    )
-    const taxInclusive = calculateTaxInclusiveTotal(
-        Math.max(0, subtotal - discountTotal)
-    )
+    const selectedDiscount = selectWebsiteDiscount({
+        subtotal,
+        earlyBirdDiscount: earlyDiscount,
+        couponDiscount,
+    })
+    const appliedSource = selectedDiscount.appliedDiscountSource
+    const discountTotal = selectedDiscount.discountAmountTotal
+    const issuer: WebsiteFinanceIssuer = store?.financeIssuer === "NTC" ? "NTC" : "TWN"
+    const taxInclusive = calculateTaxInclusiveTotal(subtotal, discountTotal, issuer)
     const taxable = taxInclusive.taxableAmount
     const tax = taxInclusive.taxAmount
     const total = taxInclusive.totalAmount
 
     return {
         base_subtotal: round2(subtotal),
-        early_bird_discount_amount: appliedSource === "early_bird" ? discountTotal : earlyDiscount,
+        early_bird_discount_amount: earlyDiscount,
         coupon_discount_amount: couponDiscount,
         applied_discount_source: appliedSource,
-        applied_discount_code: couponDiscount > 0
+        applied_discount_code: appliedSource === "coupon"
             ? String(coupon?.code || "").trim().toUpperCase() || null
             : null,
         discount_amount_total: round2(discountTotal),
         taxable_amount: taxable,
         tax_amount: tax,
+        gst_amount: taxInclusive.gstAmount,
+        tcs_basis: taxInclusive.tcsBasis,
+        tcs_amount: taxInclusive.tcsAmount,
+        finance_issuer: issuer,
         total_amount: total,
         line_items: lineItems,
     }
@@ -1042,23 +1079,15 @@ function computeTotals(store: any) {
             ? pricingBreakdown.early_bird_discount_amount
             : 0,
     )
-    const taxableSubtotal = round2(
-        pricingBreakdown.taxable_amount > 0
-            ? pricingBreakdown.taxable_amount
-            : Math.max(0, subtotal - discount),
-    )
-    const computedTaxFromTaxable = round2(taxableSubtotal * TAX_RATE)
-    const taxFromServerTotal = round2(
-        Math.max(0, round2(pricingBreakdown.total_amount) - taxableSubtotal),
-    )
-    const tax = round2(pricingBreakdown.tax_amount) > 0
-        ? round2(pricingBreakdown.tax_amount)
-        : computedTaxFromTaxable > 0
-        ? computedTaxFromTaxable
-        : taxFromServerTotal
-    const total = round2(pricingBreakdown.total_amount) > 0
-        ? round2(pricingBreakdown.total_amount)
-        : round2(taxableSubtotal + tax)
+    const issuer: WebsiteFinanceIssuer = store?.financeIssuer === "NTC" || pricingBreakdown.finance_issuer === "NTC"
+        ? "NTC"
+        : "TWN"
+    const billingTotals = subtotal > 0
+        ? calculateWebsiteBookingTotals({ issuer, taxableAmount: subtotal, discountAmount: discount })
+        : null
+    const taxableSubtotal = subtotal
+    const tax = billingTotals?.taxAmount || 0
+    const total = billingTotals?.totalAmount || 0
     const paymentMode: PaymentMode =
         String(store?.paymentMode || "").trim().toLowerCase() === "partial_25"
             ? "partial_25"
@@ -1075,12 +1104,20 @@ function computeTotals(store: any) {
         discount,
         taxableSubtotal,
         tax,
+        gstAmount: billingTotals?.gstAmount || 0,
+        tcsAmount: billingTotals?.tcsAmount || 0,
+        financeIssuer: issuer,
+        taxLabel: issuer === "NTC" ? "GST + TCS" : "GST (5%)",
         total,
         paymentMode,
         payableNow,
         dueAmount,
-        earlyBirdDiscount: round2(pricingBreakdown.early_bird_discount_amount),
-        couponDiscount: round2(pricingBreakdown.coupon_discount_amount),
+        earlyBirdDiscount: pricingBreakdown.applied_discount_source === "early_bird"
+            ? round2(pricingBreakdown.discount_amount_total)
+            : 0,
+        couponDiscount: pricingBreakdown.applied_discount_source === "coupon"
+            ? round2(pricingBreakdown.coupon_discount_amount)
+            : 0,
         appliedDiscountSource: pricingBreakdown.applied_discount_source,
         appliedDiscountCode: pricingBreakdown.applied_discount_code,
         breakdown,
@@ -1567,30 +1604,6 @@ function isInviteOnlyTrip(pricingRows: any[]): boolean {
     return !hasSharingRows
 }
 
-async function fetchTripPricing(tripId: string): Promise<any[]> {
-    const cleanTripId = (tripId || "").trim()
-    if (!cleanTripId) return []
-
-    const res = await fetchCheckoutDataWithTimeout(
-        `${SUPABASE_URL}/rest/v1/trip_pricing?trip_id=eq.${
-            encodeURIComponent(
-                cleanTripId,
-            )
-        }&select=*`,
-        {
-            priority: "high",
-            headers: {
-                apikey: SUPABASE_KEY,
-                Authorization: `Bearer ${SUPABASE_KEY}`,
-            },
-        } as any,
-    )
-
-    if (!res.ok) return []
-    const rows = await res.json()
-    return Array.isArray(rows) ? rows : []
-}
-
 async function fetchTripDisplayPrice(
     params: { slug?: string; tripId?: string },
 ): Promise<any | null> {
@@ -1610,7 +1623,7 @@ async function fetchTripDisplayPrice(
     const query = new URLSearchParams()
     if (slug) query.set("slug", slug)
     if (tripId) query.set("trip_id", tripId)
-    query.set("v", "3")
+    query.set("v", "4")
 
     const request = fetchCheckoutDataWithTimeout(
         `${SUPABASE_URL}/functions/v1/get-trip-display-price?${query.toString()}`,
@@ -1853,6 +1866,7 @@ export function withCheckoutBootstrap(Component): ComponentType {
                     loading: true,
                     pricingUnavailable: false,
                     pricingData: [],
+                    financeIssuer: null,
                     pricingBreakdown: null,
                     date: "",
                     transport: "",
@@ -1904,11 +1918,18 @@ export function withCheckoutBootstrap(Component): ComponentType {
                     return
                 }
 
-                const [pricing, loadedTripContext] = await Promise.all([
-                    fetchTripPricing(tripId),
+                const [pricingPayload, loadedTripContext] = await Promise.all([
+                    fetchTripDisplayPrice({ tripId }),
                     tripContext ? Promise.resolve(tripContext) : fetchTripContextById(tripId),
                 ])
                 if (disposed) return
+
+                const pricing = Array.isArray(pricingPayload?.pricing_rows)
+                    ? pricingPayload.pricing_rows
+                    : []
+                const financeIssuer: WebsiteFinanceIssuer | null = pricingPayload?.finance_issuer === "TWN" || pricingPayload?.finance_issuer === "NTC"
+                    ? pricingPayload.finance_issuer
+                    : null
 
                 tripContext = loadedTripContext || tripContext
                 if (ctx.tripId && !tripContext) {
@@ -1941,6 +1962,23 @@ export function withCheckoutBootstrap(Component): ComponentType {
                             date: "",
                             transport: "",
                             pricingBreakdown: null,
+                            loading: false,
+                            pricingUnavailable: true,
+                            couponMessageType: "error",
+                            couponMessage: message,
+                        })
+                        showInlineError(message)
+                    }
+                    return
+                }
+                if (!financeIssuer) {
+                    const message = "Trip billing details are not ready. Please contact support."
+                    if (!disposed) {
+                        setStore({
+                            tripId,
+                            slug: String(tripContext?.slug || requestedSlug || ""),
+                            pricingData: [],
+                            financeIssuer: null,
                             loading: false,
                             pricingUnavailable: true,
                             couponMessageType: "error",
@@ -2011,6 +2049,7 @@ export function withCheckoutBootstrap(Component): ComponentType {
                     slug,
                     tripName,
                     pricingData: pricing,
+                    financeIssuer,
                     date,
                     transport,
                     travellers,
@@ -2039,6 +2078,7 @@ export function withCheckoutBootstrap(Component): ComponentType {
                     slug,
                     tripName,
                     pricingData: pricing,
+                    financeIssuer,
                     date,
                     transport,
                     travellers,
@@ -2285,7 +2325,7 @@ export function withCheckoutVehicleSelect(Component): ComponentType {
 
 export function withTravellerList(Component): ComponentType {
     return (props: any) => {
-        const [store] = useStore()
+        const [store, setStore] = useStore()
         const travellers = normalizeTravellers(store.travellers || [])
         const childrenArray = React.Children.toArray(props.children)
         const template = childrenArray.find((child) => React.isValidElement(child)) as
@@ -2321,7 +2361,39 @@ export function withTravellerList(Component): ComponentType {
                             key={`traveller-provider-${traveller.id}`}
                             value={{ id: traveller.id, index }}
                         >
-                            {row}
+                            <div style={{ display: "grid", gap: "12px", width: "100%" }}>
+                                {row}
+                                <label style={{ display: "grid", gap: "6px", width: "100%", maxWidth: "260px" }}>
+                                    <span style={{ fontSize: "13px", lineHeight: 1.3 }}>Gender</span>
+                                    <select
+                                        aria-label={`Gender for traveller ${index + 1}`}
+                                        aria-required="true"
+                                        required
+                                        value={traveller.gender || ""}
+                                        onChange={(event) => {
+                                            const next = updateTravellerById(store, traveller.id, { gender: event.target.value })
+                                            setStore({ travellers: next })
+                                        }}
+                                        style={{
+                                            appearance: "auto",
+                                            border: "1px solid rgba(20, 20, 20, 0.22)",
+                                            borderRadius: "8px",
+                                            background: "#fff",
+                                            color: "inherit",
+                                            font: "inherit",
+                                            fontSize: "14px",
+                                            minHeight: "44px",
+                                            padding: "0 12px",
+                                            width: "100%",
+                                        }}
+                                    >
+                                        <option value="">Select gender</option>
+                                        {TRAVELLER_GENDER_OPTIONS.map((gender) => (
+                                            <option key={gender} value={gender}>{gender}</option>
+                                        ))}
+                                    </select>
+                                </label>
+                            </div>
                         </TravellerContext.Provider>
                     )
                 })}
@@ -2778,6 +2850,10 @@ export function withApplyCouponButton(Component): ComponentType {
                         discount_amount_total: nextBreakdown.discount_amount_total,
                         taxable_amount: nextBreakdown.taxable_amount,
                         tax_amount: nextBreakdown.tax_amount,
+                        gst_amount: nextBreakdown.gst_amount,
+                        tcs_basis: nextBreakdown.tcs_basis,
+                        tcs_amount: nextBreakdown.tcs_amount,
+                        finance_issuer: nextBreakdown.finance_issuer,
                         total_amount: nextBreakdown.total_amount,
                         line_items: nextBreakdown.line_items,
                         message: data.message,
@@ -2993,7 +3069,7 @@ export function withCheckoutTax(Component): ComponentType {
 }
 
 export function withCheckoutTaxLabel(Component): ComponentType {
-    return withTextFromState(() => "Tax (5%)")(Component)
+    return withTextFromState((store) => computeTotals(store).taxLabel)(Component)
 }
 
 export function withCheckoutTaxValue(Component): ComponentType {
@@ -3335,6 +3411,13 @@ export function withCheckoutPayButton(Component): ComponentType {
                 )
                 return
             }
+            const incompleteTraveller = normalizeTravellers(store.travellers || []).some(
+                (traveller) => !String(traveller.name || "").trim() || !String(traveller.gender || "").trim(),
+            )
+            if (incompleteTraveller) {
+                showInlineError("Complete each traveller's name and gender to continue.")
+                return
+            }
             if (!isValid || store.submitting || submitLockRef.current) return
 
             if (store?.inviteOnly) {
@@ -3384,6 +3467,7 @@ export function withCheckoutPayButton(Component): ComponentType {
                 .map((t) => ({
                     id: t.id,
                     name: String(t.name || "").trim(),
+                    gender: String(t.gender || "").trim(),
                     sharing: String(t.sharing || "").trim(),
                     transport: String(t.transport || "").trim(),
                 }))
@@ -3415,9 +3499,13 @@ export function withCheckoutPayButton(Component): ComponentType {
                 pricing_snapshot: {
                     subtotal_amount: totals.subtotal,
                     discount_amount: totals.discount,
+                    taxable_amount: totals.taxableSubtotal,
                     applied_discount_source: totals.appliedDiscountSource,
                     applied_discount_code: totals.appliedDiscountCode,
                     tax_amount: totals.tax,
+                    gst_amount: totals.gstAmount,
+                    tcs_amount: totals.tcsAmount,
+                    finance_issuer: totals.financeIssuer,
                     total_amount: totals.total,
                     payable_now_amount: totals.payableNow,
                     due_amount: totals.dueAmount,

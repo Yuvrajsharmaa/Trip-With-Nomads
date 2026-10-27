@@ -4,12 +4,15 @@ const checkoutSource = await Deno.readTextFile(
     new URL("./CheckoutPageOverrides.tsx", import.meta.url),
 )
 
-Deno.test("checkout derives quoted totals from taxable price plus GST", () => {
+Deno.test("checkout derives discounted tax totals from the trip billing issuer", () => {
     assertStringIncludes(
         checkoutSource,
-        "const taxInclusive = calculateTaxInclusiveTotal(rawTaxableAmount)",
+        "const taxInclusive = calculateTaxInclusiveTotal(rawTaxableAmount, discountAmountTotal, issuer)",
     )
     assertStringIncludes(checkoutSource, "const totalAmount = taxInclusive.totalAmount")
+    assertStringIncludes(checkoutSource, "gst_amount: taxInclusive.gstAmount")
+    assertStringIncludes(checkoutSource, "tcs_amount: taxInclusive.tcsAmount")
+    assertStringIncludes(checkoutSource, "finance_issuer: issuer")
     assert(
         !checkoutSource.includes(
             "pickFirstNumber(source, [\"total_amount\", \"totalAmount\"]",
