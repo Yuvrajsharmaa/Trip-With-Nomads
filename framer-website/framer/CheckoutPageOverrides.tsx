@@ -2364,11 +2364,9 @@ export function withTravellerList(Component): ComponentType {
                             <div style={{ display: "grid", gap: "12px", width: "100%" }}>
                                 {row}
                                 <label style={{ display: "grid", gap: "6px", width: "100%", maxWidth: "260px" }}>
-                                    <span style={{ fontSize: "13px", lineHeight: 1.3 }}>Gender</span>
+                                    <span style={{ fontSize: "13px", lineHeight: 1.3 }}>Gender (optional)</span>
                                     <select
                                         aria-label={`Gender for traveller ${index + 1}`}
-                                        aria-required="true"
-                                        required
                                         value={traveller.gender || ""}
                                         onChange={(event) => {
                                             const next = updateTravellerById(store, traveller.id, { gender: event.target.value })
@@ -2387,7 +2385,7 @@ export function withTravellerList(Component): ComponentType {
                                             width: "100%",
                                         }}
                                     >
-                                        <option value="">Select gender</option>
+                                        <option value="">Choose if you want</option>
                                         {TRAVELLER_GENDER_OPTIONS.map((gender) => (
                                             <option key={gender} value={gender}>{gender}</option>
                                         ))}
@@ -3409,13 +3407,6 @@ export function withCheckoutPayButton(Component): ComponentType {
                     store?.couponMessage ||
                         "Pricing is unavailable for this trip. Please choose another departure.",
                 )
-                return
-            }
-            const incompleteTraveller = normalizeTravellers(store.travellers || []).some(
-                (traveller) => !String(traveller.name || "").trim() || !String(traveller.gender || "").trim(),
-            )
-            if (incompleteTraveller) {
-                showInlineError("Complete each traveller's name and gender to continue.")
                 return
             }
             if (!isValid || store.submitting || submitLockRef.current) return

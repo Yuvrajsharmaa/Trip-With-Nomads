@@ -791,9 +791,9 @@ serve(async (req) => {
             )
         }
 
-        if (!existingBooking && canonicalTravellers.some((traveller) => !traveller.name || !traveller.gender)) {
+        if (!existingBooking && canonicalTravellers.some((traveller) => !traveller.name)) {
             return new Response(
-                JSON.stringify({ error: "Enter a name and gender for every traveller" }),
+                JSON.stringify({ error: "Enter a name for every traveller" }),
                 { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } },
             )
         }

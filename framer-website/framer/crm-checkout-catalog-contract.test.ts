@@ -15,13 +15,25 @@ Deno.test("checkout gets prices and billing issuer from the shared CRM catalogue
     }
 })
 
-Deno.test("checkout records traveller gender for CRM booking readiness", async () => {
+Deno.test("checkout lets customers continue without traveller gender", async () => {
     const source = await Deno.readTextFile(new URL("./CheckoutPageOverrides.tsx", import.meta.url))
 
-    assertStringIncludes(source, "aria-label={`Gender for traveller ${index + 1}`}")
     assertStringIncludes(source, "gender: String(t.gender || \"\").trim()")
     assertStringIncludes(source, "traveller.gender || \"\"")
-    assertStringIncludes(source, "Complete each traveller's name and gender")
+    assertStringIncludes(source, "Gender (optional)")
+    const genderFieldStart = source.indexOf("aria-label={`Gender for traveller")
+    const genderFieldEnd = source.indexOf("</select>", genderFieldStart)
+    const genderField = source.slice(genderFieldStart, genderFieldEnd)
+    if (/aria-required="true"|\brequired\b/.test(genderField)) {
+        throw new Error("Website traveller gender must remain optional")
+    }
+
+    const submitStart = source.indexOf("const submit = async () =>")
+    const submitEnd = source.indexOf("submitLockRef.current = true", submitStart)
+    const submitGuards = source.slice(submitStart, submitEnd)
+    if (submitGuards.includes(".gender")) {
+        throw new Error("Website checkout must not block on gender; Sales collects it in CRM")
+    }
 })
 
 Deno.test("early-bird winning over a coupon does not label the coupon as applied", async () => {

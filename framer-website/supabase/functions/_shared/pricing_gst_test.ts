@@ -1,7 +1,7 @@
 import { assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts"
 import { buildPricingQuote, normalizeTravellers } from "./pricing.ts"
 
-Deno.test("normalizes traveller gender so website bookings meet CRM booking requirements", () => {
+Deno.test("normalizes traveller gender when the website customer supplies it", () => {
     assertEquals(normalizeTravellers([{
         id: 1,
         name: "Asha Guest",
@@ -15,6 +15,22 @@ Deno.test("normalizes traveller gender so website bookings meet CRM booking requ
         sharing: "Double",
         transport: "SUV",
     }])
+})
+
+Deno.test("website traveller pricing accepts a missing gender for CRM follow-up", () => {
+    const [traveller] = normalizeTravellers([{
+        id: 1,
+        name: "Asha Guest",
+        sharing: "Double",
+        transport: "SUV",
+    }])
+
+    assertEquals(traveller, {
+        id: 1,
+        name: "Asha Guest",
+        sharing: "Double",
+        transport: "SUV",
+    })
 })
 
 Deno.test("winning coupon quote keeps GST inside the final trip total and deducts coupon after tax", () => {
