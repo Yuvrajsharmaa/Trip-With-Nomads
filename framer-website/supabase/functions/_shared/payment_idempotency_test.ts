@@ -77,6 +77,9 @@ Deno.test("payment attempt amount matches the current full or agreed partial pay
     assertEquals(expectedBookingPaymentAmountMinor({ payment_mode: "full", total_amount: 25200, payable_now_amount: 4970 }), 2_520_000)
     assertEquals(expectedBookingPaymentAmountMinor({ payment_mode: "partial_25", total_amount: 25200, payable_now_amount: 6300 }), 630_000)
     assertEquals(expectedBookingPaymentAmountMinor({ payment_mode: "partial_25", total_amount: 25200, payable_now_amount: 0 }), 630_000)
+    assertEquals(expectedBookingPaymentAmountMinor({ payment_mode: "partial_25", total_amount: 25200, payable_now_amount: null }), 630_000)
+    assertEquals(expectedBookingPaymentAmountMinor({ payment_mode: "partial_25", total_amount: 25200, payable_now_amount: -1 }), null)
+    assertEquals(expectedBookingPaymentAmountMinor({ payment_mode: "partial_25", total_amount: 25200, payable_now_amount: 25201 }), null)
     assertEquals(expectedBookingPaymentAmountMinor({ payment_mode: "full", total_amount: 0 }), null)
 })
 

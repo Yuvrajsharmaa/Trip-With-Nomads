@@ -103,14 +103,19 @@ export function expectedBookingPaymentAmountMinor(booking: {
     const totalAmount = Number(booking?.total_amount)
     if (!Number.isFinite(totalAmount) || totalAmount <= 0) return null
     const mode = String(booking?.payment_mode || "").trim().toLowerCase()
-    const payableNow = Number(booking?.payable_now_amount)
-    const amount = mode === "partial_25"
-        ? Number.isFinite(payableNow) && payableNow > 0
-            ? payableNow
-            : totalAmount * 0.25
-        : totalAmount
+    let amount = totalAmount
+    if (mode === "partial_25") {
+        if (booking?.payable_now_amount == null) {
+            amount = totalAmount * 0.25
+        } else {
+            const payableNow = Number(booking.payable_now_amount)
+            if (!Number.isFinite(payableNow) || payableNow < 0) return null
+            amount = payableNow > 0 ? payableNow : totalAmount * 0.25
+        }
+    }
     const minor = amountToMinorUnits(amount)
-    return Number.isSafeInteger(minor) && minor > 0 ? minor : null
+    const totalMinor = amountToMinorUnits(totalAmount)
+    return Number.isSafeInteger(minor) && minor > 0 && minor <= totalMinor ? minor : null
 }
 
 export function buildPaymentAttemptInsert(params: PaymentAttemptInsertParams): Record<string, unknown> {
