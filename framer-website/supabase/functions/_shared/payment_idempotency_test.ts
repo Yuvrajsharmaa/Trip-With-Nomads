@@ -8,6 +8,7 @@ import {
     nextPaymentAttemptNumber,
     normalizeIdempotencyKey,
 } from "./payment_idempotency.ts"
+import * as paymentIdempotency from "./payment_idempotency.ts"
 import { assert, assertEquals, assertThrows } from "https://deno.land/std@0.224.0/assert/mod.ts"
 
 Deno.test("normalizes UUID idempotency keys and rejects unsafe keys", async () => {
@@ -114,4 +115,26 @@ Deno.test("idempotent replay requires the original request fingerprint", () => {
     assertEquals(isCompatibleIdempotentReplay("same", "same"), true)
     assertEquals(isCompatibleIdempotentReplay("same", "changed"), false)
     assertEquals(isCompatibleIdempotentReplay(null, "same"), false)
+})
+
+Deno.test("payment attempt replay requires the active unpaid attempt and rejects expired state", () => {
+    const helpers = paymentIdempotency as unknown as Record<string, (...args: any[]) => unknown>
+    assertEquals(typeof helpers.canReplayPaymentAttempt, "function")
+
+    const canReplay = helpers.canReplayPaymentAttempt
+    const attempt = {
+        id: "attempt-1",
+        status: "pending",
+        expires_at: "2026-10-30T13:00:00.000Z",
+    }
+    const booking = {
+        active_payment_attempt_id: "attempt-1",
+        payment_status: "pending",
+        paid_amount: 0,
+    }
+
+    assertEquals(canReplay(attempt, booking, new Date("2026-10-30T12:00:00.000Z")), true)
+    assertEquals(canReplay(attempt, { ...booking, active_payment_attempt_id: "attempt-2" }, new Date("2026-10-30T12:00:00.000Z")), false)
+    assertEquals(canReplay(attempt, { ...booking, payment_status: "paid" }, new Date("2026-10-30T12:00:00.000Z")), false)
+    assertEquals(canReplay(attempt, booking, new Date("2026-10-30T13:00:00.000Z")), false)
 })

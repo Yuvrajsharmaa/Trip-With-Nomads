@@ -21,6 +21,8 @@ Deno.test("create-booking persists a checkout request and replays its attempt", 
     assertStringIncludes(source, "validateWebsiteDepartureSelection")
     assertStringIncludes(source, 'schema("crm").rpc("create_booking_draft"')
     assertStringIncludes(source, 'schema("crm").rpc("reserve_website_booking_payment_attempt"')
+    assertStringIncludes(source, "canReplayPaymentAttempt")
+    assertStringIncludes(source, "PAYMENT_ATTEMPT_STARTING")
     assertStringIncludes(source, "p_expected_booking_updated_at: data.updated_at")
     assertStringIncludes(source, "currentBookingPaymentAmountMinor")
     assertStringIncludes(source, "p_request_key: checkoutRequestId")
@@ -74,6 +76,11 @@ Deno.test("create-booking persists a checkout request and replays its attempt", 
         )
     }
     assertStringIncludes(source, "key_id: credentials.keyId")
+    const replayPreparationGuard = source.indexOf("PAYMENT_ATTEMPT_STARTING")
+    const providerOrderCreate = source.indexOf("order = await createRazorpayOrder")
+    if (replayPreparationGuard < 0 || replayPreparationGuard > providerOrderCreate) {
+        throw new Error("create-booking must stop a same-key replay before it can create another provider order")
+    }
     if (source.includes("key: credentials.keyId")) {
         throw new Error(
             "create-booking must return the key_id field consumed by the checkout client",

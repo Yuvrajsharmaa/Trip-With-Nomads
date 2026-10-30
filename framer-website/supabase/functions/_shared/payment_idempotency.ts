@@ -81,6 +81,36 @@ export function isStalePaymentAttempt(
     return !Number.isNaN(expiry.getTime()) && expiry.getTime() <= now.getTime()
 }
 
+export function canReplayPaymentAttempt(
+    attempt: { id?: unknown; status?: unknown; expires_at?: string | null },
+    booking: { active_payment_attempt_id?: unknown; payment_status?: unknown; paid_amount?: unknown; status?: unknown },
+    now = new Date(),
+): boolean {
+    const attemptId = String(attempt?.id || "").trim().toLowerCase()
+    const activeAttemptId = String(booking?.active_payment_attempt_id || "").trim().toLowerCase()
+    const status = String(attempt?.status || "").trim().toLowerCase()
+    const paymentStatus = String(booking?.payment_status || "").trim().toLowerCase()
+    const bookingStatus = String(booking?.status || "").trim().toLowerCase()
+    const paidAmount = booking?.paid_amount == null ? 0 : Number(booking.paid_amount)
+
+    return Boolean(
+        attemptId &&
+        attemptId === activeAttemptId &&
+        (status === "creating" || status === "pending") &&
+        paymentStatus !== "paid" &&
+        paymentStatus !== "succeeded" &&
+        bookingStatus !== "cancelled" &&
+        bookingStatus !== "canceled" &&
+        Number.isFinite(paidAmount) &&
+        paidAmount === 0 &&
+        !isStalePaymentAttempt({ status, expiresAt: attempt?.expires_at }, now),
+    )
+}
+
+export function hasPaymentAttemptProviderOrder(attempt: { provider_order_id?: unknown }): boolean {
+    return Boolean(String(attempt?.provider_order_id || "").trim())
+}
+
 export function nextPaymentAttemptNumber(attempts: Array<{ attempt_no?: unknown }>): number {
     const highest = (Array.isArray(attempts) ? attempts : []).reduce((max, attempt) => {
         const value = Number(attempt?.attempt_no)

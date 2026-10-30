@@ -7,8 +7,10 @@ import {
 } from "../_shared/booking_status_token.ts"
 import {
     buildPaymentAttemptInsert,
+    canReplayPaymentAttempt,
     expectedBookingPaymentAmountMinor,
     fingerprintBookingRequest,
+    hasPaymentAttemptProviderOrder,
     isCompatibleIdempotentReplay,
     normalizeIdempotencyKey,
 } from "../_shared/payment_idempotency.ts"
@@ -1298,6 +1300,19 @@ serve(async (req) => {
             }, 409)
         }
 
+        if (replayed && paymentAttempt && !canReplayPaymentAttempt(paymentAttempt, data)) {
+            return responseJson({
+                error: "This payment request is no longer active. Refresh the booking status before trying again.",
+                code: "PAYMENT_ATTEMPT_CONFLICT",
+            }, 409)
+        }
+        if (replayed && paymentAttempt && !hasPaymentAttemptProviderOrder(paymentAttempt)) {
+            return responseJson({
+                error: "This payment is already starting. Wait a moment, then refresh before trying again.",
+                code: "PAYMENT_ATTEMPT_STARTING",
+            }, 409)
+        }
+
         if (!paymentAttempt) {
             const attemptPayload = buildPaymentAttemptInsert({
                 bookingId: data.id,
@@ -1349,7 +1364,14 @@ serve(async (req) => {
                 }, conflict ? 409 : 500)
             }
             paymentAttempt = reservationRow.payment_attempt
-            replayed = replayed || reservationRow.replayed === true
+            const reservationReplayed = reservationRow.replayed === true
+            replayed = replayed || reservationReplayed
+            if (reservationReplayed && !hasPaymentAttemptProviderOrder(paymentAttempt)) {
+                return responseJson({
+                    error: "This payment is already starting. Wait a moment, then refresh before trying again.",
+                    code: "PAYMENT_ATTEMPT_STARTING",
+                }, 409)
+            }
         }
         notificationBooking = {
             ...data,
@@ -1477,7 +1499,7 @@ serve(async (req) => {
                 throw new Error("Razorpay payment configuration missing")
             }
 
-            let orderId = firstNonEmpty(paymentAttempt.provider_order_id, data.payment_gateway_order_or_ref_id)
+            let orderId = String(paymentAttempt.provider_order_id || "").trim()
             let order: any = orderId ? { id: orderId, amount: Math.round(effectivePayableNowAmount * 100), currency } : null
             if (!orderId) {
                 order = await createRazorpayOrder({

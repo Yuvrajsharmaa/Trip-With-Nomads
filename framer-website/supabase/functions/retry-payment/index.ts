@@ -2,7 +2,9 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2"
 import {
     buildPaymentAttemptInsert,
     canStartPaymentRetry,
+    canReplayPaymentAttempt,
     expectedBookingPaymentAmountMinor,
+    hasPaymentAttemptProviderOrder,
     isUuid,
     isStalePaymentAttempt,
     nextPaymentAttemptNumber,
@@ -60,7 +62,7 @@ async function buildRazorpayPayload(params: {
     if (!credentials.keyId || !credentials.keySecret) {
         throw new Error("Razorpay payment configuration missing")
     }
-    let orderId = String(params.attempt?.provider_order_id || params.booking?.payment_gateway_order_or_ref_id || "").trim()
+    let orderId = String(params.attempt?.provider_order_id || "").trim()
     if (!orderId) {
         const order = await createRazorpayOrder({
             amount: Math.max(0, toNumber(params.attempt?.amount_minor) / 100),
@@ -215,6 +217,18 @@ Deno.serve(async (req) => {
                 return responseJson({
                     error: "The booking price changed after this payment attempt. Refresh before trying again.",
                     code: "BOOKING_PRICE_CHANGED",
+                }, 409)
+            }
+            if (!canReplayPaymentAttempt(existingRequest.data, booking)) {
+                return responseJson({
+                    error: "This payment request is no longer active. Refresh the booking status before trying again.",
+                    code: "PAYMENT_ATTEMPT_CONFLICT",
+                }, 409)
+            }
+            if (!hasPaymentAttemptProviderOrder(existingRequest.data)) {
+                return responseJson({
+                    error: "This payment is already starting. Wait a moment, then refresh before trying again.",
+                    code: "PAYMENT_ATTEMPT_STARTING",
                 }, 409)
             }
 
@@ -387,6 +401,12 @@ Deno.serve(async (req) => {
         }
         const paymentAttempt = reservationRow.payment_attempt
         const replayed = reservationRow.replayed === true
+        if (replayed && !hasPaymentAttemptProviderOrder(paymentAttempt)) {
+            return responseJson({
+                error: "This payment is already starting. Wait a moment, then refresh before trying again.",
+                code: "PAYMENT_ATTEMPT_STARTING",
+            }, 409)
+        }
         notificationAttempt = paymentAttempt
 
         const statusSecret = resolveBookingStatusSecret(String(
