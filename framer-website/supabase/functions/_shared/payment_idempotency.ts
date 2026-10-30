@@ -81,6 +81,36 @@ export function isStalePaymentAttempt(
     return !Number.isNaN(expiry.getTime()) && expiry.getTime() <= now.getTime()
 }
 
+export function canReplayPaymentAttempt(
+    attempt: { id?: unknown; status?: unknown; expires_at?: string | null },
+    booking: { active_payment_attempt_id?: unknown; payment_status?: unknown; paid_amount?: unknown; status?: unknown },
+    now = new Date(),
+): boolean {
+    const attemptId = String(attempt?.id || "").trim().toLowerCase()
+    const activeAttemptId = String(booking?.active_payment_attempt_id || "").trim().toLowerCase()
+    const status = String(attempt?.status || "").trim().toLowerCase()
+    const paymentStatus = String(booking?.payment_status || "").trim().toLowerCase()
+    const bookingStatus = String(booking?.status || "").trim().toLowerCase()
+    const paidAmount = booking?.paid_amount == null ? 0 : Number(booking.paid_amount)
+
+    return Boolean(
+        attemptId &&
+        attemptId === activeAttemptId &&
+        (status === "creating" || status === "pending") &&
+        paymentStatus !== "paid" &&
+        paymentStatus !== "succeeded" &&
+        bookingStatus !== "cancelled" &&
+        bookingStatus !== "canceled" &&
+        Number.isFinite(paidAmount) &&
+        paidAmount === 0 &&
+        !isStalePaymentAttempt({ status, expiresAt: attempt?.expires_at }, now),
+    )
+}
+
+export function hasPaymentAttemptProviderOrder(attempt: { provider_order_id?: unknown }): boolean {
+    return Boolean(String(attempt?.provider_order_id || "").trim())
+}
+
 export function nextPaymentAttemptNumber(attempts: Array<{ attempt_no?: unknown }>): number {
     const highest = (Array.isArray(attempts) ? attempts : []).reduce((max, attempt) => {
         const value = Number(attempt?.attempt_no)
@@ -93,6 +123,29 @@ export function amountToMinorUnits(value: unknown): number {
     const amount = Number(value)
     if (!Number.isFinite(amount) || amount < 0) return 0
     return Math.round((amount + Number.EPSILON) * 100)
+}
+
+export function expectedBookingPaymentAmountMinor(booking: {
+    payment_mode?: unknown
+    total_amount?: unknown
+    payable_now_amount?: unknown
+}): number | null {
+    const totalAmount = Number(booking?.total_amount)
+    if (!Number.isFinite(totalAmount) || totalAmount <= 0) return null
+    const mode = String(booking?.payment_mode || "").trim().toLowerCase()
+    let amount = totalAmount
+    if (mode === "partial_25") {
+        if (booking?.payable_now_amount == null) {
+            amount = totalAmount * 0.25
+        } else {
+            const payableNow = Number(booking.payable_now_amount)
+            if (!Number.isFinite(payableNow) || payableNow < 0) return null
+            amount = payableNow > 0 ? payableNow : totalAmount * 0.25
+        }
+    }
+    const minor = amountToMinorUnits(amount)
+    const totalMinor = amountToMinorUnits(totalAmount)
+    return Number.isSafeInteger(minor) && minor > 0 && minor <= totalMinor ? minor : null
 }
 
 export function buildPaymentAttemptInsert(params: PaymentAttemptInsertParams): Record<string, unknown> {
