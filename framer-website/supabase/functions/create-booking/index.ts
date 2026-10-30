@@ -7,6 +7,7 @@ import {
 } from "../_shared/booking_status_token.ts"
 import {
     buildPaymentAttemptInsert,
+    expectedBookingPaymentAmountMinor,
     fingerprintBookingRequest,
     isCompatibleIdempotentReplay,
     normalizeIdempotencyKey,
@@ -38,6 +39,13 @@ const corsHeaders = {
     "Access-Control-Allow-Origin": "*",
     "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
     "Access-Control-Allow-Methods": "POST, OPTIONS",
+}
+
+function responseJson(payload: Record<string, unknown>, status = 200): Response {
+    return new Response(JSON.stringify(payload), {
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+        status,
+    })
 }
 
 type PaymentMode = "full" | "partial_25"
@@ -1234,17 +1242,32 @@ serve(async (req) => {
                 coupon_code: couponCodeToPersist,
                 coupon_snapshot: couponSnapshotToPersist,
             }
+            if (!data.updated_at) {
+                return responseJson({
+                    error: "The booking changed while checkout was open. Refresh checkout before trying again.",
+                    code: "BOOKING_PRICE_CHANGED",
+                }, 409)
+            }
             const couponCompatibilityWrite = await supabase
                 .from("bookings")
                 .update(couponCompatibilityPayload)
                 .eq("id", data.id)
+                .eq("updated_at", data.updated_at)
+                .select("*")
+                .maybeSingle()
             if (couponCompatibilityWrite.error) {
                 return new Response(
                     JSON.stringify({ error: couponCompatibilityWrite.error.message || "Could not save the applied coupon" }),
                     { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } },
                 )
             }
-            data = { ...data, ...couponCompatibilityPayload }
+            if (!couponCompatibilityWrite.data) {
+                return responseJson({
+                    error: "The booking changed while checkout was open. Refresh checkout before trying again.",
+                    code: "BOOKING_PRICE_CHANGED",
+                }, 409)
+            }
+            data = couponCompatibilityWrite.data
         }
 
         const latestAttemptLookup = await supabase
@@ -1261,6 +1284,20 @@ serve(async (req) => {
         }
 
         let paymentAttempt = Array.isArray(latestAttemptLookup.data) ? latestAttemptLookup.data[0] : null
+        const currentBookingPaymentAmountMinor = expectedBookingPaymentAmountMinor(data)
+        if (currentBookingPaymentAmountMinor === null) {
+            return responseJson({
+                error: "The booking payment amount could not be confirmed. Refresh checkout before trying again.",
+                code: "BOOKING_AMOUNT_UNAVAILABLE",
+            }, 409)
+        }
+        if (paymentAttempt && Number(paymentAttempt.amount_minor) !== currentBookingPaymentAmountMinor) {
+            return responseJson({
+                error: "The booking price changed after this checkout started. Refresh checkout before trying again.",
+                code: "BOOKING_PRICE_CHANGED",
+            }, 409)
+        }
+
         if (!paymentAttempt) {
             const attemptPayload = buildPaymentAttemptInsert({
                 bookingId: data.id,
@@ -1273,49 +1310,46 @@ serve(async (req) => {
             })
             attemptPayload.expires_at = new Date(Date.now() + 30 * 60 * 1000).toISOString()
 
-            const attemptInsert = await supabase
-                .from("payment_attempts")
-                .insert(attemptPayload)
-                .select("*")
-                .single()
-            if (attemptInsert.error && !isUniqueViolation(attemptInsert.error)) {
+            if (Number(attemptPayload.amount_minor) !== currentBookingPaymentAmountMinor || !data.updated_at) {
                 return new Response(
-                    JSON.stringify({ error: attemptInsert.error.message || "Could not create payment attempt" }),
-                    { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } },
+                    JSON.stringify({
+                        error: "The booking price changed after this checkout started. Refresh checkout before trying again.",
+                        code: "BOOKING_PRICE_CHANGED",
+                    }),
+                    { status: 409, headers: { ...corsHeaders, "Content-Type": "application/json" } },
                 )
             }
 
-            if (attemptInsert.data) {
-                paymentAttempt = attemptInsert.data
-            } else {
-                const replayAttempt = await supabase
-                    .from("payment_attempts")
-                    .select("*")
-                    .eq("idempotency_key", checkoutRequestId)
-                    .maybeSingle()
-                if (replayAttempt.error || !replayAttempt.data) {
-                    return new Response(
-                        JSON.stringify({ error: replayAttempt.error?.message || "Could not resolve payment attempt" }),
-                        { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } },
-                    )
-                }
-                paymentAttempt = replayAttempt.data
-            }
-        }
-
-        const activeAttemptUpdate = await supabase
-            .from("bookings")
-            .update({
-                active_payment_attempt_id: paymentAttempt.id,
-                payment_attempt_number: paymentAttempt.attempt_no || 1,
-                payment_provider: paymentAttempt.provider || paymentProvider,
+            const reservation = await supabase.schema("crm").rpc("reserve_website_booking_payment_attempt", {
+                p_booking_id: data.id,
+                p_idempotency_key: attemptPayload.idempotency_key,
+                p_expected_booking_updated_at: data.updated_at,
+                p_attempt_no: attemptPayload.attempt_no,
+                p_provider: attemptPayload.provider,
+                p_amount_minor: attemptPayload.amount_minor,
+                p_currency: attemptPayload.currency,
+                p_status: attemptPayload.status,
+                p_expires_at: attemptPayload.expires_at,
             })
-            .eq("id", data.id)
-        if (activeAttemptUpdate.error && !isMissingColumnError(activeAttemptUpdate.error, "active_payment_attempt_id")) {
-            return new Response(
-                JSON.stringify({ error: activeAttemptUpdate.error.message || "Could not link payment attempt" }),
-                { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } },
-            )
+            const reservationRow = Array.isArray(reservation.data) ? reservation.data[0] : reservation.data
+            if (reservation.error || !reservationRow?.payment_attempt) {
+                const message = reservation.error?.message || "Could not reserve this payment attempt"
+                const sqlState = reservation.error?.code
+                const conflict = ["40001", "23505", "23514"].includes(sqlState)
+                const code = sqlState === "40001"
+                    ? "BOOKING_PRICE_CHANGED"
+                    : sqlState === "23505"
+                        ? "IDEMPOTENCY_CONFLICT"
+                        : sqlState === "23514"
+                            ? "PAYMENT_ATTEMPT_CONFLICT"
+                            : "PAYMENT_ATTEMPT_RESERVATION_FAILED"
+                return responseJson({
+                    error: message,
+                    code,
+                }, conflict ? 409 : 500)
+            }
+            paymentAttempt = reservationRow.payment_attempt
+            replayed = replayed || reservationRow.replayed === true
         }
         notificationBooking = {
             ...data,

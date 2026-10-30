@@ -1,6 +1,7 @@
 import {
     buildPaymentAttemptInsert,
     canStartPaymentRetry,
+    expectedBookingPaymentAmountMinor,
     fingerprintBookingRequest,
     isCompatibleIdempotentReplay,
     isStalePaymentAttempt,
@@ -70,6 +71,13 @@ Deno.test("stale pending attempts become explicitly retryable only after expiry"
 Deno.test("next attempt number is monotonic", () => {
     assertEquals(nextPaymentAttemptNumber([]), 1)
     assertEquals(nextPaymentAttemptNumber([{ attempt_no: 1 }, { attempt_no: 3 }, { attempt_no: 2 }]), 4)
+})
+
+Deno.test("payment attempt amount matches the current full or agreed partial payment", () => {
+    assertEquals(expectedBookingPaymentAmountMinor({ payment_mode: "full", total_amount: 25200, payable_now_amount: 4970 }), 2_520_000)
+    assertEquals(expectedBookingPaymentAmountMinor({ payment_mode: "partial_25", total_amount: 25200, payable_now_amount: 6300 }), 630_000)
+    assertEquals(expectedBookingPaymentAmountMinor({ payment_mode: "partial_25", total_amount: 25200, payable_now_amount: 0 }), 630_000)
+    assertEquals(expectedBookingPaymentAmountMinor({ payment_mode: "full", total_amount: 0 }), null)
 })
 
 Deno.test("payment attempt rows use minor units and provider-neutral fields", () => {

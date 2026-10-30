@@ -2,6 +2,7 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2"
 import {
     buildPaymentAttemptInsert,
     canStartPaymentRetry,
+    expectedBookingPaymentAmountMinor,
     isUuid,
     isStalePaymentAttempt,
     nextPaymentAttemptNumber,
@@ -39,10 +40,6 @@ function toNumber(value: any): number {
 
 function round2(value: number): number {
     return Math.round((Number(value) + Number.EPSILON) * 100) / 100
-}
-
-function isUniqueViolation(error: any): boolean {
-    return String(error?.code || "").trim() === "23505"
 }
 
 function responseJson(payload: Record<string, unknown>, status = 200): Response {
@@ -160,6 +157,13 @@ Deno.serve(async (req) => {
             return responseJson({ error: "Booking not found" }, 404)
         }
         notificationBooking = booking as PaymentEmailBooking
+        const expectedPaymentAmountMinor = expectedBookingPaymentAmountMinor(booking)
+        if (expectedPaymentAmountMinor === null) {
+            return responseJson({
+                error: "The booking payment amount could not be confirmed. Refresh before trying again.",
+                code: "BOOKING_AMOUNT_UNAVAILABLE",
+            }, 409)
+        }
 
         const notifyRetryStarted = async (attempt: any, orderId: string) => {
             notificationAttempt = attempt
@@ -205,6 +209,12 @@ Deno.serve(async (req) => {
                 return responseJson({
                     error: "retry_request_id was already used for another booking",
                     code: "IDEMPOTENCY_CONFLICT",
+                }, 409)
+            }
+            if (Number(existingRequest.data.amount_minor) !== expectedPaymentAmountMinor) {
+                return responseJson({
+                    error: "The booking price changed after this payment attempt. Refresh before trying again.",
+                    code: "BOOKING_PRICE_CHANGED",
                 }, 409)
             }
 
@@ -340,54 +350,44 @@ Deno.serve(async (req) => {
             status: "pending",
         })
         attemptPayload.expires_at = new Date(Date.now() + 30 * 60 * 1000).toISOString()
-
-        const attemptInsert = await supabase
-            .from("payment_attempts")
-            .insert(attemptPayload)
-            .select("*")
-            .single()
-        let paymentAttempt = attemptInsert.data
-        let replayed = false
-
-        if (attemptInsert.error && isUniqueViolation(attemptInsert.error)) {
-            const concurrentRequest = await supabase
-                .from("payment_attempts")
-                .select("*")
-                .eq("idempotency_key", retryRequestId)
-                .maybeSingle()
-            if (concurrentRequest.data) {
-                if (String(concurrentRequest.data.booking_id) !== String(booking.id)) {
-                    return responseJson({
-                        error: "retry_request_id was already used for another booking",
-                        code: "IDEMPOTENCY_CONFLICT",
-                    }, 409)
-                }
-                paymentAttempt = concurrentRequest.data
-                replayed = true
-            } else {
-                return responseJson({
-                    error: "Another payment attempt is already active for this booking",
-                    code: "RETRY_IN_PROGRESS",
-                }, 409)
-            }
+        if (!booking.updated_at || Number(attemptPayload.amount_minor) !== expectedPaymentAmountMinor) {
+            return responseJson({
+                error: "The booking price changed after this payment retry started. Refresh before trying again.",
+                code: "BOOKING_PRICE_CHANGED",
+            }, 409)
         }
 
-        if (attemptInsert.error && !paymentAttempt) {
-            throw new Error(attemptInsert.error.message || "Could not create payment attempt")
+        const reservation = await supabase.schema("crm").rpc("reserve_website_booking_payment_attempt", {
+            p_booking_id: booking.id,
+            p_idempotency_key: attemptPayload.idempotency_key,
+            p_expected_booking_updated_at: booking.updated_at,
+            p_attempt_no: attemptPayload.attempt_no,
+            p_provider: attemptPayload.provider,
+            p_amount_minor: attemptPayload.amount_minor,
+            p_currency: attemptPayload.currency,
+            p_status: attemptPayload.status,
+            p_expires_at: attemptPayload.expires_at,
+        })
+        const reservationRow = Array.isArray(reservation.data) ? reservation.data[0] : reservation.data
+        if (reservation.error || !reservationRow?.payment_attempt) {
+            const message = reservation.error?.message || "Could not reserve this payment retry"
+            const sqlState = reservation.error?.code
+            const conflict = ["40001", "23505", "23514"].includes(sqlState)
+            const code = sqlState === "40001"
+                ? "BOOKING_PRICE_CHANGED"
+                : sqlState === "23505"
+                    ? "IDEMPOTENCY_CONFLICT"
+                    : sqlState === "23514"
+                        ? "PAYMENT_ATTEMPT_CONFLICT"
+                        : "PAYMENT_ATTEMPT_RESERVATION_FAILED"
+            return responseJson({
+                error: message,
+                code,
+            }, conflict ? 409 : 500)
         }
+        const paymentAttempt = reservationRow.payment_attempt
+        const replayed = reservationRow.replayed === true
         notificationAttempt = paymentAttempt
-
-        const bookingUpdate = await supabase
-            .from("bookings")
-            .update({
-                payment_status: "pending",
-                settlement_status: "pending",
-                active_payment_attempt_id: paymentAttempt.id,
-                payment_attempt_number: paymentAttempt.attempt_no,
-                payment_provider: paymentAttempt.provider || paymentProvider,
-            })
-            .eq("id", booking.id)
-        if (bookingUpdate.error) throw new Error(bookingUpdate.error.message || "Could not update booking retry state")
 
         const statusSecret = resolveBookingStatusSecret(String(
             Deno.env.get("PAYMENT_STATUS_SECRET") ||

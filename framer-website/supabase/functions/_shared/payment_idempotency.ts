@@ -95,6 +95,24 @@ export function amountToMinorUnits(value: unknown): number {
     return Math.round((amount + Number.EPSILON) * 100)
 }
 
+export function expectedBookingPaymentAmountMinor(booking: {
+    payment_mode?: unknown
+    total_amount?: unknown
+    payable_now_amount?: unknown
+}): number | null {
+    const totalAmount = Number(booking?.total_amount)
+    if (!Number.isFinite(totalAmount) || totalAmount <= 0) return null
+    const mode = String(booking?.payment_mode || "").trim().toLowerCase()
+    const payableNow = Number(booking?.payable_now_amount)
+    const amount = mode === "partial_25"
+        ? Number.isFinite(payableNow) && payableNow > 0
+            ? payableNow
+            : totalAmount * 0.25
+        : totalAmount
+    const minor = amountToMinorUnits(amount)
+    return Number.isSafeInteger(minor) && minor > 0 ? minor : null
+}
+
 export function buildPaymentAttemptInsert(params: PaymentAttemptInsertParams): Record<string, unknown> {
     const provider = String(params.provider || "unknown").trim().toLowerCase() || "unknown"
     const currency = String(params.currency || "INR").trim().toUpperCase() || "INR"
