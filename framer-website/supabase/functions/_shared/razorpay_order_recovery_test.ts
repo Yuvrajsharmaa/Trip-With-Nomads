@@ -174,6 +174,7 @@ Deno.test("retry reuses only an unpaid matching created or attempted order", () 
         assertEquals(
             canReuseRazorpayOrderForRetry(order({
                 status,
+                attempts: status === "created" ? 0 : 1,
                 amount_due: 120000,
                 amount_paid: 0,
             }), params),
@@ -183,10 +184,12 @@ Deno.test("retry reuses only an unpaid matching created or attempted order", () 
 
     for (const changed of [
         { status: "paid", amount_due: 0, amount_paid: 120000 },
-        { status: "attempted", amount_due: 60000, amount_paid: 60000 },
-        { status: "attempted", amount_due: 90000, amount_paid: 0 },
-        { status: "attempted", amount_due: 120000, amount_paid: 0, currency: "USD" },
-        { status: "attempted", amount_due: 120000, amount_paid: 0, notes: { booking_id: "other" } },
+        { status: "attempted", attempts: 1, amount_due: 60000, amount_paid: 60000 },
+        { status: "attempted", attempts: 1, amount_due: 90000, amount_paid: 0 },
+        { status: "attempted", attempts: 1, amount_due: 120000, amount_paid: 0, currency: "USD" },
+        { status: "attempted", attempts: 1, amount_due: 120000, amount_paid: 0, notes: { booking_id: "other" } },
+        { status: "attempted", attempts: 0, amount_due: 120000, amount_paid: 0 },
+        { status: "created", attempts: 1, amount_due: 120000, amount_paid: 0 },
     ]) {
         assertEquals(canReuseRazorpayOrderForRetry(order(changed), params), false)
     }

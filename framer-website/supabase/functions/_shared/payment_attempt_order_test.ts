@@ -269,10 +269,18 @@ Deno.test("retry reactivates the same failed attempt and reuses its unpaid provi
     const methods: string[] = []
     const request: typeof fetch = async (input, init) => {
         methods.push(String((init as any)?.method || "GET").toUpperCase())
-        assertEquals(String(input), "https://api.razorpay.com/v1/orders/order_canonical")
+        const url = new URL(String(input))
+        if (url.pathname.endsWith("/payments")) {
+            return new Response(JSON.stringify({
+                count: 1,
+                items: [{ id: "pay_failed", order_id: canonicalOrder.id, status: "failed" }],
+            }), { status: 200 })
+        }
+        assertEquals(url.pathname, "/v1/orders/order_canonical")
         return new Response(JSON.stringify({
             ...canonicalOrder,
             status: "attempted",
+            attempts: 1,
             amount_paid: 0,
             amount_due: 120000,
         }), { status: 200 })
@@ -293,19 +301,27 @@ Deno.test("retry reactivates the same failed attempt and reuses its unpaid provi
     assertEquals(resumed?.status, "pending")
     assertEquals(supabase.row.provider_order_id, canonicalOrder.id)
     assertEquals(supabase.row.expires_at, "2026-11-01T00:30:00.000Z")
-    assertEquals(methods, ["GET"])
+    assertEquals(methods, ["GET", "GET"])
 })
 
 Deno.test("retry persists the new request identity when reusing a failed attempt", async () => {
     const existing = attempt("failed", canonicalOrder.id)
     const supabase = database(existing)
-    const request: typeof fetch = async () =>
-        new Response(JSON.stringify({
+    const request: typeof fetch = async (input) => {
+        if (String(input).endsWith("/payments")) {
+            return new Response(JSON.stringify({
+                count: 1,
+                items: [{ id: "pay_failed", order_id: canonicalOrder.id, status: "failed" }],
+            }), { status: 200 })
+        }
+        return new Response(JSON.stringify({
             ...canonicalOrder,
             status: "attempted",
+            attempts: 1,
             amount_paid: 0,
             amount_due: 120000,
         }), { status: 200 })
+    }
 
     const resumed = await reactivatePayablePaymentAttempt({
         supabase,
@@ -326,13 +342,21 @@ Deno.test("retry persists the new request identity when reusing a failed attempt
 Deno.test("concurrent retries with different keys cannot both claim a reused attempt", async () => {
     const existing = attempt("failed", canonicalOrder.id)
     const supabase = database(existing)
-    const request: typeof fetch = async () =>
-        new Response(JSON.stringify({
+    const request: typeof fetch = async (input) => {
+        if (String(input).endsWith("/payments")) {
+            return new Response(JSON.stringify({
+                count: 1,
+                items: [{ id: "pay_failed", order_id: canonicalOrder.id, status: "failed" }],
+            }), { status: 200 })
+        }
+        return new Response(JSON.stringify({
             ...canonicalOrder,
             status: "attempted",
+            attempts: 1,
             amount_paid: 0,
             amount_due: 120000,
         }), { status: 200 })
+    }
     const base = {
         supabase,
         attempt: existing,
@@ -380,14 +404,102 @@ Deno.test("retry does not reactivate a paid order", async () => {
     assertEquals(supabase.row.status, "failed")
 })
 
+Deno.test("retry does not reuse an order with a pending Razorpay payment", async () => {
+    const existing = attempt("failed", canonicalOrder.id)
+    const supabase = database(existing)
+    const requested: string[] = []
+    const request: typeof fetch = async (input) => {
+        const url = new URL(String(input))
+        requested.push(url.pathname)
+        if (url.pathname.endsWith("/payments")) {
+            return new Response(JSON.stringify({
+                count: 1,
+                items: [{
+                    id: "pay_pending",
+                    order_id: canonicalOrder.id,
+                    status: "authorized",
+                }],
+            }), { status: 200 })
+        }
+        return new Response(JSON.stringify({
+            ...canonicalOrder,
+            status: "attempted",
+            attempts: 1,
+            amount_paid: 0,
+            amount_due: 120000,
+        }), { status: 200 })
+    }
+
+    const resumed = await reactivatePayablePaymentAttempt({
+        supabase,
+        attempt: existing,
+        bookingId: "booking-1",
+        amount: 1200,
+        currency: "INR",
+        credentials: shared.credentials,
+        request,
+    })
+
+    assertEquals(resumed, null)
+    assertEquals(supabase.row.status, "failed")
+    assertEquals(requested, [
+        "/v1/orders/order_canonical",
+        "/v1/orders/order_canonical/payments",
+    ])
+})
+
+Deno.test("retry fails closed when a Razorpay payment row is missing or belongs to another order", async () => {
+    const invalidPayments = [
+        { id: "pay_failed", order_id: "order_other", status: "failed" },
+        { order_id: canonicalOrder.id, status: "failed" },
+    ]
+
+    for (const payment of invalidPayments) {
+        const existing = attempt("failed", canonicalOrder.id)
+        const supabase = database(existing)
+        const request: typeof fetch = async (input) => {
+            const url = new URL(String(input))
+            return new Response(JSON.stringify(url.pathname.endsWith("/payments")
+                ? { count: 1, items: [payment] }
+                : {
+                    ...canonicalOrder,
+                    status: "attempted",
+                    attempts: 1,
+                    amount_paid: 0,
+                    amount_due: 120000,
+                }), { status: 200 })
+        }
+
+        const resumed = await reactivatePayablePaymentAttempt({
+            supabase,
+            attempt: existing,
+            bookingId: "booking-1",
+            amount: 1200,
+            currency: "INR",
+            credentials: shared.credentials,
+            request,
+        })
+
+        assertEquals(resumed, null)
+        assertEquals(supabase.row.status, "failed")
+    }
+})
+
 Deno.test("retry does not overwrite a paid attempt during provider status lookup", async () => {
     const existing = attempt("failed", canonicalOrder.id)
     const supabase = database(existing)
-    const request: typeof fetch = async () => {
+    const request: typeof fetch = async (input) => {
+        if (String(input).endsWith("/payments")) {
+            return new Response(JSON.stringify({
+                count: 1,
+                items: [{ id: "pay_failed", order_id: canonicalOrder.id, status: "failed" }],
+            }), { status: 200 })
+        }
         supabase.row.status = "paid"
         return new Response(JSON.stringify({
             ...canonicalOrder,
             status: "attempted",
+            attempts: 1,
             amount_paid: 0,
             amount_due: 120000,
         }), { status: 200 })

@@ -108,6 +108,29 @@ export async function fetchRazorpayOrderById(
     return order
 }
 
+export async function fetchRazorpayPaymentsForOrder(
+    orderId: string,
+    credentials = razorpayCredentials(),
+    request: typeof fetch = fetch,
+): Promise<Record<string, any>[]> {
+    if (!credentials.keyId || !credentials.keySecret) {
+        throw new Error("Razorpay payment configuration missing")
+    }
+    const id = String(orderId || "").trim()
+    if (!id) throw new Error("Razorpay order ID is required")
+    const auth = btoa(`${credentials.keyId}:${credentials.keySecret}`)
+    const response = await request(
+        `https://api.razorpay.com/v1/orders/${encodeURIComponent(id)}/payments`,
+        { method: "GET", headers: { Authorization: `Basic ${auth}` } },
+    )
+    if (!response.ok) throw new Error(`Could not fetch Razorpay order payments (${response.status})`)
+    const payload = await response.json().catch(() => ({}))
+    if (!Array.isArray(payload?.items) || Number(payload.count) !== payload.items.length) {
+        throw new Error("Razorpay order payment reconciliation returned an invalid response")
+    }
+    return payload.items
+}
+
 export function canReuseRazorpayOrderForRetry(
     order: Record<string, any>,
     params: RazorpayOrderParams,
@@ -115,6 +138,8 @@ export function canReuseRazorpayOrderForRetry(
     const { amount, currency, receipt, notes } = normalizedOrderParams(params)
     const status = String(order?.status || "").toLowerCase()
     if (!order?.id || !["created", "attempted"].includes(status)) return false
+    if (status === "created" && Number(order.attempts ?? 0) !== 0) return false
+    if (status === "attempted" && Number(order.attempts ?? 0) < 1) return false
     if (
         Number(order.amount) !== amount ||
         String(order.currency || "").toUpperCase() !== currency ||

@@ -4,6 +4,7 @@ import {
     assertFalse,
     assertStringIncludes,
 } from "https://deno.land/std@0.224.0/assert/mod.ts"
+import { getCheckoutEntryState } from "./checkout_entry_state.ts"
 
 const source = await Deno.readTextFile(
     new URL("./CheckoutPageOverrides.tsx", import.meta.url),
@@ -166,4 +167,54 @@ Deno.test("pricing requests time out and direct checkout routes explain missing 
 
     assertStringIncludes(tripPriceSource, "TRIP_PRICE_REQUEST_TIMEOUT_MS")
     assertStringIncludes(tripPriceSource, "AbortController")
+})
+
+Deno.test("checkout without a valid trip replaces the form and disables payment accessibly", () => {
+    const bootstrapStart = source.indexOf(
+        "export function withCheckoutBootstrap",
+    )
+    const bootstrapEnd = source.indexOf(
+        "export function withBookNowToCheckout",
+        bootstrapStart,
+    )
+    const bootstrap = source.slice(bootstrapStart, bootstrapEnd)
+    const payButtonStart = source.indexOf(
+        "export function withCheckoutPayButton(Component)",
+    )
+    const payButton = source.slice(payButtonStart)
+
+    assertStringIncludes(bootstrap, "getCheckoutEntryState")
+    assertStringIncludes(bootstrap, 'checkoutState === "missing-trip"')
+    assertStringIncludes(bootstrap, 'checkoutState === "unavailable"')
+    assertStringIncludes(source, "Browse upcoming trips")
+    assertStringIncludes(payButton, "aria-disabled={!isValid}")
+    assertStringIncludes(payButton, "preventDefault")
+})
+
+Deno.test("pay button prevents the Framer link from navigating on every click", () => {
+    const payButtonStart = source.indexOf(
+        "export function withCheckoutPayButton(Component)",
+    )
+    const payButton = source.slice(payButtonStart)
+    const handleClickStart = payButton.indexOf("const handleClick = (e: any) => {")
+    const handleClickEnd = payButton.indexOf("const handleKeyDown", handleClickStart)
+    const handleClick = payButton.slice(handleClickStart, handleClickEnd)
+
+    assert(handleClickStart >= 0, "Pay button click handler should exist")
+    assert(handleClickEnd > handleClickStart, "Click handler boundary should exist")
+    assert(
+        handleClick.indexOf("e?.preventDefault?.()") < handleClick.indexOf("if (!isValid)"),
+        "Prevent link navigation before handling either valid or invalid clicks",
+    )
+    assert(
+        handleClick.indexOf("e?.preventDefault?.()") < handleClick.indexOf("void submit()"),
+        "A valid click should submit without following the Framer link",
+    )
+})
+
+Deno.test("checkout route state follows the URL context instead of stale stored trip data", () => {
+    assertEquals(getCheckoutEntryState({
+        loading: false,
+        pricingData: [{ id: "stale-trip" }],
+    }), "missing-trip")
 })

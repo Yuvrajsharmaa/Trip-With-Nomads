@@ -2,6 +2,7 @@ import {
     canReuseRazorpayOrderForRetry,
     createRazorpayOrder,
     fetchRazorpayOrderById,
+    fetchRazorpayPaymentsForOrder,
     findRazorpayOrderByReceipt,
     type RazorpayCredentials,
     type RazorpayOrderParams,
@@ -48,6 +49,18 @@ export async function reactivatePayablePaymentAttempt(params: {
         receipt: "twn_" + attemptId.replace(/-/g, "").slice(0, 32),
         notes: { booking_id: params.bookingId, attempt_id: attemptId },
     })) return null
+    if (String(order.status).toLowerCase() === "attempted") {
+        const payments = await fetchRazorpayPaymentsForOrder(orderId, params.credentials, params.request)
+        if (
+            payments.length !== Number(order.attempts) ||
+            payments.length === 0 ||
+            payments.some((payment) =>
+                !payment?.id ||
+                payment.order_id !== orderId ||
+                String(payment?.status || "").toLowerCase() !== "failed"
+            )
+        ) return null
+    }
 
     const now = params.now || new Date()
     const updatePayload: Record<string, unknown> = {

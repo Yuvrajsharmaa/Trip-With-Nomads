@@ -6,6 +6,7 @@ import {
     selectWebsiteDiscount,
     type WebsiteFinanceIssuer,
 } from "./booking-tax.ts"
+import { getCheckoutEntryState } from "./checkout_entry_state.ts"
 
 const CHECKOUT_TIMEZONE = "Asia/Kolkata"
 const CHECKOUT_DATA_REQUEST_TIMEOUT_MS = 8000
@@ -2112,6 +2113,67 @@ export function withCheckoutBootstrap(Component): ComponentType {
             store.appliedCoupon,
         ])
 
+        const routeContext = readCheckoutRouteContext()
+        const currentRouteKey = routeContextKey(routeContext)
+        const checkoutState = getCheckoutEntryState({
+            loading: store?.loading || bootKeyRef.current !== currentRouteKey,
+            tripId: routeContext.tripId,
+            slug: routeContext.slug,
+            pricingUnavailable: store?.pricingUnavailable,
+            pricingData: store?.pricingData,
+        })
+
+        if (checkoutState === "missing-trip" || checkoutState === "unavailable") {
+            const missingTrip = checkoutState === "missing-trip"
+            return (
+                <main
+                    aria-labelledby="checkout-recovery-title"
+                    style={{
+                        boxSizing: "border-box",
+                        display: "grid",
+                        minHeight: "100dvh",
+                        placeItems: "center",
+                        padding: "max(32px, env(safe-area-inset-top)) 24px max(32px, env(safe-area-inset-bottom))",
+                        background: "#080808",
+                        color: "#fff",
+                        fontFamily: "inherit",
+                    width: "100%",
+                    }}
+                >
+                    <div style={{ maxWidth: 480, width: "100%" }}>
+                        <h1
+                            id="checkout-recovery-title"
+                            style={{ fontSize: 28, lineHeight: 1.2, margin: "0 0 12px" }}
+                        >
+                            {missingTrip ? "Choose a trip first" : "This trip isn’t available right now"}
+                        </h1>
+                        <p style={{ color: "#c5c5c5", lineHeight: 1.6, margin: "0 0 24px" }}>
+                            {missingTrip
+                                ? "Choose a trip to see its dates and price before booking."
+                                : String(store?.couponMessage || "Choose another trip to see available dates and prices.")}
+                        </p>
+                        <a
+                            href={UPCOMING_TRIPS_BASE_URL}
+                            style={{
+                                alignItems: "center",
+                                background: "#fff",
+                                borderRadius: 999,
+                                color: "#080808",
+                                display: "inline-flex",
+                                fontWeight: 600,
+                                justifyContent: "center",
+                                minHeight: 48,
+                                padding: "0 22px",
+                                textDecoration: "none",
+                            }}
+                        >
+                            Browse upcoming trips
+                        </a>
+                    </div>
+                </main>
+            )
+        }
+
         return <Component {...props} />
     }
 }
@@ -3605,8 +3667,43 @@ export function withCheckoutPayButton(Component): ComponentType {
             }
         }
 
+        const handleClick = (e: any) => {
+            e?.preventDefault?.()
+            if (!isValid) {
+                e?.stopPropagation?.()
+                if (store?.loading) {
+                    showInlineError("Trip pricing is still loading. Please wait a moment.")
+                } else if (store?.pricingUnavailable || !isPricingReady) {
+                    showInlineError(
+                        store?.couponMessage ||
+                            "Pricing is unavailable for this trip. Please choose another departure.",
+                    )
+                } else {
+                    showInlineError(errors)
+                }
+                return
+            }
+            void submit()
+        }
+
+        const handleKeyDown = (e: any) => {
+            const nativeButton = e?.currentTarget?.tagName === "BUTTON"
+            if (e?.key === " " && !nativeButton) e.preventDefault()
+            if (e?.key === "Enter" && !nativeButton) {
+                e.preventDefault()
+                e.currentTarget.click()
+            }
+        }
+
+        const handleKeyUp = (e: any) => {
+            if (e?.key === " " && e?.currentTarget?.tagName !== "BUTTON") {
+                e.preventDefault()
+                e.currentTarget.click()
+            }
+        }
+
         return (
-            <div style={{ position: "relative", width: "100%" }}>
+            <div style={{ width: "100%" }}>
                 <Component
                     {...props}
                     text={store?.submitting
@@ -3616,7 +3713,12 @@ export function withCheckoutPayButton(Component): ComponentType {
                         : store?.pricingUnavailable || !isPricingReady
                         ? "Price unavailable"
                         : `Pay ${fmtINR(totals.payableNow)} now`}
-                    onClick={submit}
+                    onClick={handleClick}
+                    aria-disabled={!isValid}
+                    role="button"
+                    tabIndex={props.tabIndex ?? 0}
+                    onKeyDown={handleKeyDown}
+                    onKeyUp={handleKeyUp}
                     style={{
                         ...(props.style || {}),
                         width: "100%",
@@ -3624,34 +3726,6 @@ export function withCheckoutPayButton(Component): ComponentType {
                         cursor: isValid ? "pointer" : "not-allowed",
                     }}
                 />
-                {!isValid && (
-                    <div
-                        onClick={(e: any) => {
-                            e?.preventDefault?.()
-                            e?.stopPropagation?.()
-                            if (store?.loading) {
-                                showInlineError(
-                                    "Trip pricing is still loading. Please wait a moment.",
-                                )
-                            } else if (
-                                store?.pricingUnavailable || !isPricingReady
-                            ) {
-                                showInlineError(
-                                    store?.couponMessage ||
-                                        "Pricing is unavailable for this trip. Please choose another departure.",
-                                )
-                            } else {
-                                showInlineError(errors)
-                            }
-                        }}
-                        style={{
-                            position: "absolute",
-                            inset: 0,
-                            zIndex: 10,
-                            cursor: "not-allowed",
-                        }}
-                    />
-                )}
             </div>
         )
     }
