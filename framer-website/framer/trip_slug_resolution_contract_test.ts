@@ -18,14 +18,14 @@ Deno.test("trip cards prefer explicit CMS slugs and scan nested props safely", (
   const explicitCandidatePass = reader.indexOf(
     "for (const key of TRIP_SLUG_PROP_KEYS)",
   );
+  const legacyFallback = reader.indexOf(
+    "readTripSlugFallback(props?.text, props?.children)",
+  );
   const nestedFallback = reader.indexOf("return findSlugInCmsProps(props)");
   assert(
-    explicitCandidatePass >= 0,
-    "Explicit CMS slug fields should be checked first",
-  );
-  assert(
-    nestedFallback > explicitCandidatePass,
-    "Nested scanning should be the fallback",
+    explicitCandidatePass >= 0 && legacyFallback > explicitCandidatePass &&
+      nestedFallback > legacyFallback,
+    "Explicit CMS slugs, then legacy bindings, must precede generic nested scanning",
   );
   assertStringIncludes(reader, "findSlugInCmsProps(props)");
   assertStringIncludes(
@@ -45,6 +45,10 @@ Deno.test("trip cards prefer explicit CMS slugs and scan nested props safely", (
     "const slugFromPath = getTripSlugFromPathname(window.location.pathname)",
   );
   assertStringIncludes(source, "const slug = propSlug || slugFromPath");
+  assertStringIncludes(
+    source,
+    'import { readTripSlugFallback } from "./trip_slug_resolution.ts"',
+  );
 });
 
 Deno.test("a card slug takes precedence over a page-level trip ID", () => {

@@ -1,5 +1,6 @@
 import React from "react"
 import type { ComponentType } from "react"
+import { readTripSlugFallback } from "./trip_slug_resolution.ts"
 
 const { useEffect, useState } = React
 
@@ -253,6 +254,8 @@ function readTripSlugCandidate(props: any): string {
         const candidate = findSlugInCmsProps(props?.[key], 0, key)
         if (candidate) return candidate
     }
+    const fallback = readTripSlugFallback(props?.text, props?.children)
+    if (fallback) return fallback
     return findSlugInCmsProps(props)
 }
 
