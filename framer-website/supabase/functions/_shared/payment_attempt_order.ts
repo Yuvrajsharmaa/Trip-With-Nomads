@@ -166,25 +166,63 @@ export async function ensurePaymentAttemptOrder(
     const attemptIsBeingCreated =
         String(params.attempt.status || "").toLowerCase() === "creating"
     const creationExpiresAt = Date.parse(String(params.attempt.expires_at || ""))
-    const creationIsActive = attemptIsBeingCreated &&
-        Number.isFinite(creationExpiresAt) && creationExpiresAt > Date.now()
-    if (!params.mayCreate && !creationIsActive) {
+    const creationHasExpired = attemptIsBeingCreated &&
+        Number.isFinite(creationExpiresAt) && creationExpiresAt <= Date.now()
+    if (!params.mayCreate) {
         const recovered = await findRazorpayOrderByReceipt(
             providerParams,
             credentials,
             request,
         )
         if (!recovered) {
-            throw new PaymentOrderInProgressError(
-                "Payment order is still being reconciled. Try again shortly.",
+            if (creationHasExpired) {
+                const claimed = await params.supabase
+                    .from("payment_attempts")
+                    .update({
+                        expires_at: new Date(Date.now() + 30 * 60 * 1000).toISOString(),
+                        updated_at: new Date().toISOString(),
+                    })
+                    .eq("id", params.attempt.id)
+                    .eq("status", "creating")
+                    .eq("expires_at", params.attempt.expires_at)
+                    .is("provider_order_id", null)
+                    .select("*")
+                    .maybeSingle()
+                if (claimed.error) throw claimed.error
+                if (!claimed.data) {
+                    const current = await params.supabase
+                        .from("payment_attempts")
+                        .select("*")
+                        .eq("id", params.attempt.id)
+                        .maybeSingle()
+                    if (current.error) throw current.error
+                    if (current.data?.provider_order_id) {
+                        return {
+                            order: {
+                                id: String(current.data.provider_order_id),
+                                amount: Math.round(params.amount * 100),
+                                currency: params.currency,
+                            },
+                            attempt: current.data,
+                        }
+                    }
+                    throw new PaymentOrderInProgressError(
+                        "Payment order is still being reconciled. Try again shortly.",
+                    )
+                }
+            } else {
+                throw new PaymentOrderInProgressError(
+                    "Payment order is still being reconciled. Try again shortly.",
+                )
+            }
+        } else {
+            const savedAttempt = await persistOrder(
+                params.supabase,
+                params.attempt,
+                String(recovered.id),
             )
+            return { order: recovered, attempt: savedAttempt }
         }
-        const savedAttempt = await persistOrder(
-            params.supabase,
-            params.attempt,
-            String(recovered.id),
-        )
-        return { order: recovered, attempt: savedAttempt }
     }
 
     // Razorpay receipt uniqueness makes overlapping requests for one active attempt idempotent.

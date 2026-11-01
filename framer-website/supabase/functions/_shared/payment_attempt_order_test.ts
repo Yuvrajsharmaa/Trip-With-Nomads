@@ -63,6 +63,7 @@ function database(initial: Record<string, unknown>, failFirstUpdate = false) {
                         )
                         if (!matches) return { data: null, error: null }
                         Object.assign(row, payload)
+                        return { data: { ...row }, error: null }
                     }
                     const matches = Object.entries(filters).every((
                         [key, value],
@@ -182,7 +183,95 @@ Deno.test("a replay with uncertain creation and no visible provider order fails 
     assertEquals(methods, ["GET"])
 })
 
-Deno.test("concurrent create and replay requests receive the same unique-receipt order", async () => {
+Deno.test("an active creating replay reconciles an existing order without another POST", async () => {
+    const active = {
+        ...attempt("creating"),
+        expires_at: new Date(Date.now() + 60_000).toISOString(),
+    }
+    const supabase = database(active)
+    const { request, methods } = requestWithOrder(canonicalOrder)
+
+    const result = await ensurePaymentAttemptOrder({
+        supabase,
+        attempt: active,
+        mayCreate: false,
+        ...shared,
+        request,
+    })
+
+    assertEquals(result.order.id, canonicalOrder.id)
+    assertEquals(result.attempt.provider_order_id, canonicalOrder.id)
+    assertEquals(methods, ["GET"])
+})
+
+Deno.test("an expired creating attempt reclaims the same receipt after reconciliation confirms absence", async () => {
+    const stale = {
+        ...attempt("creating"),
+        expires_at: new Date(Date.now() - 60_000).toISOString(),
+    }
+    const supabase = database(stale)
+    const { request, methods } = requestWithOrder(null)
+    const before = Date.now()
+
+    const result = await ensurePaymentAttemptOrder({
+        supabase,
+        attempt: stale,
+        mayCreate: false,
+        ...shared,
+        request,
+    })
+    const after = Date.now()
+
+    assertEquals(result.order.id, canonicalOrder.id)
+    assertEquals(result.attempt.id, stale.id)
+    assertEquals(result.attempt.provider_order_id, canonicalOrder.id)
+    const recoveredExpiry = Date.parse(String(supabase.row.expires_at))
+    assertEquals(recoveredExpiry >= before + 30 * 60 * 1000, true)
+    assertEquals(recoveredExpiry <= after + 30 * 60 * 1000, true)
+    assertEquals(methods, ["GET", "POST"])
+})
+
+Deno.test("concurrent replays cannot both reclaim one expired creating attempt", async () => {
+    const stale = {
+        ...attempt("creating"),
+        expires_at: new Date(Date.now() - 60_000).toISOString(),
+    }
+    const supabase = database(stale)
+    let gets = 0
+    let posts = 0
+    let releaseGets!: () => void
+    const bothGets = new Promise<void>((resolve) => releaseGets = resolve)
+    const request: typeof fetch = async (_input, init) => {
+        const method = String((init as any)?.method || "GET").toUpperCase()
+        if (method === "GET") {
+            gets += 1
+            if (gets === 2) releaseGets()
+            await bothGets
+            return new Response(JSON.stringify({ items: [] }), { status: 200 })
+        }
+        posts += 1
+        return new Response(JSON.stringify(canonicalOrder), { status: 200 })
+    }
+    const params = {
+        supabase,
+        attempt: stale,
+        mayCreate: false,
+        ...shared,
+        request,
+    }
+
+    const outcomes = await Promise.allSettled([
+        ensurePaymentAttemptOrder(params),
+        ensurePaymentAttemptOrder(params),
+    ])
+
+    assertEquals(outcomes.filter((outcome) => outcome.status === "fulfilled").length, 1)
+    assertEquals(outcomes.filter((outcome) => outcome.status === "rejected").length, 1)
+    assertEquals(posts, 1)
+    assertEquals(supabase.row.provider_order_id, canonicalOrder.id)
+})
+
+Deno.test("an in-flight create lets its replay wait without creating a second order", async () => {
     const existing = {
         ...attempt("creating"),
         expires_at: new Date(Date.now() + 60_000).toISOString(),
@@ -213,13 +302,19 @@ Deno.test("concurrent create and replay requests receive the same unique-receipt
         request,
     }
 
-    const [replay, owner] = await Promise.all([
+    const outcomes = await Promise.allSettled([
         ensurePaymentAttemptOrder({ ...params, mayCreate: false }),
         ensurePaymentAttemptOrder({ ...params, mayCreate: true }),
     ])
 
-    assertEquals(replay.order.id, canonicalOrder.id)
-    assertEquals(owner.order.id, canonicalOrder.id)
+    assertEquals(outcomes[0].status, "rejected")
+    assertEquals(outcomes[1].status, "fulfilled")
+    if (outcomes[0].status === "rejected") {
+        assertEquals(outcomes[0].reason.code, "PAYMENT_ORDER_IN_PROGRESS")
+    }
+    if (outcomes[1].status === "fulfilled") {
+        assertEquals(outcomes[1].value.order.id, canonicalOrder.id)
+    }
     assertEquals(createCount, 1)
     assertEquals(supabase.row.provider_order_id, canonicalOrder.id)
 })
