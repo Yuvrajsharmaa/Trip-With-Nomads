@@ -112,6 +112,9 @@ Deno.serve(async (req) => {
     if (req.method === "OPTIONS") {
         return new Response("ok", { headers: corsHeaders })
     }
+    if (req.method !== "POST") {
+        return responseJson({ error: "Method not allowed" }, 405)
+    }
 
     let notificationSupabase: any = null
     let notificationBooking: PaymentEmailBooking | null = null

@@ -11,6 +11,7 @@ Deno.test("create-booking persists a checkout request and replays its attempt", 
     assertStringIncludes(source, "canonicalizing trip ID from slug")
     assertStringIncludes(source, "checkout_request_fingerprint")
     assertStringIncludes(source, "fingerprintBookingRequest")
+    assertStringIncludes(source, 'if (currency !== "INR")')
     assertStringIncludes(source, 'from("payment_attempts")')
     assertStringIncludes(source, "IDEMPOTENCY_CONFLICT")
     assertStringIncludes(source, "!replayed")

@@ -655,6 +655,12 @@ serve(async (req) => {
     if (req.method === "OPTIONS") {
         return new Response("ok", { headers: corsHeaders })
     }
+    if (req.method !== "POST") {
+        return new Response(JSON.stringify({ error: "Method not allowed" }), {
+            status: 405,
+            headers: { ...corsHeaders, "Content-Type": "application/json" },
+        })
+    }
 
     let notificationCheckoutRequestId = ""
     let notificationBooking: PaymentEmailBooking | null = null
@@ -688,8 +694,15 @@ serve(async (req) => {
         const name = firstNonEmpty(body?.name)
         const email = firstNonEmpty(body?.email).toLowerCase()
         const phone = firstNonEmpty(body?.phone)
-        const currency = firstNonEmpty(body?.currency, "INR")
+        const currency = firstNonEmpty(body?.currency, "INR").toUpperCase()
         const paymentMode = normalizePaymentMode(body?.payment_mode || body?.pricing_snapshot?.payment_mode)
+
+        if (currency !== "INR") {
+            return new Response(
+                JSON.stringify({ error: "Only INR payments are supported" }),
+                { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } },
+            )
+        }
 
         const couponCodeRaw = firstNonEmpty(body?.coupon_code, body?.pricing_snapshot?.applied_discount_code)
         const couponCodeRequested = couponCodeRaw ? couponCodeRaw.toUpperCase() : ""

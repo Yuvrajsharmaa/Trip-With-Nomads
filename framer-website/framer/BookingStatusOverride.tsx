@@ -48,7 +48,6 @@ type RuntimeConfig = {
     siteBaseUrl: string
     supabaseUrl: string
     supabaseAnonKey: string
-    apiBaseUrl: string
 }
 
 const RUNTIME_CONFIG: Record<RuntimeEnv, RuntimeConfig> = {
@@ -57,15 +56,12 @@ const RUNTIME_CONFIG: Record<RuntimeEnv, RuntimeConfig> = {
         supabaseUrl: "https://jxozzvwvprmnhvafmpsa.supabase.co",
         supabaseAnonKey:
             "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imp4b3p6dnd2cHJtbmh2YWZtcHNhIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjgwNTg2NjIsImV4cCI6MjA4MzYzNDY2Mn0.KpVa9dWlJEguL1TA00Tf4QDpziJ1mgA2I0f4_l-vlOk",
-        // Production must not call the staging worker by default.
-        apiBaseUrl: "",
     },
     development: {
         siteBaseUrl: "https://maroon-aside-814100.framer.app",
         supabaseUrl: "https://ieuwiinbvbdvjrdqqzlb.supabase.co",
         supabaseAnonKey:
             "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImlldXdpaW5idmJkdmpyZHFxemxiIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzIwNDYwMTksImV4cCI6MjA4NzYyMjAxOX0.UlTMeyvArixD7byDCrGwEDXsbc4LQfx6QXDL6Je3blE",
-        apiBaseUrl: "https://twn-checkout-gateway-staging.tripwithnomads-crm.workers.dev",
     },
 }
 
@@ -108,7 +104,6 @@ function resolveRuntimeConfig(): RuntimeConfig {
         supabaseAnonKey: String(
             runtimeOverride.supabaseAnonKey || selected.supabaseAnonKey || ""
         ).trim(),
-        apiBaseUrl: normalizeBaseUrl(runtimeOverride.apiBaseUrl || selected.apiBaseUrl),
     }
 }
 
@@ -138,19 +133,16 @@ function getRetryRequestId(bookingId: string, attempt: any): string {
 
 function retryApiUrl(): string {
     const runtime = resolveRuntimeConfig()
-    return runtime.apiBaseUrl
-        ? `${runtime.apiBaseUrl}/retry-payment`
-        : `${runtime.supabaseUrl}/functions/v1/retry-payment`
+    return `${runtime.supabaseUrl}/functions/v1/retry-payment`
 }
 
 function retryApiHeaders(): Record<string, string> {
     const runtime = resolveRuntimeConfig()
-    const headers: Record<string, string> = { "Content-Type": "application/json" }
-    if (!runtime.apiBaseUrl) {
-        headers.apikey = runtime.supabaseAnonKey
-        headers.Authorization = `Bearer ${runtime.supabaseAnonKey}`
+    return {
+        "Content-Type": "application/json",
+        apikey: runtime.supabaseAnonKey,
+        Authorization: `Bearer ${runtime.supabaseAnonKey}`,
     }
-    return headers
 }
 
 async function loadRazorpayScript(): Promise<void> {

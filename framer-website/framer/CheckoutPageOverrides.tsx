@@ -67,7 +67,6 @@ type RuntimeConfig = {
     siteBaseUrl: string
     supabaseUrl: string
     supabaseAnonKey: string
-    apiBaseUrl: string
 }
 
 const RUNTIME_CONFIG: Record<RuntimeEnv, RuntimeConfig> = {
@@ -76,17 +75,12 @@ const RUNTIME_CONFIG: Record<RuntimeEnv, RuntimeConfig> = {
         supabaseUrl: "https://jxozzvwvprmnhvafmpsa.supabase.co",
         supabaseAnonKey:
             "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imp4b3p6dnd2cHJtbmh2YWZtcHNhIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjgwNTg2NjIsImV4cCI6MjA4MzYzNDY2Mn0.KpVa9dWlJEguL1TA00Tf4QDpziJ1mgA2I0f4_l-vlOk",
-        // Keep production on its own Supabase function origin until a
-        // production gateway is explicitly configured through the runtime
-        // override. The active worker below is staging-only evidence.
-        apiBaseUrl: "",
     },
     development: {
         siteBaseUrl: "https://maroon-aside-814100.framer.app",
         supabaseUrl: "https://ieuwiinbvbdvjrdqqzlb.supabase.co",
         supabaseAnonKey:
             "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImlldXdpaW5idmJkdmpyZHFxemxiIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzIwNDYwMTksImV4cCI6MjA4NzYyMjAxOX0.UlTMeyvArixD7byDCrGwEDXsbc4LQfx6QXDL6Je3blE",
-        apiBaseUrl: "https://twn-checkout-gateway-staging.tripwithnomads-crm.workers.dev",
     },
 }
 
@@ -191,15 +185,14 @@ function resolveRuntimeConfig(): RuntimeConfig {
         ),
         supabaseUrl: resolvedSupabaseUrl,
         supabaseAnonKey: resolvedSupabaseAnonKey,
-        apiBaseUrl: normalizeBaseUrl(
-            runtimeOverride.apiBaseUrl || selected.apiBaseUrl,
-        ),
     }
 }
 
 const CURRENT_RUNTIME = resolveRuntimeConfig()
 const SUPABASE_URL = CURRENT_RUNTIME.supabaseUrl
 const SUPABASE_KEY = CURRENT_RUNTIME.supabaseAnonKey
+const RECORD_LEAD_URL = `${SUPABASE_URL}/functions/v1/record-lead`
+const CREATE_BOOKING_URL = `${SUPABASE_URL}/functions/v1/create-booking`
 const TAX_RATE = 0.05
 const CHECKOUT_PAGE_URL = `${CURRENT_RUNTIME.siteBaseUrl}/checkout`
 const UPCOMING_TRIPS_BASE_URL = `${CURRENT_RUNTIME.siteBaseUrl}/upcoming-trips`
@@ -270,20 +263,11 @@ function getOrCreateStableRequestId(
     }
 }
 
-function checkoutApiUrl(path: string): string {
-    const cleanPath = String(path || "").replace(/^\/+/, "")
-    const gatewayBase = normalizeBaseUrl(CURRENT_RUNTIME.apiBaseUrl)
-    if (gatewayBase) return `${gatewayBase}/${cleanPath}`
-    return `${SUPABASE_URL}/functions/v1/${cleanPath}`
-}
-
 function checkoutApiHeaders(): Record<string, string> {
     const headers: Record<string, string> = {
         "Content-Type": "application/json",
-    }
-    if (!CURRENT_RUNTIME.apiBaseUrl) {
-        headers.apikey = SUPABASE_KEY
-        headers.Authorization = `Bearer ${SUPABASE_KEY}`
+        apikey: SUPABASE_KEY,
+        Authorization: `Bearer ${SUPABASE_KEY}`,
     }
     return headers
 }
@@ -1487,7 +1471,7 @@ async function postBookingAbandonLead(store: any): Promise<boolean> {
     }
 
     try {
-        const response = await fetch(checkoutApiUrl("record-lead"), {
+        const response = await fetch(RECORD_LEAD_URL, {
             method: "POST",
             headers: checkoutApiHeaders(),
             body: JSON.stringify(payload),
@@ -3492,7 +3476,7 @@ export function withCheckoutPayButton(Component): ComponentType {
             payload.checkout_request_id = checkout_request_id
 
             try {
-                let res = await fetchCheckoutRequest(checkoutApiUrl("create-booking"), {
+                let res = await fetchCheckoutRequest(CREATE_BOOKING_URL, {
                     method: "POST",
                     headers: checkoutApiHeaders(),
                     body: JSON.stringify(payload),
@@ -3531,12 +3515,10 @@ export function withCheckoutPayButton(Component): ComponentType {
 
                     const formHeaders: Record<string, string> = {
                         "Content-Type": "application/x-www-form-urlencoded",
+                        apikey: SUPABASE_KEY,
+                        Authorization: `Bearer ${SUPABASE_KEY}`,
                     }
-                    if (!CURRENT_RUNTIME.apiBaseUrl) {
-                        formHeaders.apikey = SUPABASE_KEY
-                        formHeaders.Authorization = `Bearer ${SUPABASE_KEY}`
-                    }
-                    res = await fetchCheckoutRequest(checkoutApiUrl("create-booking"), {
+                    res = await fetchCheckoutRequest(CREATE_BOOKING_URL, {
                         method: "POST",
                         headers: formHeaders,
                         body: form.toString(),
