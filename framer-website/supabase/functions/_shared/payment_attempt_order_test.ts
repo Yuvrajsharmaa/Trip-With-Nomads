@@ -4,6 +4,7 @@ import {
 } from "https://deno.land/std@0.224.0/assert/mod.ts"
 import {
     ensurePaymentAttemptOrder,
+    recoverPaymentAttemptForRetry,
     reactivatePayablePaymentAttempt,
 } from "./payment_attempt_order.ts"
 
@@ -229,6 +230,87 @@ Deno.test("an expired creating attempt reclaims the same receipt after reconcili
     assertEquals(recoveredExpiry >= before + 30 * 60 * 1000, true)
     assertEquals(recoveredExpiry <= after + 30 * 60 * 1000, true)
     assertEquals(methods, ["GET", "POST"])
+})
+
+Deno.test("retry recovers an expired order creation and returns it under the new retry identity", async () => {
+    const stale = {
+        ...attempt("creating"),
+        expires_at: new Date(Date.now() - 60_000).toISOString(),
+    }
+    const supabase = database(stale)
+    const methods: string[] = []
+    const recoveredOrder = {
+        ...canonicalOrder,
+        status: "created",
+        attempts: 0,
+        amount_paid: 0,
+        amount_due: 120000,
+    }
+    const request: typeof fetch = (input, init) => {
+        const method = String((init as globalThis.RequestInit | undefined)?.method || "GET").toUpperCase()
+        methods.push(method)
+        const url = new URL(String(input))
+        const body = method === "POST" || url.pathname.endsWith("/orders/order_canonical")
+            ? recoveredOrder
+            : { items: [] }
+        return Promise.resolve(new Response(JSON.stringify(body), { status: 200 }))
+    }
+
+    const result = await recoverPaymentAttemptForRetry({
+        supabase,
+        attempt: stale,
+        bookingId: "booking-1",
+        amount: 1200,
+        currency: "INR",
+        credentials: shared.credentials,
+        idempotencyKey: "retry-request-id",
+        request,
+    })
+
+    assertEquals(result?.provider_order_id, canonicalOrder.id)
+    assertEquals(result?.status, "pending")
+    assertEquals(result?.idempotency_key, "retry-request-id")
+    assertEquals(supabase.row.idempotency_key, "retry-request-id")
+    assertEquals(methods, ["GET", "POST", "GET"])
+})
+
+Deno.test("retry does not recover an old order when the booking amount or currency has changed", async () => {
+    const stale = {
+        ...attempt("creating"),
+        expires_at: new Date(Date.now() - 60_000).toISOString(),
+    }
+    const supabase = database(stale)
+    let requests = 0
+    const request: typeof fetch = () => {
+        requests += 1
+        return Promise.resolve(new Response(JSON.stringify({ items: [] }), { status: 200 }))
+    }
+
+    const changedAmount = await recoverPaymentAttemptForRetry({
+        supabase,
+        attempt: stale,
+        bookingId: "booking-1",
+        amount: 1400,
+        currency: "INR",
+        credentials: shared.credentials,
+        idempotencyKey: "retry-request-id",
+        request,
+    })
+    const changedCurrency = await recoverPaymentAttemptForRetry({
+        supabase,
+        attempt: stale,
+        bookingId: "booking-1",
+        amount: 1200,
+        currency: "USD",
+        credentials: shared.credentials,
+        idempotencyKey: "retry-request-id",
+        request,
+    })
+
+    assertEquals(changedAmount, null)
+    assertEquals(changedCurrency, null)
+    assertEquals(requests, 0)
+    assertEquals(supabase.row.provider_order_id, null)
 })
 
 Deno.test("concurrent replays cannot both reclaim one expired creating attempt", async () => {

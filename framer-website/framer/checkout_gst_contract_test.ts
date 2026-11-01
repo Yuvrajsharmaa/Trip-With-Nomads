@@ -13,6 +13,7 @@ Deno.test("checkout derives discounted tax totals from the trip billing issuer",
     assertStringIncludes(checkoutSource, "gst_amount: taxInclusive.gstAmount")
     assertStringIncludes(checkoutSource, "tcs_amount: taxInclusive.tcsAmount")
     assertStringIncludes(checkoutSource, "finance_issuer: issuer")
+    assertStringIncludes(checkoutSource, 'taxLabel: issuer === "NTC" ? "GST (5%) + TCS (2%)" : "GST (5%)"')
     assert(
         !checkoutSource.includes(
             "pickFirstNumber(source, [\"total_amount\", \"totalAmount\"]",

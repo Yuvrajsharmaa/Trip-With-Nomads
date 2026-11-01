@@ -503,9 +503,23 @@ function fmtINR(value: number): string {
     return "₹" + toNumber(value).toLocaleString("en-IN")
 }
 
-function formatCheckoutAmount(store: any, value: number): string {
-    if (store?.loading) return "Loading price…"
-    if (store?.pricingUnavailable) return "Price unavailable"
+function formatCheckoutAmount(
+    store: any,
+    value: number,
+    unavailableText = "Price unavailable",
+): string {
+    const route = readCheckoutRouteContext()
+    const entryState = getCheckoutEntryState({
+        loading: Boolean(store?.loading),
+        tripId: route.tripId,
+        slug: route.slug,
+        pricingUnavailable: store?.pricingUnavailable,
+        pricingData: store?.pricingData,
+    })
+    if (entryState === "missing-trip" || entryState === "unavailable") {
+        return unavailableText
+    }
+    if (entryState === "loading") return "Loading price…"
     return fmtINR(value)
 }
 
@@ -1088,7 +1102,7 @@ function computeTotals(store: any) {
         gstAmount: billingTotals?.gstAmount || 0,
         tcsAmount: billingTotals?.tcsAmount || 0,
         financeIssuer: issuer,
-        taxLabel: issuer === "NTC" ? "GST + TCS" : "GST (5%)",
+        taxLabel: issuer === "NTC" ? "GST (5%) + TCS (2%)" : "GST (5%)",
         total,
         paymentMode,
         payableNow,
@@ -2156,9 +2170,9 @@ export function withCheckoutBootstrap(Component): ComponentType {
                             href={UPCOMING_TRIPS_BASE_URL}
                             style={{
                                 alignItems: "center",
-                                background: "#fff",
-                                borderRadius: 999,
-                                color: "#080808",
+                                background: "#1b91c9",
+                                borderRadius: 8,
+                                color: "#fff",
                                 display: "inline-flex",
                                 fontWeight: 600,
                                 justifyContent: "center",
@@ -3292,7 +3306,7 @@ export function withCheckoutPaymentMode(Component): ComponentType {
 
 export function withCheckoutPayableNow(Component): ComponentType {
     return withTextFromState((store) =>
-        formatCheckoutAmount(store, computeTotals(store).payableNow)
+        formatCheckoutAmount(store, computeTotals(store).payableNow, "Unavailable")
     )(
         Component,
     )

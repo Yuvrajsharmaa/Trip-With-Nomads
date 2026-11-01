@@ -95,7 +95,7 @@ export function calculateWebsiteBookingTotals(input: {
         tcsAmount: toRupees(tcsAmountMinor),
         taxAmount: toRupees(taxAmountMinor),
         totalAmount: toRupees(totalAmountMinor),
-        taxLabel: input.issuer === "NTC" ? "GST + TCS" : "GST",
+        taxLabel: input.issuer === "NTC" ? "GST (5%) + TCS (2%)" : "GST",
     }
 }
 

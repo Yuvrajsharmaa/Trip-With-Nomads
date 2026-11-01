@@ -21,6 +21,9 @@ Deno.test("retry-payment requires a retry key and persists payment attempts", as
     assertStringIncludes(source, "isCompatiblePaymentAttemptReplay")
     assertStringIncludes(source, "ensurePaymentAttemptOrder")
     assertStringIncludes(source, "reactivatePayablePaymentAttempt")
+    assertStringIncludes(source, "reusableAttempt = await recoverPaymentAttemptForRetry({")
+    assertStringIncludes(source, "latestState = reusableAttempt")
+    assertStringIncludes(source, "let replayed = Boolean(reusableAttempt)")
     assertStringIncludes(source, "PAYMENT_RECONCILIATION_PENDING")
     assertStringIncludes(source, '.or("payment_status.is.null,payment_status.neq.paid")')
     assertStringIncludes(

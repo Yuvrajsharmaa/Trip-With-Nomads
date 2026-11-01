@@ -158,6 +158,31 @@ Deno.test("trip and checkout price labels distinguish loading from zero price", 
     assertFalse(standaloneTripPrice.includes(': "₹0"'))
 })
 
+Deno.test("missing trip context cannot leave the checkout amount stuck loading", () => {
+    const formatStart = source.indexOf("function formatCheckoutAmount")
+    const formatEnd = source.indexOf("\n}", formatStart) + 2
+    const formatter = source.slice(formatStart, formatEnd)
+    assertStringIncludes(formatter, "readCheckoutRouteContext()")
+    assertStringIncludes(formatter, "getCheckoutEntryState")
+    assertStringIncludes(formatter, 'entryState === "missing-trip"')
+    assertStringIncludes(formatter, '"Price unavailable"')
+})
+
+Deno.test("checkout recovery uses the blue primary action and a compact unavailable amount", () => {
+    const recoveryStart = source.indexOf(
+        'if (checkoutState === "missing-trip" || checkoutState === "unavailable")',
+    )
+    const recoveryEnd = source.indexOf("export function withBookNowToCheckout", recoveryStart)
+    const recovery = source.slice(recoveryStart, recoveryEnd)
+    assertStringIncludes(recovery, 'background: "#1b91c9"')
+    assertStringIncludes(recovery, 'color: "#fff"')
+    assertStringIncludes(recovery, "Browse upcoming trips")
+
+    const payableStart = source.indexOf("export function withCheckoutPayableNow")
+    const payableEnd = source.indexOf("export function withCheckoutDueAmount", payableStart)
+    assertStringIncludes(source.slice(payableStart, payableEnd), '"Unavailable"')
+})
+
 Deno.test("pricing requests time out and direct checkout routes explain missing context", () => {
     assertStringIncludes(source, "CHECKOUT_DATA_REQUEST_TIMEOUT_MS")
     assertStringIncludes(source, "AbortController")

@@ -105,6 +105,43 @@ export async function reactivatePayablePaymentAttempt(params: {
     return null
 }
 
+export async function recoverPaymentAttemptForRetry(
+    params: Parameters<typeof reactivatePayablePaymentAttempt>[0],
+) {
+    const attemptId = String(params.attempt?.id || "")
+    const amountMinor = Number(params.attempt?.amount_minor)
+    const currency = String(params.currency || "INR").toUpperCase()
+    if (
+        !attemptId ||
+        !Number.isSafeInteger(amountMinor) ||
+        amountMinor !== Math.round(params.amount * 100) ||
+        String(params.attempt?.currency || "").toUpperCase() !== currency
+    ) return null
+
+    const resolved = await ensurePaymentAttemptOrder({
+        supabase: params.supabase,
+        attempt: params.attempt,
+        mayCreate: false,
+        amount: amountMinor / 100,
+        currency,
+        receipt: `twn_${attemptId.replace(/-/g, "").slice(0, 32)}`,
+        notes: { booking_id: params.bookingId, attempt_id: attemptId },
+        credentials: params.credentials,
+        request: params.request,
+    })
+    return reactivatePayablePaymentAttempt({
+        supabase: params.supabase,
+        attempt: resolved.attempt,
+        bookingId: params.bookingId,
+        amount: params.amount,
+        currency,
+        credentials: params.credentials,
+        idempotencyKey: params.idempotencyKey,
+        request: params.request,
+        now: params.now,
+    })
+}
+
 async function persistOrder(
     supabase: any,
     attempt: Record<string, any>,

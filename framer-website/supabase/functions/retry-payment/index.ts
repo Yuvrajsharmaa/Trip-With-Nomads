@@ -11,6 +11,7 @@ import {
 import {
     ensurePaymentAttemptOrder,
     PaymentOrderInProgressError,
+    recoverPaymentAttemptForRetry,
     reactivatePayablePaymentAttempt,
 } from "../_shared/payment_attempt_order.ts"
 import {
@@ -428,24 +429,37 @@ Deno.serve(async (req) => {
             latestAttempt &&
             (latestIsStale || ["failed", "expired"].includes(latestStatus))
         ) {
-            if (!latestAttempt.provider_order_id) {
+            if (paymentProvider === "razorpay" && !latestAttempt.provider_order_id) {
+                retryPaymentCredentials = razorpayCredentials()
+                if (!retryPaymentCredentials.keyId || !retryPaymentCredentials.keySecret) {
+                    return responseJson({
+                        error: "Razorpay payment configuration missing",
+                        code: "PAYMENT_CONFIGURATION_MISSING",
+                    }, 503)
+                }
                 try {
-                    await ensurePaymentAttemptOrder({
+                    reusableAttempt = await recoverPaymentAttemptForRetry({
                         supabase,
                         attempt: latestAttempt,
-                        mayCreate: false,
-                        amount: Math.max(0, toNumber(latestAttempt.amount_minor) / 100),
-                        currency: latestAttempt.currency || booking.currency || "INR",
-                        receipt: `twn_${String(latestAttempt.id).replace(/-/g, "").slice(0, 32)}`,
-                        notes: { booking_id: String(booking.id), attempt_id: String(latestAttempt.id) },
+                        bookingId: String(booking.id),
+                        amount: amountToRetry,
+                        currency: retryCurrency,
+                        credentials: retryPaymentCredentials,
+                        idempotencyKey: retryRequestId,
                     })
                 } catch {
-                    // Keep the attempt active when its provider order cannot be disproven.
+                    return responseJson({
+                        error: "The previous payment attempt is still being reconciled. Try again shortly.",
+                        code: "PAYMENT_ORDER_IN_PROGRESS",
+                    }, 409)
                 }
-                return responseJson({
-                    error: "The previous payment attempt is being reconciled. Check its status before retrying.",
-                    code: "PAYMENT_ORDER_IN_PROGRESS",
-                }, 409)
+                if (!reusableAttempt) {
+                    return responseJson({
+                        error: "The previous payment needs status reconciliation before it can be retried.",
+                        code: "PAYMENT_RECONCILIATION_PENDING",
+                    }, 409)
+                }
+                latestState = reusableAttempt
             }
         }
         if (!reusableAttempt && !canStartPaymentRetry({ status: latestState.status, expiresAt: latestState.expires_at })) {

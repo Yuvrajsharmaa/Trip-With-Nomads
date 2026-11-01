@@ -47,6 +47,7 @@ Deno.test("NTC checkout adds TCS on taxable amount plus GST before discount", ()
     assertEquals(totals.tcsAmount, 210)
     assertEquals(totals.taxAmount, 710)
     assertEquals(totals.totalAmount, 9710)
+    assertEquals(totals.taxLabel, "GST (5%) + TCS (2%)")
 })
 
 Deno.test("billing rejects unsafe money and discounts larger than the catalogue subtotal", () => {
