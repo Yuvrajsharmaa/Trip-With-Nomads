@@ -319,6 +319,7 @@ Deno.serve(async (req) => {
                         amount: amountToRetry,
                         currency: retryCurrency,
                         credentials: replayCredentials,
+                        idempotencyKey: retryRequestId,
                     })
                     if (!resumed) {
                         return responseJson({
@@ -408,6 +409,7 @@ Deno.serve(async (req) => {
                     amount: amountToRetry,
                     currency: retryCurrency,
                     credentials: retryPaymentCredentials,
+                    idempotencyKey: retryRequestId,
                 })
             } catch {
                 return responseJson({

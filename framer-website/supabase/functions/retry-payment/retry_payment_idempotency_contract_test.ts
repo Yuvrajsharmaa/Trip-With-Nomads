@@ -23,6 +23,10 @@ Deno.test("retry-payment requires a retry key and persists payment attempts", as
     assertStringIncludes(source, "reactivatePayablePaymentAttempt")
     assertStringIncludes(source, "PAYMENT_RECONCILIATION_PENDING")
     assertStringIncludes(source, '.or("payment_status.is.null,payment_status.neq.paid")')
+    assertStringIncludes(
+        source,
+        "idempotencyKey: retryRequestId,",
+    )
     const existingOrderReconciliation = source.indexOf("reactivatePayablePaymentAttempt({")
     const attemptInsertCall = source.indexOf("const attemptInsert = await supabase")
     if (existingOrderReconciliation < 0 || attemptInsertCall < 0 || existingOrderReconciliation > attemptInsertCall) {

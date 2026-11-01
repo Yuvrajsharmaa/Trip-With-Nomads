@@ -27,6 +27,7 @@ export async function reactivatePayablePaymentAttempt(params: {
     amount: number
     currency: string
     credentials: RazorpayCredentials
+    idempotencyKey?: string
     request?: typeof fetch
     now?: Date
 }): Promise<Record<string, any> | null> {
@@ -49,19 +50,29 @@ export async function reactivatePayablePaymentAttempt(params: {
     })) return null
 
     const now = params.now || new Date()
-    const update = await params.supabase
+    const updatePayload: Record<string, unknown> = {
+        status: "pending",
+        failed_at: null,
+        error_code: null,
+        error_message: null,
+        expires_at: new Date(now.getTime() + 30 * 60 * 1000).toISOString(),
+        updated_at: now.toISOString(),
+    }
+    if (params.idempotencyKey) updatePayload.idempotency_key = params.idempotencyKey
+
+    let updateQuery = params.supabase
         .from("payment_attempts")
-        .update({
-            status: "pending",
-            failed_at: null,
-            error_code: null,
-            error_message: null,
-            expires_at: new Date(now.getTime() + 30 * 60 * 1000).toISOString(),
-            updated_at: now.toISOString(),
-        })
+        .update(updatePayload)
         .eq("id", attemptId)
         .eq("provider_order_id", orderId)
         .in("status", ["creating", "pending", "failed", "expired"])
+    if (params.idempotencyKey) {
+        const previousKey = String(params.attempt?.idempotency_key || "")
+        updateQuery = previousKey
+            ? updateQuery.eq("idempotency_key", previousKey)
+            : updateQuery.is("idempotency_key", null)
+    }
+    const update = await updateQuery
         .select("*")
         .maybeSingle()
     if (update.error) throw update.error
@@ -75,7 +86,8 @@ export async function reactivatePayablePaymentAttempt(params: {
     if (current.error) throw current.error
     if (
         current.data?.provider_order_id === orderId &&
-        String(current.data?.status || "").toLowerCase() === "pending"
+        String(current.data?.status || "").toLowerCase() === "pending" &&
+        (!params.idempotencyKey || current.data?.idempotency_key === params.idempotencyKey)
     ) return current.data
     return null
 }

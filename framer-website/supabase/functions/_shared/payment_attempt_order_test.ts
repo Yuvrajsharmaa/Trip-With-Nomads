@@ -96,6 +96,7 @@ function requestWithOrder(order: Record<string, unknown> | null) {
 function attempt(status = "creating", providerOrderId: string | null = null) {
     return {
         id: "attempt-1",
+        idempotency_key: "old-request-id",
         status,
         provider: "razorpay",
         provider_order_id: providerOrderId,
@@ -293,6 +294,65 @@ Deno.test("retry reactivates the same failed attempt and reuses its unpaid provi
     assertEquals(supabase.row.provider_order_id, canonicalOrder.id)
     assertEquals(supabase.row.expires_at, "2026-11-01T00:30:00.000Z")
     assertEquals(methods, ["GET"])
+})
+
+Deno.test("retry persists the new request identity when reusing a failed attempt", async () => {
+    const existing = attempt("failed", canonicalOrder.id)
+    const supabase = database(existing)
+    const request: typeof fetch = async () =>
+        new Response(JSON.stringify({
+            ...canonicalOrder,
+            status: "attempted",
+            amount_paid: 0,
+            amount_due: 120000,
+        }), { status: 200 })
+
+    const resumed = await reactivatePayablePaymentAttempt({
+        supabase,
+        attempt: existing,
+        bookingId: "booking-1",
+        amount: 1200,
+        currency: "INR",
+        credentials: shared.credentials,
+        request,
+        idempotencyKey: "new-request-id",
+    })
+
+    assertEquals(resumed?.provider_order_id, canonicalOrder.id)
+    assertEquals(resumed?.idempotency_key, "new-request-id")
+    assertEquals(supabase.row.idempotency_key, "new-request-id")
+})
+
+Deno.test("concurrent retries with different keys cannot both claim a reused attempt", async () => {
+    const existing = attempt("failed", canonicalOrder.id)
+    const supabase = database(existing)
+    const request: typeof fetch = async () =>
+        new Response(JSON.stringify({
+            ...canonicalOrder,
+            status: "attempted",
+            amount_paid: 0,
+            amount_due: 120000,
+        }), { status: 200 })
+    const base = {
+        supabase,
+        attempt: existing,
+        bookingId: "booking-1",
+        amount: 1200,
+        currency: "INR",
+        credentials: shared.credentials,
+        request,
+    }
+
+    const results = await Promise.all([
+        reactivatePayablePaymentAttempt({ ...base, idempotencyKey: "retry-key-one" }),
+        reactivatePayablePaymentAttempt({ ...base, idempotencyKey: "retry-key-two" }),
+    ])
+
+    assertEquals(results.filter(Boolean).length, 1)
+    assertEquals(
+        results.filter(Boolean)[0]?.idempotency_key,
+        supabase.row.idempotency_key,
+    )
 })
 
 Deno.test("retry does not reactivate a paid order", async () => {
