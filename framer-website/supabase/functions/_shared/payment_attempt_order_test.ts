@@ -242,7 +242,7 @@ Deno.test("concurrent replays cannot both reclaim one expired creating attempt",
     let releaseGets!: () => void
     const bothGets = new Promise<void>((resolve) => releaseGets = resolve)
     const request: typeof fetch = async (_input, init) => {
-        const method = String((init as any)?.method || "GET").toUpperCase()
+        const method = String((init as globalThis.RequestInit | undefined)?.method || "GET").toUpperCase()
         if (method === "GET") {
             gets += 1
             if (gets === 2) releaseGets()
