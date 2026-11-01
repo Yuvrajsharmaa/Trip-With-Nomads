@@ -59,6 +59,9 @@ framer-website/supabase/supabase/.temp/
 /test-results/
 /scratch/
 
+# Graphify code maps and reports are generated locally.
+/graphify-out/
+
 # Local scratch repos
 skills-main/
 
