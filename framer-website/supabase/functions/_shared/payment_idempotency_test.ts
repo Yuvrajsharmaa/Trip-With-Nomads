@@ -3,6 +3,7 @@ import {
     canStartPaymentRetry,
     fingerprintBookingRequest,
     isCompatibleIdempotentReplay,
+    isCompatiblePaymentAttemptReplay,
     isStalePaymentAttempt,
     nextPaymentAttemptNumber,
     normalizeIdempotencyKey,
@@ -103,4 +104,28 @@ Deno.test("idempotent replay requires the original request fingerprint", () => {
     assertEquals(isCompatibleIdempotentReplay("same", "same"), true)
     assertEquals(isCompatibleIdempotentReplay("same", "changed"), false)
     assertEquals(isCompatibleIdempotentReplay(null, "same"), false)
+})
+
+Deno.test("payment retry replay must match booking, amount, and currency", () => {
+    const attempt = { booking_id: "booking-1", amount_minor: 125050, currency: "INR" }
+    assertEquals(isCompatiblePaymentAttemptReplay(attempt, {
+        bookingId: "booking-1",
+        amount: 1250.5,
+        currency: "inr",
+    }), true)
+    assertEquals(isCompatiblePaymentAttemptReplay(attempt, {
+        bookingId: "booking-2",
+        amount: 1250.5,
+        currency: "INR",
+    }), false)
+    assertEquals(isCompatiblePaymentAttemptReplay(attempt, {
+        bookingId: "booking-1",
+        amount: 1251,
+        currency: "INR",
+    }), false)
+    assertEquals(isCompatiblePaymentAttemptReplay(attempt, {
+        bookingId: "booking-1",
+        amount: 1250.5,
+        currency: "USD",
+    }), false)
 })

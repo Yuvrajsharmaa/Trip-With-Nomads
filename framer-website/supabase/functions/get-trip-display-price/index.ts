@@ -2,8 +2,10 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2"
 import { Pool } from "https://deno.land/x/postgres@v0.19.3/mod.ts"
 import {
     getDateValue,
+    isAvailableDateKey,
     getTransportValue,
     normalizeSharing,
+    todayISTDateKey,
 } from "../_shared/pricing.ts"
 import { loadWebsiteTripCatalogPricing, resolveWebsiteFinanceIssuer } from "../_shared/crm_trip_catalog.ts"
 
@@ -31,14 +33,6 @@ function toNumber(value: unknown): number {
 
 function round2(value: number): number {
     return Math.round((Number(value) + Number.EPSILON) * 100) / 100
-}
-
-function getTodayDateKey(now = new Date()): string {
-    return new Date(
-        Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate())
-    )
-        .toISOString()
-        .slice(0, 10)
 }
 
 let dbPool: Pool | null = null
@@ -206,12 +200,12 @@ Deno.serve(async (req) => {
         const catalogPricing = await loadWebsiteTripCatalogPricing(normalizeText(trip.id))
         const pricingRows = catalogPricing?.pricingRows || []
 
-        const todayKey = getTodayDateKey()
+        const todayKey = todayISTDateKey()
         const nowMs = Date.now()
 
         const futureRows = pricingRows.filter((row) => {
             const dateKey = getDateValue(row)
-            return Boolean(dateKey) && dateKey >= todayKey && toNumber(row?.price) > 0
+            return isAvailableDateKey(dateKey, todayKey) && toNumber(row?.price) > 0
         })
 
         if (futureRows.length === 0) {
