@@ -22,7 +22,6 @@ Deno.test("retry-payment requires a retry key and persists payment attempts", as
     }
     assertStringIncludes(source, "isCompatiblePaymentAttemptReplay")
     assertStringIncludes(source, "ensurePaymentAttemptOrder")
-    assertStringIncludes(source, "isRazorpayOrderConfirmedUnpaid")
     assertStringIncludes(source, "reactivatePayablePaymentAttempt")
     assertStringIncludes(source, "reusableAttempt = await recoverPaymentAttemptForRetry({")
     assertStringIncludes(source, "latestState = reusableAttempt")
@@ -38,10 +37,21 @@ Deno.test("retry-payment requires a retry key and persists payment attempts", as
         source,
         "idempotencyKey: retryRequestId,",
     )
-    const failedOrderReconciliation = source.indexOf("isRazorpayOrderConfirmedUnpaid({")
     const attemptReservationCall = source.indexOf('schema("crm").rpc("reserve_website_booking_payment_attempt"')
-    if (failedOrderReconciliation < 0 || attemptReservationCall < 0 || failedOrderReconciliation > attemptReservationCall) {
-        throw new Error("retry-payment must confirm a failed provider order is unpaid before creating a fresh attempt")
+    const failedOrderRetryStart = source.indexOf('latestAttempt?.provider_order_id &&\n            ["failed", "expired"].includes(latestStatus)')
+    const failedOrderRetryEnd = source.indexOf("} else if (", failedOrderRetryStart)
+    const failedOrderRetry = source.slice(failedOrderRetryStart, failedOrderRetryEnd)
+    if (
+        failedOrderRetryStart < 0 ||
+        failedOrderRetryEnd < 0 ||
+        !failedOrderRetry.includes("reusableAttempt = await reactivatePayablePaymentAttempt({") ||
+        !failedOrderRetry.includes("idempotencyKey: retryRequestId") ||
+        !failedOrderRetry.includes("latestState = reusableAttempt")
+    ) {
+        throw new Error("A retry must reuse the confirmed-unpaid Razorpay order instead of opening a second chargeable order")
+    }
+    if (attemptReservationCall < failedOrderRetryStart) {
+        throw new Error("Retry order reactivation must happen before reserving any new payment attempt")
     }
     assertStringIncludes(source, 'code: "PAYMENT_ATTEMPT_FINISHED"')
     const bookingEligibilityGuard = source.indexOf("if (!isBookingPaymentRetryEligible(booking))")

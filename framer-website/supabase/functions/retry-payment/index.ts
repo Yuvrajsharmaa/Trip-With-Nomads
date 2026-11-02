@@ -13,7 +13,6 @@ import {
 } from "../_shared/payment_idempotency.ts"
 import {
     ensurePaymentAttemptOrder,
-    isRazorpayOrderConfirmedUnpaid,
     markPaymentAttemptOrderCreating,
     PaymentOrderInProgressError,
     recoverPaymentAttemptForRetry,
@@ -469,14 +468,15 @@ Deno.serve(async (req) => {
                     code: "PAYMENT_CONFIGURATION_MISSING",
                 }, 503)
             }
-            let orderConfirmedUnpaid = false
             try {
-                orderConfirmedUnpaid = await isRazorpayOrderConfirmedUnpaid({
+                reusableAttempt = await reactivatePayablePaymentAttempt({
+                    supabase,
                     attempt: latestAttempt,
                     bookingId: String(booking.id),
                     amount: amountToRetry,
                     currency: retryCurrency,
                     credentials: retryPaymentCredentials,
+                    idempotencyKey: retryRequestId,
                 })
             } catch {
                 return responseJson({
@@ -484,12 +484,13 @@ Deno.serve(async (req) => {
                     code: "PAYMENT_RECONCILIATION_PENDING",
                 }, 409)
             }
-            if (!orderConfirmedUnpaid) {
+            if (!reusableAttempt) {
                 return responseJson({
                     error: "The previous Razorpay payment needs status reconciliation before another collection can start.",
                     code: "PAYMENT_RECONCILIATION_PENDING",
                 }, 409)
             }
+            latestState = reusableAttempt
         } else if (
             paymentProvider === "razorpay" &&
             latestAttempt?.provider_order_id &&
