@@ -1,6 +1,6 @@
 import { assertStringIncludes } from "https://deno.land/std@0.224.0/assert/mod.ts"
 
-Deno.test("shared Finance schema adds only nullable issuer and sync state fields", async () => {
+Deno.test("shared Finance schema adds nullable issuer and payment sync state fields", async () => {
     const source = await Deno.readTextFile(
         new URL("./20261102121612_tri66_shared_finance_schema.sql", import.meta.url),
     )
