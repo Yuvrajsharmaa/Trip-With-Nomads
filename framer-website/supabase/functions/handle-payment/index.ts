@@ -1,4 +1,5 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts"
+import { buildPaymentStatusRedirectUrl } from "./redirect_url.ts"
 const corsHeaders = {
     "Access-Control-Allow-Origin": "*",
     "Access-Control-Allow-Headers": "content-type",
@@ -12,12 +13,6 @@ function firstNonEmpty(...values: unknown[]): string {
         if (next) return next
     }
     return ""
-}
-
-function isUuid(value: unknown): boolean {
-    return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
-        String(value || "").trim(),
-    )
 }
 
 function jsonResponse(payload: Record<string, unknown>, status = 200): Response {
@@ -90,17 +85,8 @@ serve(async (req) => {
         const statusPath = isPaymentFailureCallback(input)
             ? "/payment-failed"
             : firstNonEmpty(Deno.env.get("PAYMENT_STATUS_PATH"), "/payment-success")
-        const baseOrigin = /^https?:\/\//i.test(siteBase) ? siteBase : `https://${siteBase}`
-        const redirectUrl = new URL(statusPath.startsWith("/") ? statusPath : `/${statusPath}`, `${baseOrigin}/`)
-
-        if (isUuid(bookingId)) {
-            redirectUrl.searchParams.set("booking_id", bookingId)
-            if (suppliedToken) {
-                redirectUrl.searchParams.set("status_token", suppliedToken)
-            }
-        }
-
-        return Response.redirect(redirectUrl.toString(), 303)
+        const redirectUrl = buildPaymentStatusRedirectUrl(siteBase, statusPath, bookingId, suppliedToken)
+        return Response.redirect(redirectUrl, 303)
     } catch (error: any) {
         console.error("[handle-payment] redirect adapter failed", error)
         return jsonResponse({ error: error?.message || "Could not redirect to payment status" }, 500)
