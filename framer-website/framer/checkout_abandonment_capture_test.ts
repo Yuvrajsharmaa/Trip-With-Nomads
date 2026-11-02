@@ -40,6 +40,10 @@ Deno.test("checkout reminders are disclosed and do not require a consent checkbo
   assertStringIncludes(source, "store?.contactEmail");
   assertStringIncludes(
     source,
+    'trip_slug: firstNonEmpty(store?.slug, params.get("slug"), params.get("trip_slug"))',
+  );
+  assertStringIncludes(
+    source,
     "if (!tripId || !EMAIL_REGEX.test(email)) return false",
   );
   assert(!source.includes("reminder_opt_in"));

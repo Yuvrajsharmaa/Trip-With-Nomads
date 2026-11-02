@@ -1527,7 +1527,7 @@ async function postBookingAbandonLead(store: any): Promise<boolean> {
         reason: "checkout_abandoned_before_payment",
         page_url: typeof window !== "undefined" ? window.location.origin + window.location.pathname : null,
         trip_id: tripId,
-        trip_slug: params.get("slug") || params.get("trip_slug"),
+        trip_slug: firstNonEmpty(store?.slug, params.get("slug"), params.get("trip_slug")),
         trip_name: firstNonEmpty(store?.tripName, params.get("trip_name")),
         departure_date: firstNonEmpty(store?.date, params.get("date")),
         travellers: Array.isArray(store?.travellers) ? store.travellers : [],
