@@ -6,6 +6,7 @@ import {
 import {
   buildInternalBookingEmail,
   buildInternalNotificationEventKey,
+  excludeBookingEmailFromInternalNotificationRecipients,
   normalizeInternalNotificationRecipients,
 } from "./internal_booking_email.ts"
 
@@ -54,6 +55,23 @@ Deno.test("normalizes internal recipients without hardcoding them", () => {
   assertEquals(normalizeInternalNotificationRecipients(""), [])
 })
 
+Deno.test("excludes the normalized booking email from internal recipients", () => {
+  assertEquals(
+    excludeBookingEmailFromInternalNotificationRecipients(
+      "support@tripwithnomads.com, YuvrajTwn@gmail.com; SUPPORT@TRIPWITHNOMADS.COM",
+      "yuvrajtwn@GMAIL.com",
+    ),
+    ["support@tripwithnomads.com"],
+  )
+  assertEquals(
+    excludeBookingEmailFromInternalNotificationRecipients(
+      ["Guest@example.com"],
+      "guest@example.com",
+    ),
+    [],
+  )
+})
+
 Deno.test("builds a full internal booking snapshot", () => {
   const email = buildInternalBookingEmail({
     recipients: ["support@tripwithnomads.com", "yuvrajsharma6367@gmail.com"],
@@ -70,8 +88,10 @@ Deno.test("builds a full internal booking snapshot", () => {
 
   assert(email)
   assertEquals(email.to, ["support@tripwithnomads.com", "yuvrajsharma6367@gmail.com"])
-  assertStringIncludes(email.html, "padding:20px 8px;")
-  assertStringIncludes(email.html, "padding:20px 16px 24px;")
+  assertStringIncludes(email.html, "padding:20px 0;")
+  assertStringIncludes(email.html, "padding:20px 12px 24px;")
+  assertStringIncludes(email.html, "max-width:600px")
+  assertEquals(email.html.includes("padding:20px 8px;"), false)
   assertEquals(email.html.includes("border:1px solid #cbeafa"), false)
   assertEquals(email.subject, "[TWN] Payment received: Summer Spiti | TWN-2026-00123")
   assertStringIncludes(email.html, "Guest User")

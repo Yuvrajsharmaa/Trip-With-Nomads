@@ -170,7 +170,7 @@ export function buildAbandonedCheckoutEmail(params: {
     subject,
     text,
     html:
-      `<!doctype html><html lang="en"><body style="margin:0;background:#fff;color:#0b3550;font-family:Arial,Helvetica,sans-serif;line-height:1.55"><table role="presentation" width="100%" cellpadding="0" cellspacing="0"><tr><td align="center" style="padding:20px 8px"><table role="presentation" width="600" style="width:100%;max-width:600px"><tr><td><a href="https://tripwithnomads.com" style="display:inline-block;margin:0 0 20px;text-decoration:none"><img src="${safeLogo}" alt="Trip With Nomads" width="96" style="display:block;width:96px;height:60px;object-fit:contain;object-position:left center;border:0"></a><p style="margin:0 0 12px">Hi ${
+      `<!doctype html><html lang="en"><body style="margin:0;background:#fff;color:#0b3550;font-family:Arial,Helvetica,sans-serif;line-height:1.55"><table role="presentation" width="100%" cellpadding="0" cellspacing="0"><tr><td align="center" style="padding:20px 0"><table role="presentation" width="600" style="width:100%;max-width:600px"><tr><td style="padding:0 12px"><a href="https://tripwithnomads.com" style="display:inline-block;margin:0 0 20px;text-decoration:none"><img src="${safeLogo}" alt="Trip With Nomads" width="96" style="display:block;width:96px;height:60px;object-fit:contain;object-position:left center;border:0"></a><p style="margin:0 0 12px">Hi ${
         escapeHtml(name)
       },</p><p style="margin:0 0 24px">${
         escapeHtml(message)

@@ -3714,6 +3714,7 @@ export function withCheckoutPayButton(Component): ComponentType {
 
                 let { res, data } = await createBooking()
                 if (res.ok && data?.already_paid && data?.replayed) {
+                    const replayedBookingId = String(data.booking_id || "")
                     // A paid idempotency replay is from an earlier submit, so this click gets a new booking key.
                     checkout_request_id = createUuid()
                     payload.checkout_request_id = checkout_request_id
@@ -3726,6 +3727,20 @@ export function withCheckoutPayButton(Component): ComponentType {
                         // The current request can still proceed without session storage.
                     }
                     ;({ res, data } = await createBooking())
+
+                    if (
+                        res.ok &&
+                        (data?.already_paid || data?.payment_status === "paid") &&
+                        String(data.booking_id || "") === replayedBookingId
+                    ) {
+                        paymentStartedRef.current = false
+                        showInlineError(
+                            "This checkout is still linked to an earlier paid booking. Refresh checkout or contact us before trying again.",
+                        )
+                        submitLockRef.current = false
+                        setStore({ submitting: false })
+                        return
+                    }
                 }
 
                 if (!res.ok) {

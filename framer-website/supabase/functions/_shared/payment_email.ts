@@ -488,10 +488,10 @@ export function buildPaymentEmail(
     escapeHtml(preheader) + "</span>",
     '    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="width:100%;border-collapse:collapse;background:#ffffff;">',
     "      <tr>",
-    '        <td align="center" style="padding:20px 8px;">',
+    '        <td align="center" style="padding:20px 0;">',
     '          <table role="presentation" width="600" cellpadding="0" cellspacing="0" border="0" style="width:100%;max-width:600px;border-collapse:collapse;background:#ffffff;">',
     "            <tr>",
-    '              <td style="padding:12px 16px 8px;border-bottom:1px solid #e5f3fa;">',
+    '              <td style="padding:12px 12px 8px;border-bottom:1px solid #e5f3fa;">',
     '                <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">',
     "                  <tr>",
     '                    <td style="width:65%;vertical-align:top;">' +
@@ -506,7 +506,9 @@ export function buildPaymentEmail(
     "              </td>",
     "            </tr>",
     "            <tr>",
-    '              <td style="padding:24px 16px 8px;">',
+    '              <td style="padding:0;">',
+    '                <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="border-collapse:collapse;">',
+    '                  <tr><td style="padding:24px 12px 0;">',
     '                <div data-payment-animation="gif" style="width:120px;height:112px;margin:0 auto 14px;text-align:center;">',
     '                  <img src="' + escapeHtml(animationUrl) +
     '" alt="' + escapeHtml(animationAlt) +
@@ -519,16 +521,18 @@ export function buildPaymentEmail(
     escapeHtml(intro) + "</p>",
     '                <div style="height:22px;line-height:22px;">&nbsp;</div>',
     "                " + sectionLabel("Your trip"),
+    '                  </td></tr>',
+    '                  <tr><td style="padding:0;background:#f6fcff;">',
     '                <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="border-collapse:collapse;background:#f6fcff;">',
     "                  <tr>",
-    '                    <td style="padding:15px 16px;">',
+    '                    <td style="padding:15px 12px;">',
     '                      <h3 style="margin:0 0 4px;color:' + BRAND_NAVY +
     ';font-size:19px;line-height:1.3;">' +
     escapeHtml(trip) + "</h3>",
     '                      <p style="margin:0;color:#5e7d8d;font-size:14px;">' +
     escapeHtml(departureDate) + "</p>",
     "                    </td>",
-    '                    <td align="right" style="padding:15px 16px;vertical-align:middle;">',
+    '                    <td align="right" style="padding:15px 12px;vertical-align:middle;">',
     '                      <p style="margin:0;color:#157aa9;font-size:10px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;">Travellers</p>',
     '                      <p style="margin:2px 0 0;color:' + BRAND_NAVY +
     ';font-size:17px;font-weight:700;">' +
@@ -536,6 +540,8 @@ export function buildPaymentEmail(
     "                    </td>",
     "                  </tr>",
     "                </table>",
+    '                  </td></tr>',
+    '                  <tr><td style="padding:22px 12px 0;">',
     '                <div style="height:22px;line-height:22px;">&nbsp;</div>',
     "                " + sectionLabel("Booking details"),
     '                <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="border-collapse:collapse;">',
@@ -562,13 +568,17 @@ export function buildPaymentEmail(
       : []),
     '                <div style="height:22px;line-height:22px;">&nbsp;</div>',
     "                " + sectionLabel("Payment summary"),
+    '                  </td></tr>',
+    '                  <tr><td style="padding:0;background:#f6fcff;">',
     '                <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="border-collapse:collapse;background:#f6fcff;">',
-    '                  <tr><td style="padding:10px 14px;">',
+    '                  <tr><td style="padding:10px 12px;">',
     '                    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="border-collapse:collapse;">',
     "                      " + paymentRows,
     "                    </table>",
     "                  </td></tr>",
     "                </table>",
+    '                  </td></tr>',
+    '                  <tr><td style="padding:24px 12px 8px;">',
     '                <div style="height:24px;line-height:24px;">&nbsp;</div>',
     '                <table role="presentation" cellpadding="0" cellspacing="0" border="0">',
     "                  <tr>",
@@ -584,8 +594,11 @@ export function buildPaymentEmail(
     "                </table>",
     "              </td>",
     "            </tr>",
+    "                </table>",
+    "              </td>",
+    "            </tr>",
     "            <tr>",
-    '              <td style="padding:28px 16px 30px;background:#ffffff;background:linear-gradient(180deg,#ffffff 0%,#08b1ff 100%);border-top:1px solid #cbeafa;color:' +
+    '              <td style="padding:28px 12px 30px;background:#ffffff;background:linear-gradient(180deg,#ffffff 0%,#08b1ff 100%);border-top:1px solid #cbeafa;color:' +
     BRAND_NAVY +
     ';">',
     '                <p style="margin:0 0 6px;color:' + BRAND_NAVY +

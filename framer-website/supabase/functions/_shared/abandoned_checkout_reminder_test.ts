@@ -114,7 +114,9 @@ Deno.test("reminder email uses warm copy, the brand logo, and one-click unsubscr
   });
 
   assertEquals(email.to, "guest@example.com");
-  assertStringIncludes(email.html, "padding:20px 8px");
+  assertStringIncludes(email.html, "padding:20px 0");
+  assertStringIncludes(email.html, 'padding:0 12px');
+  assertStringIncludes(email.html, "max-width:600px");
   assertEquals(email.html.includes("border:1px solid"), false);
   assertEquals(
     email.idempotencyKey,
