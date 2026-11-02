@@ -151,6 +151,6 @@ Deno.test("status tax label and confirmation copy reflect the booking outcome", 
 
 Deno.test("retry button supports failed payments and expired order setup", () => {
     const retry = source.slice(source.indexOf("export function withRetryButton"))
-    assertStringIncludes(retry, 'data.payment_status !== "failed" && data.payment_retry_available !== true')
+    assertStringIncludes(retry, "data.payment_retry_available !== true")
     assertStringIncludes(statusEndpoint, "payment_retry_available: paymentRetryAvailable")
 })

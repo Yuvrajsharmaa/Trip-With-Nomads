@@ -10,12 +10,17 @@ Deno.test("status projection uses provider-neutral transaction fields", () => {
 
 Deno.test("status response exposes retries only after an unpaid provider-order setup expires", () => {
   assertStringIncludes(source, 'from("payment_attempts")')
-  assertStringIncludes(source, "isStalePaymentAttempt({")
+  assertStringIncludes(source, "canOfferPaymentRetry(booking, activeAttempt)")
   assertStringIncludes(source, "payment_retry_available: paymentRetryAvailable")
 })
 
 Deno.test("status response never exposes retry for cancelled or already-paid bookings", () => {
-  assertStringIncludes(source, "isBookingPaymentRetryEligible(booking)")
+  assertStringIncludes(source, "canOfferPaymentRetry(booking, activeAttempt)")
   assertStringIncludes(source, "currency, status, payment_status, payment_mode")
   assertStringIncludes(source, "paid_amount")
+})
+
+Deno.test("status retry lookup includes provider orders so an expired order can be resumed", () => {
+  assertStringIncludes(source, 'select("id, status, provider_order_id, expires_at, created_at, updated_at")')
+  assertStringIncludes(source, "paymentRetryAvailable = canOfferPaymentRetry(booking, activeAttempt)")
 })

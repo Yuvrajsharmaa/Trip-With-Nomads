@@ -106,6 +106,29 @@ export function isBookingPaymentRetryEligible(booking: {
         Number.isFinite(paidAmount) && paidAmount === 0
 }
 
+export function canOfferPaymentRetry(
+    booking: { active_payment_attempt_id?: unknown; payment_status?: unknown; paid_amount?: unknown; status?: unknown },
+    attempt: { id?: unknown; status?: unknown; provider_order_id?: unknown; expires_at?: string | null; created_at?: string | null; updated_at?: string | null } | null,
+    now = new Date(),
+): boolean {
+    if (!isBookingPaymentRetryEligible(booking)) return false
+
+    const paymentStatus = String(booking.payment_status || "").trim().toLowerCase()
+    if (!(["pending", "failed"].includes(paymentStatus))) return false
+    const activeAttemptId = String(booking.active_payment_attempt_id || "").trim().toLowerCase()
+    if (paymentStatus === "failed" && !activeAttemptId) return true
+    if (!activeAttemptId || String(attempt?.id || "").trim().toLowerCase() !== activeAttemptId) return false
+
+    const attemptStatus = String(attempt?.status || "").trim().toLowerCase()
+    return ["failed", "expired"].includes(attemptStatus) || isStalePaymentAttempt({
+        status: attemptStatus,
+        expiresAt: attempt?.expires_at,
+        providerOrderId: attempt?.provider_order_id,
+        createdAt: attempt?.created_at,
+        updatedAt: attempt?.updated_at,
+    }, now)
+}
+
 export function canReplayPaymentAttempt(
     attempt: { id?: unknown; status?: unknown; expires_at?: string | null; provider_order_id?: unknown; created_at?: string | null; updated_at?: string | null },
     booking: { active_payment_attempt_id?: unknown; payment_status?: unknown; paid_amount?: unknown; status?: unknown },

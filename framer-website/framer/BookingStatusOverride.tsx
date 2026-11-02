@@ -1245,7 +1245,7 @@ export function withRetryButton(Component): ComponentType {
             return <Component {...props} style={{ ...props.style, display: "none" }} />
         }
 
-        if (data.payment_status !== "failed" && data.payment_retry_available !== true) {
+        if (data.payment_retry_available !== true) {
             return <Component {...props} style={{ ...props.style, display: "none" }} />
         }
 

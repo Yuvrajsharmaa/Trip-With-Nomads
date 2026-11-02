@@ -1,5 +1,6 @@
 import {
     buildPaymentAttemptInsert,
+    canOfferPaymentRetry,
     canReplayPaymentAttempt,
     canStartPaymentRetry,
     expectedBookingPaymentAmountMinor,
@@ -167,6 +168,28 @@ Deno.test("payment retries reject cancelled, settled, and partially paid booking
     assertEquals(isBookingPaymentRetryEligible({ ...eligible, payment_status: "succeeded" }), false)
     assertEquals(isBookingPaymentRetryEligible({ ...eligible, paid_amount: 1 }), false)
     assertEquals(isBookingPaymentRetryEligible({ ...eligible, paid_amount: "invalid" }), false)
+})
+
+Deno.test("retry affordance allows stale orders and hides blocked booking states", () => {
+    const now = new Date("2026-11-02T12:00:00.000Z")
+    const booking = {
+        active_payment_attempt_id: "attempt-1",
+        payment_status: "pending",
+        paid_amount: 0,
+        status: "pending_payment",
+    }
+    const staleOrder = {
+        id: "attempt-1",
+        status: "pending",
+        provider_order_id: "order-1",
+        expires_at: "2026-11-02T11:59:00.000Z",
+    }
+
+    assertEquals(canOfferPaymentRetry(booking, staleOrder, now), true)
+    assertEquals(canOfferPaymentRetry(booking, { ...staleOrder, expires_at: "2026-11-02T12:01:00.000Z" }, now), false)
+    assertEquals(canOfferPaymentRetry({ ...booking, status: "cancelled", payment_status: "failed" }, { ...staleOrder, status: "failed" }, now), false)
+    assertEquals(canOfferPaymentRetry({ ...booking, payment_status: "failed" }, { ...staleOrder, status: "failed" }, now), true)
+    assertEquals(canOfferPaymentRetry({ ...booking, payment_status: "failed", active_payment_attempt_id: null }, null, now), true)
 })
 
 Deno.test("expected checkout amount is bounded by the saved booking total", () => {
