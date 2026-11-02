@@ -101,7 +101,7 @@ Deno.test("checkout resume URL contains only validated trip context and no custo
   );
 });
 
-Deno.test("reminder email is concise, honest, branded, and includes one-click unsubscribe", () => {
+Deno.test("reminder email uses warm copy, the brand logo, and one-click unsubscribe", () => {
   const email = buildAbandonedCheckoutEmail({
     sequenceId: "795434d8-16dd-47f9-8ad5-bc363821b743",
     reminderNumber: 1 as const,
@@ -114,23 +114,25 @@ Deno.test("reminder email is concise, honest, branded, and includes one-click un
   });
 
   assertEquals(email.to, "guest@example.com");
+  assertStringIncludes(email.html, "padding:20px 8px");
+  assertEquals(email.html.includes("border:1px solid"), false);
   assertEquals(
     email.idempotencyKey,
     "abandoned-checkout:795434d8-16dd-47f9-8ad5-bc363821b743:1",
   );
   assertEquals(
     email.subject,
-    "Your Vietnam HCM Danang Hanoi checkout is unfinished",
+    "Your Vietnam HCM Danang Hanoi adventure is calling",
   );
   assertStringIncludes(
     email.text,
-    "You started booking Vietnam HCM Danang Hanoi but didn’t complete checkout. No seat has been reserved.",
+    "we’ve made room for you in our daydreams of the Vietnam HCM Danang Hanoi crew.",
   );
   assertStringIncludes(
     email.text,
-    "If you’d still like to go, return to checkout below.",
+    "your seat isn’t confirmed until payment is complete. Work can wait; this adventure is calling.",
   );
-  assertEquals(email.text.includes("where you left off"), false);
+  assertStringIncludes(email.text, "Finish checkout to make it official.");
   assertStringIncludes(
     email.text,
     "You’re receiving this because you entered your email while checking out with Trip With Nomads.",
@@ -138,6 +140,13 @@ Deno.test("reminder email is concise, honest, branded, and includes one-click un
   assertEquals(email.text.includes("chose checkout reminders"), false);
   assertStringIncludes(email.text, "Stop these checkout reminders");
   assertStringIncludes(email.html, "https://tripwithnomads.com/checkout?");
+  assertStringIncludes(
+    email.html,
+    "https://framerusercontent.com/images/FR1lBzx4w9xp2fecFXEMUGGul4.png",
+  );
+  assertStringIncludes(email.html, "alt=\"Trip With Nomads\"");
+  assertStringIncludes(email.html, ">Make it official</a>");
+  assertEquals(email.html.includes(">TRIP WITH NOMADS</p>"), false);
   assertStringIncludes(
     email.headers?.["List-Unsubscribe"] || "",
     "795434d8-16dd-47f9-8ad5-bc363821b743",
@@ -165,15 +174,15 @@ Deno.test("reminder email escapes customer-provided trip text", () => {
   assertStringIncludes(email.html, "&lt;img");
   assertEquals(
     email.subject,
-    "Final checkout reminder: <img src=x onerror=alert(1)>",
+    "One last nudge for <img src=x onerror=alert(1)>",
   );
   assertStringIncludes(
     email.text,
-    "No seat is held, and availability may change.",
+    "Your seat isn’t held until payment is complete, and availability can change.",
   );
   assertStringIncludes(
     email.text,
-    "If you’ve changed your plans, you can ignore this email.",
+    "If plans have changed, no worries — you can ignore this note.",
   );
 });
 

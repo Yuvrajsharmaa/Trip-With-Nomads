@@ -141,11 +141,14 @@ export function buildAbandonedCheckoutEmail(params: {
   }
 
   const subject = params.reminderNumber === 1
-    ? `Your ${subjectTrip} checkout is unfinished`
-    : `Final checkout reminder: ${subjectTrip}`;
+    ? `Your ${subjectTrip} adventure is calling`
+    : `One last nudge for ${subjectTrip}`;
   const message = params.reminderNumber === 1
-    ? `You started booking ${tripName} but didn’t complete checkout. No seat has been reserved. If you’d still like to go, return to checkout below.`
-    : `This is the last reminder about your ${tripName} checkout. No seat is held, and availability may change. If you’ve changed your plans, you can ignore this email.`;
+    ? `Good news: we’ve made room for you in our daydreams of the ${tripName} crew. Your checkout details are saved, but your seat isn’t confirmed until payment is complete. Work can wait; this adventure is calling. Finish checkout to make it official.`
+    : `One last little nudge: we’ve still got you in our daydreams of the ${tripName} crew. Your seat isn’t held until payment is complete, and availability can change. If you’re in, finish checkout to make it official. If plans have changed, no worries — you can ignore this note.`;
+  const logoUrl =
+    "https://framerusercontent.com/images/FR1lBzx4w9xp2fecFXEMUGGul4.png?width=364&height=229";
+  const safeLogo = escapeHtml(logoUrl);
   const safeResume = escapeHtml(resume.toString());
   const safeUnsubscribe = escapeHtml(unsubscribe.toString());
   const text = [
@@ -153,12 +156,13 @@ export function buildAbandonedCheckoutEmail(params: {
     "",
     message,
     "",
-    "Continue checkout: " + resume.toString(),
+    "Make it official: " + resume.toString(),
     "",
     "You’re receiving this because you entered your email while checking out with Trip With Nomads.",
     "Stop these checkout reminders: " + unsubscribe.toString(),
     "",
-    "Trip With Nomads",
+    "With wanderlust,",
+    "Your Nomads crew",
   ].join("\n");
 
   return {
@@ -166,11 +170,11 @@ export function buildAbandonedCheckoutEmail(params: {
     subject,
     text,
     html:
-      `<!doctype html><html lang="en"><body style="margin:0;background:#fff;color:#0b3550;font-family:Arial,Helvetica,sans-serif;line-height:1.55"><table role="presentation" width="100%" cellpadding="0" cellspacing="0"><tr><td align="center" style="padding:28px 16px"><table role="presentation" width="600" style="width:100%;max-width:600px"><tr><td><p style="margin:0 0 20px;font-size:14px;font-weight:700;letter-spacing:.08em">TRIP WITH NOMADS</p><p style="margin:0 0 12px">Hi ${
+      `<!doctype html><html lang="en"><body style="margin:0;background:#fff;color:#0b3550;font-family:Arial,Helvetica,sans-serif;line-height:1.55"><table role="presentation" width="100%" cellpadding="0" cellspacing="0"><tr><td align="center" style="padding:20px 8px"><table role="presentation" width="600" style="width:100%;max-width:600px"><tr><td><a href="https://tripwithnomads.com" style="display:inline-block;margin:0 0 20px;text-decoration:none"><img src="${safeLogo}" alt="Trip With Nomads" width="96" style="display:block;width:96px;height:60px;object-fit:contain;object-position:left center;border:0"></a><p style="margin:0 0 12px">Hi ${
         escapeHtml(name)
       },</p><p style="margin:0 0 24px">${
         escapeHtml(message)
-      }</p><p style="margin:0 0 28px"><a href="${safeResume}" style="display:inline-block;background:#08b1ff;border-radius:10px;padding:13px 18px;color:#0b3550;font-weight:700;text-decoration:none">Return to checkout</a></p><p style="margin:0 0 12px;color:#5e7d8d;font-size:12px">You’re receiving this because you entered your email while checking out with Trip With Nomads.</p><p style="margin:0;color:#5e7d8d;font-size:12px"><a href="${safeUnsubscribe}" style="color:#0b3550">Stop these checkout reminders</a></p><p style="margin:24px 0 0;color:#5e7d8d;font-size:12px">Trip With Nomads</p></td></tr></table></td></tr></table></body></html>`,
+      }</p><p style="margin:0 0 28px"><a href="${safeResume}" style="display:inline-block;background:#08b1ff;border-radius:10px;padding:13px 18px;color:#0b3550;font-weight:700;text-decoration:none">Make it official</a></p><p style="margin:0 0 12px;color:#5e7d8d;font-size:12px">You’re receiving this because you entered your email while checking out with Trip With Nomads.</p><p style="margin:0;color:#5e7d8d;font-size:12px"><a href="${safeUnsubscribe}" style="color:#0b3550">Stop these checkout reminders</a></p><p style="margin:24px 0 0;color:#5e7d8d;font-size:12px">With wanderlust,<br>Your Nomads crew</p></td></tr></table></td></tr></table></body></html>`,
     idempotencyKey:
       `abandoned-checkout:${params.sequenceId}:${params.reminderNumber}`,
     headers: {

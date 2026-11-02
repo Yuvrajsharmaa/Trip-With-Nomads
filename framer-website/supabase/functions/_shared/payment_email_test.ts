@@ -62,6 +62,10 @@ Deno.test("builds a designed paid email with booking details", () => {
 
   assert(email);
   assertEquals(email.to, "guest@example.com");
+  assertStringIncludes(email.html, "padding:20px 8px;");
+  assertStringIncludes(email.html, "padding:24px 16px 8px;");
+  assertEquals(email.html.includes("border:1px solid #cbeafa"), false);
+  assertEquals(email.html.includes("border:1px solid #dceef7"), false);
   assertEquals(
     email.subject,
     "Payment received: Summer Spiti | TWN-2026-00123",
