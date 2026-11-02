@@ -20,6 +20,7 @@ Deno.test("retry-payment requires a retry key and persists payment attempts", as
     }
     assertStringIncludes(source, "isCompatiblePaymentAttemptReplay")
     assertStringIncludes(source, "ensurePaymentAttemptOrder")
+    assertStringIncludes(source, "isRazorpayOrderConfirmedUnpaid")
     assertStringIncludes(source, "reactivatePayablePaymentAttempt")
     assertStringIncludes(source, "reusableAttempt = await recoverPaymentAttemptForRetry({")
     assertStringIncludes(source, "latestState = reusableAttempt")
@@ -30,11 +31,12 @@ Deno.test("retry-payment requires a retry key and persists payment attempts", as
         source,
         "idempotencyKey: retryRequestId,",
     )
-    const existingOrderReconciliation = source.indexOf("reactivatePayablePaymentAttempt({")
+    const failedOrderReconciliation = source.indexOf("isRazorpayOrderConfirmedUnpaid({")
     const attemptInsertCall = source.indexOf("const attemptInsert = await supabase")
-    if (existingOrderReconciliation < 0 || attemptInsertCall < 0 || existingOrderReconciliation > attemptInsertCall) {
-        throw new Error("retry-payment must reconcile and reuse an existing provider order before creating another attempt")
+    if (failedOrderReconciliation < 0 || attemptInsertCall < 0 || failedOrderReconciliation > attemptInsertCall) {
+        throw new Error("retry-payment must confirm a failed provider order is unpaid before creating a fresh attempt")
     }
+    assertStringIncludes(source, 'code: "PAYMENT_ATTEMPT_FINISHED"')
     assertStringIncludes(source, 'code: "PAYMENT_ORDER_IN_PROGRESS"')
     assertStringIncludes(source, "from(\"payment_attempts\")")
     assertStringIncludes(source, "attempt_no")

@@ -12,6 +12,43 @@ export class PaymentOrderInProgressError extends Error {
     code = "PAYMENT_ORDER_IN_PROGRESS"
 }
 
+export async function isRazorpayOrderConfirmedUnpaid(params: {
+    attempt: Record<string, any>
+    bookingId: string
+    amount: number
+    currency: string
+    credentials: RazorpayCredentials
+    request?: typeof fetch
+}): Promise<boolean> {
+    const attemptId = String(params.attempt?.id || "")
+    const orderId = String(params.attempt?.provider_order_id || "")
+    const currency = String(params.currency || "INR").toUpperCase()
+    if (
+        !attemptId ||
+        !orderId ||
+        Number(params.attempt?.amount_minor) !== Math.round(params.amount * 100) ||
+        String(params.attempt?.currency || "").toUpperCase() !== currency
+    ) return false
+
+    const order = await fetchRazorpayOrderById(orderId, params.credentials, params.request)
+    if (!canReuseRazorpayOrderForRetry(order, {
+        amount: params.amount,
+        currency,
+        receipt: "twn_" + attemptId.replace(/-/g, "").slice(0, 32),
+        notes: { booking_id: params.bookingId, attempt_id: attemptId },
+    })) return false
+    if (String(order.status).toLowerCase() === "created") return true
+
+    const payments = await fetchRazorpayPaymentsForOrder(orderId, params.credentials, params.request)
+    return payments.length === Number(order.attempts) &&
+        payments.length > 0 &&
+        payments.every((payment) =>
+            Boolean(payment?.id) &&
+            payment.order_id === orderId &&
+            String(payment.status || "").toLowerCase() === "failed"
+        )
+}
+
 type EnsurePaymentAttemptOrderParams = RazorpayOrderParams & {
     supabase: any
     attempt: Record<string, any>
@@ -34,33 +71,7 @@ export async function reactivatePayablePaymentAttempt(params: {
 }): Promise<Record<string, any> | null> {
     const attemptId = String(params.attempt?.id || "")
     const orderId = String(params.attempt?.provider_order_id || "")
-    const currency = String(params.currency || "INR").toUpperCase()
-    if (
-        !attemptId ||
-        !orderId ||
-        Number(params.attempt?.amount_minor) !== Math.round(params.amount * 100) ||
-        String(params.attempt?.currency || "").toUpperCase() !== currency
-    ) return null
-
-    const order = await fetchRazorpayOrderById(orderId, params.credentials, params.request)
-    if (!canReuseRazorpayOrderForRetry(order, {
-        amount: params.amount,
-        currency,
-        receipt: "twn_" + attemptId.replace(/-/g, "").slice(0, 32),
-        notes: { booking_id: params.bookingId, attempt_id: attemptId },
-    })) return null
-    if (String(order.status).toLowerCase() === "attempted") {
-        const payments = await fetchRazorpayPaymentsForOrder(orderId, params.credentials, params.request)
-        if (
-            payments.length !== Number(order.attempts) ||
-            payments.length === 0 ||
-            payments.some((payment) =>
-                !payment?.id ||
-                payment.order_id !== orderId ||
-                String(payment?.status || "").toLowerCase() !== "failed"
-            )
-        ) return null
-    }
+    if (!attemptId || !orderId || !await isRazorpayOrderConfirmedUnpaid(params)) return null
 
     const now = params.now || new Date()
     const updatePayload: Record<string, unknown> = {
