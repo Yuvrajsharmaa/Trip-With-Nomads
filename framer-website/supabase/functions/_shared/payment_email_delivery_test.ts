@@ -7,6 +7,8 @@ import {
   emailProjectionNeedsRetry,
   parseStoredPaymentEmailPayload,
   safeEmailProjectionError,
+  shouldSuppressFailurePaymentEmailForCurrentBooking,
+  shouldSuppressFailurePaymentEmail,
   serializePaymentEmailPayload,
 } from "./payment_email_delivery.ts"
 
@@ -28,6 +30,43 @@ Deno.test("email projection retries pending and failed events only", () => {
   assert(emailProjectionNeedsRetry({ email_sync_status: "failed" }))
   assertEquals(emailProjectionNeedsRetry({ email_sync_status: "sent" }), false)
   assertEquals(emailProjectionNeedsRetry({ email_sync_status: "not_required" }), false)
+})
+
+Deno.test("a queued failure email is suppressed after the booking is paid", () => {
+  assertEquals(shouldSuppressFailurePaymentEmail("payment.failed", "paid"), true)
+  assertEquals(shouldSuppressFailurePaymentEmail("payment.failed", "succeeded"), true)
+  assertEquals(shouldSuppressFailurePaymentEmail("payment.failed", "failed"), false)
+  assertEquals(shouldSuppressFailurePaymentEmail("payment.captured", "paid"), false)
+})
+
+Deno.test("a stale failure snapshot is suppressed when the booking is paid before dispatch", async () => {
+  let queriedBookingId = ""
+  const supabase = {
+    from(table: string) {
+      assertEquals(table, "bookings")
+      return {
+        select(columns: string) {
+          assertEquals(columns, "payment_status")
+          return this
+        },
+        eq(column: string, value: string) {
+          assertEquals(column, "id")
+          queriedBookingId = value
+          return this
+        },
+        async maybeSingle() {
+          return { data: { payment_status: "paid" }, error: null }
+        },
+      }
+    },
+  }
+
+  assertEquals(await shouldSuppressFailurePaymentEmailForCurrentBooking({
+    supabase,
+    eventName: "payment.failed",
+    booking: { id: "booking-1", payment_status: "failed" },
+  }), true)
+  assertEquals(queriedBookingId, "booking-1")
 })
 
 Deno.test("email delivery result is durable and distinguishes provider success from failure", () => {
