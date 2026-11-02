@@ -1,5 +1,6 @@
 import { assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts"
 import {
+    buildLegacyWebsiteTripPricingRows,
     buildWebsiteTripPricingRows,
     buildWebsiteCommercialSnapshot,
     mapWebsiteTripCatalogRow,
@@ -312,4 +313,69 @@ Deno.test("website booking snapshot records Operations rates and early-bird disc
         sellingSubtotalMinor: 1_800_000,
         manualAdjustmentMinor: 0,
     })
+})
+
+Deno.test("legacy website prices remain bookable without invented departure capacity", () => {
+    const pricingRows = buildLegacyWebsiteTripPricingRows({
+        publicTripId: "website-id",
+        today: "2026-11-03",
+        catalogTrip: {
+            id: "crm-id",
+            website_trip_id: "website-id",
+            is_active: true,
+            is_custom: false,
+        },
+        rows: [{
+            id: "crm-id",
+            website_trip_id: "website-id",
+            is_active: true,
+            variant_name: "Double sharing",
+            sharing: null,
+            vehicle: "",
+            price: 12345.5,
+            start_date: "2026-12-20",
+            end_date: "2026-12-25",
+            early_bird_enabled: false,
+        }],
+    })
+
+    assertEquals(pricingRows.map((row) => ({
+        date: row.departure_date,
+        sharing: row.sharing,
+        transport: row.transport,
+        price: row.price,
+        capacity: row.capacity_managed,
+        source: row.pricing_source,
+    })), [{
+        date: "2026-12-20",
+        sharing: "Double",
+        transport: "",
+        price: 12345.5,
+        capacity: false,
+        source: "legacy_public_prices",
+    }])
+    assertEquals(validateWebsiteDepartureSelection(pricingRows, "2026-12-20", 4), {
+        valid: true,
+        departureId: null,
+    })
+})
+
+Deno.test("legacy website prices fail closed for expired dates and duplicate rate keys", () => {
+    const pricingRows = buildLegacyWebsiteTripPricingRows({
+        publicTripId: "website-id",
+        today: "2026-11-03",
+        catalogTrip: {
+            id: "crm-id",
+            website_trip_id: "website-id",
+            is_active: true,
+        },
+        rows: [
+            { sharing: "Double", vehicle: "SUV", price: 10000, start_date: "2026-10-20", end_date: "2026-12-25" },
+            { sharing: "Single", vehicle: "SUV", price: 12000, start_date: "2026-12-20", end_date: "2026-11-02" },
+            { sharing: "Double", vehicle: "SUV", price: 10000, start_date: "2026-12-20", end_date: "2026-12-25" },
+            { sharing: "Double", vehicle: "SUV", price: 11000, start_date: "2026-12-20", end_date: "2026-12-25" },
+        ],
+    })
+
+    assertEquals(pricingRows, [])
 })

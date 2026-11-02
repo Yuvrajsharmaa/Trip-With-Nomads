@@ -42,6 +42,7 @@ export type WebsiteTripCatalogPricing = {
     catalogTrip: WebsiteTripCatalog
     departures: WebsiteTripDeparture[]
     pricingRows: Array<Record<string, unknown>>
+    source: "operations_departures" | "legacy_public_prices"
 }
 
 type CatalogQueryRow = WebsiteTripCatalog & {
@@ -54,6 +55,23 @@ type CatalogQueryRow = WebsiteTripCatalog & {
     reserved_count: number
     unverified_booking_count: number
     pricing_options: unknown[]
+}
+
+type LegacyCatalogPriceRow = CatalogTrip & {
+    website_pricing_id?: unknown
+    variant_name?: unknown
+    price?: unknown
+    start_date?: unknown
+    end_date?: unknown
+    sharing?: unknown
+    vehicle?: unknown
+    early_bird_enabled?: unknown
+    early_bird_discount_type?: unknown
+    early_bird_discount_value?: unknown
+    early_bird_max_discount?: unknown
+    early_bird_starts_at?: unknown
+    early_bird_ends_at?: unknown
+    early_bird_label?: unknown
 }
 
 let catalogPool: Pool | null = null
@@ -215,12 +233,62 @@ export async function loadWebsiteTripCatalogPricing(
                 catalog.website_trip_id = ${publicTripId}::uuid
                 or (catalog.website_trip_id is null and catalog.id = ${publicTripId}::uuid)
               )
-              and departure.status = 'open'
-              and (departure.departure_date + departure.start_time) at time zone departure.time_zone > now()
             order by departure.departure_date, departure.start_time
         `
 
         const rows = result.rows
+        if (rows.length === 0) {
+            const legacyResult = await client.queryObject<LegacyCatalogPriceRow>`
+                select
+                  catalog.id::text as id,
+                  catalog.website_trip_id::text as website_trip_id,
+                  catalog.is_active,
+                  catalog.title,
+                  catalog.slug,
+                  catalog.trip_type,
+                  catalog.region,
+                  catalog.billing_entity,
+                  catalog.is_custom,
+                  pricing.website_pricing_id::text as website_pricing_id,
+                  pricing.variant_name,
+                  pricing.price,
+                  pricing.start_date::text as start_date,
+                  pricing.end_date::text as end_date,
+                  pricing.sharing,
+                  pricing.vehicle,
+                  pricing.early_bird_enabled,
+                  pricing.early_bird_discount_type,
+                  pricing.early_bird_discount_value,
+                  pricing.early_bird_max_discount,
+                  pricing.early_bird_starts_at,
+                  pricing.early_bird_ends_at,
+                  pricing.early_bird_label
+                from crm.website_trip_catalog as pricing
+                join crm.trips_catalog as catalog on catalog.id = pricing.crm_trip_id
+                where pricing.website_trip_id = ${publicTripId}::uuid
+                  and pricing.crm_trip_active is true
+                  and catalog.is_active is true
+                  and catalog.is_custom is not true
+                order by pricing.start_date, pricing.variant_name, pricing.vehicle, pricing.website_pricing_id
+            `
+            const legacyCatalogIds = new Set(legacyResult.rows.map((row) => text(row.id)))
+            if (legacyCatalogIds.size !== 1) return null
+
+            const catalogTrip = mapWebsiteTripCatalogRow(legacyResult.rows[0])
+            const pricingRows = buildLegacyWebsiteTripPricingRows({
+                publicTripId,
+                today: new Intl.DateTimeFormat("en-CA", {
+                    timeZone: "Asia/Kolkata",
+                    year: "numeric",
+                    month: "2-digit",
+                    day: "2-digit",
+                }).format(new Date()),
+                catalogTrip,
+                rows: legacyResult.rows,
+            })
+            return { catalogTrip, departures: [], pricingRows, source: "legacy_public_prices" }
+        }
+
         const catalogIds = new Set(rows.map((row) => row.id))
         if (catalogIds.size !== 1) return null
 
@@ -250,13 +318,73 @@ export async function loadWebsiteTripCatalogPricing(
             departures,
         })
 
-        return { catalogTrip, departures, pricingRows }
+        return { catalogTrip, departures, pricingRows, source: "operations_departures" }
     } catch (error) {
         console.error("[crm-trip-catalog] read failed", error)
         throw new Error("Could not load the current Operations trip prices")
     } finally {
         client.release()
     }
+}
+
+export function buildLegacyWebsiteTripPricingRows(input: {
+    publicTripId: string
+    today: string
+    catalogTrip: CatalogTrip
+    rows: LegacyCatalogPriceRow[]
+}) {
+    const publicTripId = text(input.publicTripId)
+    const mappedWebsiteId = text(input.catalogTrip.website_trip_id)
+    const catalogId = text(input.catalogTrip.id)
+    const legacySameId = !mappedWebsiteId && catalogId === publicTripId
+    const today = validDateKey(input.today)
+    if (
+        !today ||
+        input.catalogTrip.is_active !== true ||
+        input.catalogTrip.is_custom === true ||
+        !publicTripId ||
+        !(mappedWebsiteId === publicTripId || legacySameId)
+    ) return []
+
+    const counts = new Map<string, number>()
+    const candidates = input.rows.flatMap((row) => {
+        const date = validDateKey(row.start_date)
+        const endDate = validDateKey(row.end_date)
+        const price = Number(row.price)
+        const priceMinor = amountMinor(price)
+        const sharing = normalizeSharing(row.sharing || row.variant_name)
+        const transport = text(row.vehicle).replace(/\s+/g, " ")
+        if (!date || date < today || (endDate && endDate < today) || !sharing || priceMinor === null || priceMinor <= 0) {
+            return []
+        }
+        const key = `${date}\u0000${sharing.toLowerCase()}\u0000${transport.toLowerCase()}`
+        counts.set(key, (counts.get(key) || 0) + 1)
+        return [{ row, date, price, sharing, transport, key }]
+    })
+
+    return candidates.flatMap(({ row, date, price, sharing, transport, key }) => {
+        if (counts.get(key) !== 1) return []
+        return [{
+            trip_id: publicTripId,
+            crm_trip_id: catalogId,
+            departure_id: null,
+            departure_date: date,
+            start_date: date,
+            sharing,
+            vehicle: transport,
+            transport,
+            price,
+            early_bird_enabled: row.early_bird_enabled === true,
+            early_bird_discount_type: text(row.early_bird_discount_type).toLowerCase(),
+            early_bird_discount_value: Number(row.early_bird_discount_value) || 0,
+            early_bird_max_discount: row.early_bird_max_discount == null ? null : Number(row.early_bird_max_discount),
+            early_bird_starts_at: row.early_bird_starts_at ?? null,
+            early_bird_ends_at: row.early_bird_ends_at ?? null,
+            early_bird_label: row.early_bird_label ?? null,
+            pricing_source: "legacy_public_prices",
+            capacity_managed: false,
+        }]
+    })
 }
 
 export function buildWebsiteTripPricingRows(input: {
@@ -368,13 +496,17 @@ export function validateWebsiteDepartureSelection(
     pricingRows: Array<Record<string, unknown>>,
     departureDate: string,
     passengerCount: number,
-): { valid: true; departureId: string } | { valid: false; reason: "invalid_passengers" | "unavailable" | "ambiguous" | "capacity" } {
+): { valid: true; departureId: string | null } | { valid: false; reason: "invalid_passengers" | "unavailable" | "ambiguous" | "capacity" } {
     if (!Number.isSafeInteger(passengerCount) || passengerCount < 1 || passengerCount > 50) {
         return { valid: false, reason: "invalid_passengers" }
     }
 
     const matches = pricingRows.filter((row) => text(row.departure_date || row.start_date) === departureDate)
     if (matches.length === 0) return { valid: false, reason: "unavailable" }
+
+    if (matches.every((row) => row.pricing_source === "legacy_public_prices" && row.capacity_managed === false)) {
+        return { valid: true, departureId: null }
+    }
 
     const departureIds = new Set(matches.map((row) => text(row.departure_id)).filter(Boolean))
     const remainingCapacity = new Set(matches.map((row) => Number(row.remaining_capacity)))

@@ -58,6 +58,10 @@ Deno.test("create-booking persists a checkout request and replays its attempt", 
     assertStringIncludes(source, "trip_catalog_id: crmTripCatalogId")
     assertStringIncludes(source, "billing_snapshot: billingSnapshot")
     assertStringIncludes(source, "commercial_snapshot: commercialSnapshot")
+    assertStringIncludes(source, 'if (catalogPricing.source === "operations_departures")')
+    assertStringIncludes(source, 'crmTripSource = catalogPricing.source === "legacy_public_prices"')
+    assertStringIncludes(source, '"website_legacy_pricing"')
+    assertStringIncludes(source, "trip_source: crmTripSource")
     assertStringIncludes(source, "couponCompatibilityPayload")
     assertStringIncludes(source, "Enter a name for every traveller")
     if (source.includes("Enter a name and gender for every traveller")) {
