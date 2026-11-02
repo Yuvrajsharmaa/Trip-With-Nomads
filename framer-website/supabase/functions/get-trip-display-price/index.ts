@@ -2,9 +2,12 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2"
 import { Pool } from "https://deno.land/x/postgres@v0.19.3/mod.ts"
 import {
     getDateValue,
+    isAvailableDateKey,
     getTransportValue,
     normalizeSharing,
+    todayISTDateKey,
 } from "../_shared/pricing.ts"
+import { loadWebsiteTripCatalogPricing, resolveWebsiteFinanceIssuer } from "../_shared/crm_trip_catalog.ts"
 
 const corsHeaders = {
     "Access-Control-Allow-Origin": "*",
@@ -32,14 +35,6 @@ function round2(value: number): number {
     return Math.round((Number(value) + Number.EPSILON) * 100) / 100
 }
 
-function getTodayDateKey(now = new Date()): string {
-    return new Date(
-        Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate())
-    )
-        .toISOString()
-        .slice(0, 10)
-}
-
 let dbPool: Pool | null = null
 
 function getDbPool(): Pool | null {
@@ -58,39 +53,20 @@ async function fetchTripViaDirectDb(params: { tripId: string; slug: string }) {
     const client = await pool.connect()
     try {
         const result = params.tripId
-            ? await client.queryObject<{ id: string; slug: string }>`
-                  select id, slug
+            ? await client.queryObject<{ id: string; slug: string; active: boolean }>`
+                select id, slug, active
                   from public.trips
-                  where id = ${params.tripId}
+                where id = ${params.tripId} and active is true
                   limit 1
               `
-            : await client.queryObject<{ id: string; slug: string }>`
-                  select id, slug
+            : await client.queryObject<{ id: string; slug: string; active: boolean }>`
+                  select id, slug, active
                   from public.trips
-                  where slug = ${params.slug}
+                  where slug = ${params.slug} and active is true
                   limit 1
               `
 
         return { data: result.rows[0] || null, error: null }
-    } catch (error) {
-        return { data: null, error }
-    } finally {
-        client.release()
-    }
-}
-
-async function fetchPricingViaDirectDb(tripId: string) {
-    const pool = getDbPool()
-    if (!pool) return { data: null, error: new Error("Missing SUPABASE_DB_URL") }
-
-    const client = await pool.connect()
-    try {
-        const result = await client.queryObject<any>`
-            select *
-            from public.trip_pricing
-            where trip_id = ${tripId}
-        `
-        return { data: result.rows, error: null }
     } catch (error) {
         return { data: null, error }
     } finally {
@@ -199,7 +175,7 @@ Deno.serve(async (req) => {
 
         const tripQuery = supabase
             .from("trips")
-            .select("id, slug")
+            .select("id, slug, active")
             .limit(1)
 
         const tripResult = tripId
@@ -217,39 +193,23 @@ Deno.serve(async (req) => {
             trip = fallbackTrip.data
         }
 
-        if (!trip?.id) {
+        if (!trip?.id || trip.active !== true) {
             return json({ error: "Trip not found" }, 404)
         }
 
-        const pricingResult = await supabase
-            .from("trip_pricing")
-            .select("*")
-            .eq("trip_id", trip.id)
+        const catalogPricing = await loadWebsiteTripCatalogPricing(normalizeText(trip.id))
+        const pricingRows = catalogPricing?.pricingRows || []
 
-        let pricingRows = Array.isArray(pricingResult.data) ? pricingResult.data : []
-        if (pricingResult.error) {
-            console.warn(
-                "[get-trip-display-price] pricing lookup API error, trying direct DB",
-                pricingResult.error
-            )
-            const fallbackPricing = await fetchPricingViaDirectDb(normalizeText(trip.id))
-            if (fallbackPricing.error) {
-                console.error("[get-trip-display-price] pricing lookup direct DB error", fallbackPricing.error)
-                return json({ error: "Pricing lookup failed" }, 500)
-            }
-            pricingRows = Array.isArray(fallbackPricing.data) ? fallbackPricing.data : []
-        }
-
-        const todayKey = getTodayDateKey()
+        const todayKey = todayISTDateKey()
         const nowMs = Date.now()
 
         const futureRows = pricingRows.filter((row) => {
             const dateKey = getDateValue(row)
-            return Boolean(dateKey) && dateKey >= todayKey && toNumber(row?.price) > 0
+            return isAvailableDateKey(dateKey, todayKey) && toNumber(row?.price) > 0
         })
 
         if (futureRows.length === 0) {
-            return json({ error: "No future pricing found" }, 404)
+            return json({ error: "No open departures are available for online booking" }, 404)
         }
 
         let nextBatchDate = ""
@@ -278,7 +238,9 @@ Deno.serve(async (req) => {
                 sharing,
                 transport,
             },
-            engine_version: "v3",
+            pricing_rows: pricingRows,
+            finance_issuer: catalogPricing ? resolveWebsiteFinanceIssuer(catalogPricing.catalogTrip) : null,
+            engine_version: "v4",
         })
     } catch (err: any) {
         console.error("[get-trip-display-price] fatal", err)

@@ -11,4 +11,9 @@ Deno.test("display pricing resolves an explicit trip ID before slug fallback", (
   assertStringIncludes(source, 'await tripQuery.eq("id", tripId)');
   assertStringIncludes(source, ': await tripQuery.eq("slug", slug)');
   assertStringIncludes(source, "fetchTripViaDirectDb({ tripId, slug })");
+  assertStringIncludes(source, "loadWebsiteTripCatalogPricing");
+  assertStringIncludes(source, "pricing_rows: pricingRows");
+  if (source.includes('.from("trip_pricing")')) {
+    throw new Error("Trip display pricing must use Operations catalogue rates");
+  }
 });

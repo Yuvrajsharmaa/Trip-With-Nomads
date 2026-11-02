@@ -4,6 +4,7 @@ import {
     projectionConfigurationError,
     projectLeadSheets,
 } from "../_shared/lead_projection.ts"
+import { isAllowedAbandonedCheckoutOrigin } from "../_shared/checkout_abandon_origin.ts"
 
 const corsHeaders = {
     "Access-Control-Allow-Origin": "*",
@@ -608,6 +609,12 @@ Deno.serve(async (req) => {
         const partialFill = status === "partial_fill"
         const source = normalizeSource(body?.source)
         const normalizedEmail = normalizeEmail(body?.email)
+        if (
+            source === "booking_abandoned" &&
+            !isAllowedAbandonedCheckoutOrigin(req.headers.get("origin"))
+        ) {
+            return json({ error: "Checkout reminders can only be captured from the Trip With Nomads website" }, 403)
+        }
         const phone = compact(body?.phone)
         if (source === "booking_invite" && !partialFill && !phone) {
             return json({ error: "Phone is required for NTC invites", code: "PHONE_REQUIRED" }, 400)
@@ -638,7 +645,10 @@ Deno.serve(async (req) => {
         // and the human-facing Sheet projection.
         const inferredTripSlug = compact(body?.trip_slug) ||
             inferTripSlug(body?.page_url)
-        const enrichedBody = { ...body, trip_slug: inferredTripSlug }
+        const enrichedBody = {
+            ...body,
+            trip_slug: inferredTripSlug,
+        }
         const submissionPayload = {
             submission_id: submissionId,
             lead_id: compact(body?.lead_id) || null,

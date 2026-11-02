@@ -6,6 +6,7 @@ import {
 import {
   buildInternalBookingEmail,
   buildInternalNotificationEventKey,
+  excludeBookingEmailFromInternalNotificationRecipients,
   normalizeInternalNotificationRecipients,
 } from "./internal_booking_email.ts"
 
@@ -54,6 +55,23 @@ Deno.test("normalizes internal recipients without hardcoding them", () => {
   assertEquals(normalizeInternalNotificationRecipients(""), [])
 })
 
+Deno.test("excludes the normalized booking email from internal recipients", () => {
+  assertEquals(
+    excludeBookingEmailFromInternalNotificationRecipients(
+      "support@tripwithnomads.com, YuvrajTwn@gmail.com; SUPPORT@TRIPWITHNOMADS.COM",
+      "yuvrajtwn@GMAIL.com",
+    ),
+    ["support@tripwithnomads.com"],
+  )
+  assertEquals(
+    excludeBookingEmailFromInternalNotificationRecipients(
+      ["Guest@example.com"],
+      "guest@example.com",
+    ),
+    [],
+  )
+})
+
 Deno.test("builds a full internal booking snapshot", () => {
   const email = buildInternalBookingEmail({
     recipients: ["support@tripwithnomads.com", "yuvrajsharma6367@gmail.com"],
@@ -70,6 +88,11 @@ Deno.test("builds a full internal booking snapshot", () => {
 
   assert(email)
   assertEquals(email.to, ["support@tripwithnomads.com", "yuvrajsharma6367@gmail.com"])
+  assertStringIncludes(email.html, "padding:20px 0;")
+  assertStringIncludes(email.html, "padding:20px 12px 24px;")
+  assertStringIncludes(email.html, "max-width:600px")
+  assertEquals(email.html.includes("padding:20px 8px;"), false)
+  assertEquals(email.html.includes("border:1px solid #cbeafa"), false)
   assertEquals(email.subject, "[TWN] Payment received: Summer Spiti | TWN-2026-00123")
   assertStringIncludes(email.html, "Guest User")
   assertStringIncludes(email.html, "3 pax")
@@ -81,6 +104,64 @@ Deno.test("builds a full internal booking snapshot", () => {
   assertStringIncludes(email.html, "evt_123")
   assertStringIncludes(email.html, "payment-success?booking_id=booking-123")
   assertStringIncludes(email.text, "Phone: +91 9876543210")
+})
+
+Deno.test("shows the full outstanding amount before a full payment is verified", () => {
+  const email = buildInternalBookingEmail({
+    recipients: ["support@tripwithnomads.com"],
+    eventType: "booking_created",
+    eventKey: "booking-created:booking-123:attempt-1",
+    booking: {
+      ...booking,
+      payment_status: "pending",
+      settlement_status: "pending",
+      paid_amount: 0,
+      payable_now_amount: 24780,
+      due_amount: 0,
+    },
+  })
+
+  assert(email)
+  assertStringIncludes(email.text, "Balance due: ₹24,780.00")
+})
+
+Deno.test("uses stored due amount when an unpaid booking has no total amount", () => {
+  const email = buildInternalBookingEmail({
+    recipients: ["support@tripwithnomads.com"],
+    eventType: "booking_created",
+    eventKey: "booking-created:booking-123:attempt-1",
+    booking: {
+      ...booking,
+      payment_status: "pending",
+      settlement_status: "pending",
+      total_amount: null,
+      paid_amount: 0,
+      due_amount: 1234,
+    },
+  })
+
+  assert(email)
+  assertStringIncludes(email.text, "Balance due: ₹1,234.00")
+})
+
+Deno.test("shows total minus verified payments as outstanding before an advance clears", () => {
+  const email = buildInternalBookingEmail({
+    recipients: ["support@tripwithnomads.com"],
+    eventType: "booking_created",
+    eventKey: "booking-created:booking-123:attempt-1",
+    booking: {
+      ...booking,
+      payment_status: "pending",
+      settlement_status: "pending",
+      payment_mode: "partial_25",
+      paid_amount: 0,
+      payable_now_amount: 6195,
+      due_amount: 18585,
+    },
+  })
+
+  assert(email)
+  assertStringIncludes(email.text, "Balance due: ₹24,780.00")
 })
 
 Deno.test("builds a payment failure alert with actionable error context", () => {

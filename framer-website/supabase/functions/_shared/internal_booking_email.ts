@@ -140,9 +140,22 @@ export function normalizeInternalNotificationRecipients(value: unknown): string[
   return normalizeRecipients(values)
 }
 
-export function resolveInternalNotificationRecipients(): string[] {
-  return normalizeInternalNotificationRecipients(
+export function excludeBookingEmailFromInternalNotificationRecipients(
+  value: unknown,
+  bookingEmail: unknown,
+): string[] {
+  const customerEmail = normalizeEmail(bookingEmail)
+  return normalizeInternalNotificationRecipients(value).filter((email) =>
+    email !== customerEmail
+  )
+}
+
+export function resolveInternalNotificationRecipients(
+  bookingEmail?: unknown,
+): string[] {
+  return excludeBookingEmailFromInternalNotificationRecipients(
     Deno.env.get("BOOKING_INTERNAL_NOTIFICATION_RECIPIENTS") || "",
+    bookingEmail,
   )
 }
 
@@ -278,6 +291,13 @@ export function buildInternalBookingEmail(
   const eventTimestamp = text(input.occurredAt) || new Date().toISOString()
   const paymentId = text(booking.payment_gateway_payment_id) || text(booking.payment_gateway_txn_id)
   const orderId = text(booking.payment_gateway_order_or_ref_id)
+  const paymentStatus = text(booking.payment_status).toLowerCase()
+  const isUnpaid = ["pending", "failed"].includes(paymentStatus) ||
+    text(booking.settlement_status).toLowerCase() === "pending"
+  const balanceDue = isUnpaid && booking.total_amount !== null &&
+      booking.total_amount !== undefined && Number.isFinite(Number(booking.total_amount))
+    ? Math.max(0, number(booking.total_amount) - number(booking.paid_amount))
+    : number(booking.due_amount)
   const errorDetails = [text(input.errorCode), text(input.errorMessage)].filter(Boolean).join(" — ")
   const statusUrl = normalizeUrl(input.statusUrl)
   const retryUrl = normalizeUrl(input.retryUrl)
@@ -311,7 +331,7 @@ export function buildInternalBookingEmail(
     row("Trip total", formatAmount(booking.total_amount)),
     row("Payable now", formatAmount(booking.payable_now_amount)),
     row("Paid amount", formatAmount(booking.paid_amount)),
-    row("Balance due", formatAmount(booking.due_amount)),
+    row("Balance due", formatAmount(balanceDue)),
     row("Provider", booking.payment_provider),
     row("Payment reference", paymentId),
     row("Order reference", orderId),
@@ -370,7 +390,7 @@ export function buildInternalBookingEmail(
       `Trip total: ${formatAmount(booking.total_amount)}`,
       `Payable now: ${formatAmount(booking.payable_now_amount)}`,
       `Paid amount: ${formatAmount(booking.paid_amount)}`,
-      `Balance due: ${formatAmount(booking.due_amount)}`,
+      `Balance due: ${formatAmount(balanceDue)}`,
       `Provider: ${text(booking.payment_provider) || "Not available"}`,
       `Payment reference: ${paymentId || "Not available"}`,
       `Order reference: ${orderId || "Not available"}`,
@@ -389,10 +409,10 @@ export function buildInternalBookingEmail(
     "<!doctype html>",
     '<html lang="en"><head><meta charset="UTF-8"></head>',
     `<body style="margin:0;background:#f4fbff;color:${BRAND_NAVY};font-family:Arial,Helvetica,sans-serif;line-height:1.5;">`,
-    '<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0"><tr><td align="center" style="padding:24px 12px;">',
-    `<table role="presentation" width="600" cellpadding="0" cellspacing="0" border="0" style="width:100%;max-width:600px;background:#ffffff;border:1px solid #cbeafa;border-radius:14px;overflow:hidden;">`,
-    `<tr><td style="padding:18px 22px;border-bottom:1px solid #e5f3fa;"><img src="${EMAIL_LOGO_URL}" alt="Trip With Nomads" width="96" style="display:block;width:96px;height:60px;object-fit:contain;object-position:left center;border:0;"><p style="margin:10px 0 0;color:#157aa9;font-size:11px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;">Internal operations</p></td></tr>`,
-    `<tr><td style="padding:24px 22px 28px;"><p style="margin:0 0 6px;color:${BRAND_BLUE};font-size:12px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;">${escapeHtml(label)}</p><h1 style="margin:0;color:${BRAND_NAVY};font-size:24px;line-height:1.25;">${escapeHtml(tripTitle)}</h1>${section("Booking", summaryRows)}${section("Guest", guestRows)}<p style="margin:22px 0 8px;color:#157aa9;font-size:11px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;">Travellers</p><div style="color:#355d73;font-size:13px;line-height:1.7;">${travellerText.map((line) => `<div>${escapeHtml(line)}</div>`).join("")}</div><p style="margin:22px 0 8px;color:#157aa9;font-size:11px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;">Selections</p><div style="color:#355d73;font-size:13px;line-height:1.7;">${selectionText.map((line) => `<div>${escapeHtml(line)}</div>`).join("")}</div>${section("Payment", paymentRows)}${section("Event", eventRows)}${actionHtml}<p style="margin:24px 0 0;color:#7893a0;font-size:11px;line-height:1.6;">This is an internal Trip With Nomads operational notification. Do not forward it outside the team.</p></td></tr>`,
+    '<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0"><tr><td align="center" style="padding:20px 0;">',
+    `<table role="presentation" width="600" cellpadding="0" cellspacing="0" border="0" style="width:100%;max-width:600px;background:#ffffff;border-collapse:collapse;">`,
+    `<tr><td style="padding:16px 12px;border-bottom:1px solid #e5f3fa;"><img src="${EMAIL_LOGO_URL}" alt="Trip With Nomads" width="96" style="display:block;width:96px;height:60px;object-fit:contain;object-position:left center;border:0;"><p style="margin:10px 0 0;color:#157aa9;font-size:11px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;">Internal operations</p></td></tr>`,
+    `<tr><td style="padding:20px 12px 24px;"><p style="margin:0 0 6px;color:${BRAND_BLUE};font-size:12px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;">${escapeHtml(label)}</p><h1 style="margin:0;color:${BRAND_NAVY};font-size:24px;line-height:1.25;">${escapeHtml(tripTitle)}</h1>${section("Booking", summaryRows)}${section("Guest", guestRows)}<p style="margin:22px 0 8px;color:#157aa9;font-size:11px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;">Travellers</p><div style="color:#355d73;font-size:13px;line-height:1.7;">${travellerText.map((line) => `<div>${escapeHtml(line)}</div>`).join("")}</div><p style="margin:22px 0 8px;color:#157aa9;font-size:11px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;">Selections</p><div style="color:#355d73;font-size:13px;line-height:1.7;">${selectionText.map((line) => `<div>${escapeHtml(line)}</div>`).join("")}</div>${section("Payment", paymentRows)}${section("Event", eventRows)}${actionHtml}<p style="margin:24px 0 0;color:#7893a0;font-size:11px;line-height:1.6;">This is an internal Trip With Nomads operational notification. Do not forward it outside the team.</p></td></tr>`,
     "</table></td></tr></table>",
     "</body></html>",
   ].join("\n")

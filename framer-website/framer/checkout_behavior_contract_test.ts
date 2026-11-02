@@ -61,6 +61,39 @@ Deno.test("status UI renders payment and settlement state from the signed respon
     assertStringIncludes(source, "Retry status")
 })
 
+Deno.test("payment retry refreshes only a key rejected for a finished attempt and stays on the status page", async () => {
+    const source = await read("BookingStatusOverride.tsx")
+
+    const retryRecoveryStart = source.indexOf(
+        'if (!res.ok && payload?.code === "PAYMENT_ATTEMPT_FINISHED")',
+    )
+    const retryRecoveryEnd = source.indexOf(
+        'if (!res.ok) throw new Error(`Retry failed',
+        retryRecoveryStart,
+    )
+    const retryRecovery = source.slice(retryRecoveryStart, retryRecoveryEnd)
+    const clearOldKey = retryRecovery.indexOf(
+        "clearRetryRequestId(data.id, attemptKey)",
+    )
+    const createFreshKey = retryRecovery.indexOf(
+        "retryRequestId = getRetryRequestId(data.id, attemptKey)",
+    )
+    const retryWithFreshKey = retryRecovery.indexOf(
+        "res = await retryRequest(retryRequestId)",
+    )
+    if (
+        retryRecoveryStart < 0 || retryRecoveryEnd < 0 || clearOldKey < 0 ||
+        createFreshKey < clearOldKey || retryWithFreshKey < createFreshKey
+    ) {
+        throw new Error(
+            "A finished retry key must be replaced before the status page retries the request",
+        )
+    }
+    assertStringIncludes(source, "setRetryError(")
+    assertStringIncludes(source, 'role="alert"')
+    assert(!source.includes("domesticTripsBaseUrl"))
+})
+
 Deno.test("all legacy lead routes remain exported and use one guarded submission path", async () => {
     const source = await read("EmailPopupOverride.tsx")
 
