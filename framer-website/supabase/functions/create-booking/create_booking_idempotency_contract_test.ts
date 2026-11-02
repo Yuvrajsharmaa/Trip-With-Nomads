@@ -11,7 +11,20 @@ Deno.test("create-booking persists a checkout request and replays its attempt", 
     assertStringIncludes(source, "canonicalizing trip ID from slug")
     assertStringIncludes(source, "checkout_request_fingerprint")
     assertStringIncludes(source, "fingerprintBookingRequest")
+    assertStringIncludes(source, 'if (currency !== "INR")')
     assertStringIncludes(source, 'from("payment_attempts")')
+    assertStringIncludes(source, 'status: "creating"')
+    assertStringIncludes(source, "mayCreatePaymentOrder = true")
+    assertStringIncludes(source, "ensurePaymentAttemptOrder")
+    const paymentCredentialCheck = source.indexOf(
+        "const paymentCredentials = razorpayCredentials()",
+    )
+    const paymentAttemptInsert = source.indexOf(
+        '.from("payment_attempts")\n                .insert(attemptPayload)',
+    )
+    if (paymentCredentialCheck < 0 || paymentAttemptInsert < 0 || paymentCredentialCheck > paymentAttemptInsert) {
+        throw new Error("create-booking must validate Razorpay credentials before creating a payment attempt")
+    }
     assertStringIncludes(source, "IDEMPOTENCY_CONFLICT")
     assertStringIncludes(source, "!replayed")
     assertStringIncludes(source, "gateway: activeProvider")
@@ -20,27 +33,12 @@ Deno.test("create-booking persists a checkout request and replays its attempt", 
     assertStringIncludes(source, "loadWebsiteTripCatalogPricing")
     assertStringIncludes(source, "validateWebsiteDepartureSelection")
     assertStringIncludes(source, 'schema("crm").rpc("create_booking_draft"')
-    assertStringIncludes(source, 'schema("crm").rpc("reserve_website_booking_payment_attempt"')
-    assertStringIncludes(source, "canReplayPaymentAttempt")
-    assertStringIncludes(source, "PAYMENT_ATTEMPT_STARTING")
-    assertStringIncludes(source, "p_expected_booking_updated_at: data.updated_at")
-    assertStringIncludes(source, "currentBookingPaymentAmountMinor")
     assertStringIncludes(source, "p_request_key: checkoutRequestId")
     assertStringIncludes(source, "p_booking: insertPayload")
     assertStringIncludes(source, "trip_catalog_id: crmTripCatalogId")
     assertStringIncludes(source, "billing_snapshot: billingSnapshot")
     assertStringIncludes(source, "commercial_snapshot: commercialSnapshot")
     assertStringIncludes(source, "couponCompatibilityPayload")
-    const couponWriteStart = source.indexOf("const couponCompatibilityWrite")
-    const couponWriteEnd = source.indexOf("data = couponCompatibilityWrite.data", couponWriteStart)
-    const couponWrite = source.slice(couponWriteStart, couponWriteEnd)
-    assertStringIncludes(couponWrite, '.eq("updated_at", data.updated_at)')
-    assertStringIncludes(couponWrite, '.select("*")')
-    assertStringIncludes(couponWrite, ".maybeSingle()")
-    assertStringIncludes(source, "if (!couponCompatibilityWrite.data)")
-    assertStringIncludes(source, 'sqlState === "23514"')
-    assertStringIncludes(source, '"PAYMENT_ATTEMPT_CONFLICT"')
-    assertStringIncludes(source, '}, conflict ? 409 : 500)')
     assertStringIncludes(source, "Enter a name for every traveller")
     if (source.includes("Enter a name and gender for every traveller")) {
         throw new Error("Website booking must not require gender at checkout")
@@ -68,6 +66,19 @@ Deno.test("create-booking persists a checkout request and replays its attempt", 
         throw new Error("new website bookings must go through the CRM shared booking RPC")
     }
     assertStringIncludes(source, "already_paid")
+    const paidReplayBranchStart = source.indexOf(
+        'if (String(data.payment_status || "").trim().toLowerCase() === "paid")',
+    )
+    const paidReplayBranchEnd = source.indexOf(
+        'if (activeProvider === "razorpay")',
+        paidReplayBranchStart,
+    )
+    const paidReplayBranch = source.slice(paidReplayBranchStart, paidReplayBranchEnd)
+    const replayGuard = paidReplayBranch.indexOf("if (!replayed)")
+    const notificationCall = paidReplayBranch.indexOf("await sendBookingCreatedNotification(")
+    if (replayGuard < 0 || notificationCall < replayGuard) {
+        throw new Error("Paid idempotent replays must not resend the booking-created notification")
+    }
     assertStringIncludes(source, "PAYMENT_PROVIDER_UNSUPPORTED")
     assertStringIncludes(source, "BOOKING_CALLBACK_SHEET_ID")
     if (source.includes('Deno.env.get("GOOGLE_SHEET_ID_TRIPS")')) {
@@ -75,13 +86,8 @@ Deno.test("create-booking persists a checkout request and replays its attempt", 
             "create-booking must never use the trip-lead workbook as a booking Sheet fallback",
         )
     }
-    assertStringIncludes(source, "key_id: credentials.keyId")
-    const replayPreparationGuard = source.indexOf("PAYMENT_ATTEMPT_STARTING")
-    const providerOrderCreate = source.indexOf("order = await createRazorpayOrder")
-    if (replayPreparationGuard < 0 || replayPreparationGuard > providerOrderCreate) {
-        throw new Error("create-booking must stop a same-key replay before it can create another provider order")
-    }
-    if (source.includes("key: credentials.keyId")) {
+    assertStringIncludes(source, "key_id: paymentCredentials.keyId")
+    if (source.includes("key: paymentCredentials.keyId")) {
         throw new Error(
             "create-booking must return the key_id field consumed by the checkout client",
         )

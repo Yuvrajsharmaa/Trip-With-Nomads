@@ -13,3 +13,8 @@ verify_jwt = false
 # before the function can apply that validation.
 [functions.record-lead]
 verify_jwt = false
+
+# The scheduled worker is authenticated by its dedicated Vault-backed secret,
+# which it verifies before claiming or sending any reminders.
+[functions.checkout-reminders]
+verify_jwt = false

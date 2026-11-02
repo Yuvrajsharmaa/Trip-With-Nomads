@@ -2,16 +2,20 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2"
 import {
     buildPaymentAttemptInsert,
     canStartPaymentRetry,
-    canReplayPaymentAttempt,
-    expectedBookingPaymentAmountMinor,
-    hasPaymentAttemptProviderOrder,
     isUuid,
     isStalePaymentAttempt,
+    isCompatiblePaymentAttemptReplay,
     nextPaymentAttemptNumber,
     normalizeIdempotencyKey,
 } from "../_shared/payment_idempotency.ts"
 import {
-    createRazorpayOrder,
+    ensurePaymentAttemptOrder,
+    isRazorpayOrderConfirmedUnpaid,
+    PaymentOrderInProgressError,
+    recoverPaymentAttemptForRetry,
+    reactivatePayablePaymentAttempt,
+} from "../_shared/payment_attempt_order.ts"
+import {
     paymentCallbackUrl,
     razorpayCredentials,
 } from "../_shared/razorpay.ts"
@@ -44,6 +48,10 @@ function round2(value: number): number {
     return Math.round((Number(value) + Number.EPSILON) * 100) / 100
 }
 
+function isUniqueViolation(error: any): boolean {
+    return String(error?.code || "").trim() === "23505"
+}
+
 function responseJson(payload: Record<string, unknown>, status = 200): Response {
     return new Response(JSON.stringify(payload), {
         headers: { ...corsHeaders, "Content-Type": "application/json" },
@@ -57,14 +65,22 @@ async function buildRazorpayPayload(params: {
     booking: any
     supabaseUrl: string
     statusToken?: string | null
+    mayCreate?: boolean
+    credentials?: ReturnType<typeof razorpayCredentials>
 }) {
-    const credentials = razorpayCredentials()
+    const credentials = params.credentials || razorpayCredentials()
     if (!credentials.keyId || !credentials.keySecret) {
         throw new Error("Razorpay payment configuration missing")
     }
     let orderId = String(params.attempt?.provider_order_id || "").trim()
+    if (!orderId && String(params.booking?.active_payment_attempt_id || "") === String(params.attempt?.id || "")) {
+        orderId = String(params.booking?.payment_gateway_order_or_ref_id || "").trim()
+    }
     if (!orderId) {
-        const order = await createRazorpayOrder({
+        const resolved = await ensurePaymentAttemptOrder({
+            supabase: params.supabase,
+            attempt: params.attempt,
+            mayCreate: Boolean(params.mayCreate),
             amount: Math.max(0, toNumber(params.attempt?.amount_minor) / 100),
             currency: params.booking?.currency || "INR",
             receipt: `twn_${String(params.attempt?.id || Date.now()).replace(/-/g, "").slice(0, 32)}`,
@@ -72,26 +88,48 @@ async function buildRazorpayPayload(params: {
                 booking_id: String(params.booking.id),
                 attempt_id: String(params.attempt.id),
             },
+            credentials,
         })
+        const order = resolved.order
+        Object.assign(params.attempt, resolved.attempt)
         orderId = String(order.id)
-        const attemptUpdate = await params.supabase
-            .from("payment_attempts")
-            .update({ provider: "razorpay", provider_order_id: orderId, updated_at: new Date().toISOString() })
-            .eq("id", params.attempt.id)
-        if (attemptUpdate.error) throw attemptUpdate.error
-        params.attempt = { ...params.attempt, provider: "razorpay", provider_order_id: orderId }
     }
     const bookingUpdate = await params.supabase
         .from("bookings")
         .update({
+            payment_status: "pending",
+            settlement_status: "pending",
             payment_provider: "razorpay",
             payment_gateway_order_or_ref_id: orderId,
             active_payment_attempt_id: params.attempt.id,
             payment_attempt_number: params.attempt.attempt_no,
         })
         .eq("id", params.booking.id)
-    if (bookingUpdate.error && !String(bookingUpdate.error.message || "").toLowerCase().includes("payment_gateway_order_or_ref_id")) {
+        .or("payment_status.is.null,payment_status.neq.paid")
+        .select("id")
+        .maybeSingle()
+    const legacyOrderColumnMissing = String(bookingUpdate.error?.message || "")
+        .toLowerCase()
+        .includes("payment_gateway_order_or_ref_id")
+    if (bookingUpdate.error && !legacyOrderColumnMissing) {
         throw bookingUpdate.error
+    }
+    if (!bookingUpdate.error && !bookingUpdate.data) {
+        const currentBooking = await params.supabase
+            .from("bookings")
+            .select("payment_status")
+            .eq("id", params.booking.id)
+            .maybeSingle()
+        if (currentBooking.error) throw currentBooking.error
+        if (
+            !currentBooking.data ||
+            String(currentBooking.data.payment_status || "").toLowerCase() === "paid"
+        ) {
+            throw new PaymentOrderInProgressError(
+                "Payment may already be complete. Refresh its status before retrying.",
+            )
+        }
+        throw new Error("Could not update booking retry state")
     }
     return {
         key_id: credentials.keyId,
@@ -110,6 +148,9 @@ async function buildRazorpayPayload(params: {
 Deno.serve(async (req) => {
     if (req.method === "OPTIONS") {
         return new Response("ok", { headers: corsHeaders })
+    }
+    if (req.method !== "POST") {
+        return responseJson({ error: "Method not allowed" }, 405)
     }
 
     let notificationSupabase: any = null
@@ -159,13 +200,18 @@ Deno.serve(async (req) => {
             return responseJson({ error: "Booking not found" }, 404)
         }
         notificationBooking = booking as PaymentEmailBooking
-        const expectedPaymentAmountMinor = expectedBookingPaymentAmountMinor(booking)
-        if (expectedPaymentAmountMinor === null) {
-            return responseJson({
-                error: "The booking payment amount could not be confirmed. Refresh before trying again.",
-                code: "BOOKING_AMOUNT_UNAVAILABLE",
-            }, 409)
-        }
+
+        const mode = String(booking.payment_mode || "").trim().toLowerCase() === "partial_25"
+            ? "partial_25"
+            : "full"
+        const totalAmount = round2(Math.max(0, toNumber(booking.total_amount)))
+        const payableNow = round2(Math.max(
+            0,
+            toNumber(booking.payable_now_amount || (mode === "partial_25" ? totalAmount * 0.25 : totalAmount)),
+        ))
+        const amountToRetry = mode === "partial_25" ? payableNow : totalAmount
+        if (amountToRetry <= 0) throw new Error("Invalid payment amount")
+        const retryCurrency = String(booking.currency || "INR").trim().toUpperCase()
 
         const notifyRetryStarted = async (attempt: any, orderId: string) => {
             notificationAttempt = attempt
@@ -213,22 +259,14 @@ Deno.serve(async (req) => {
                     code: "IDEMPOTENCY_CONFLICT",
                 }, 409)
             }
-            if (Number(existingRequest.data.amount_minor) !== expectedPaymentAmountMinor) {
+            if (!isCompatiblePaymentAttemptReplay(existingRequest.data, {
+                bookingId: booking.id,
+                amount: amountToRetry,
+                currency: retryCurrency,
+            })) {
                 return responseJson({
-                    error: "The booking price changed after this payment attempt. Refresh before trying again.",
-                    code: "BOOKING_PRICE_CHANGED",
-                }, 409)
-            }
-            if (!canReplayPaymentAttempt(existingRequest.data, booking)) {
-                return responseJson({
-                    error: "This payment request is no longer active. Refresh the booking status before trying again.",
-                    code: "PAYMENT_ATTEMPT_CONFLICT",
-                }, 409)
-            }
-            if (!hasPaymentAttemptProviderOrder(existingRequest.data)) {
-                return responseJson({
-                    error: "This payment is already starting. Wait a moment, then refresh before trying again.",
-                    code: "PAYMENT_ATTEMPT_STARTING",
+                    error: "retry_request_id was already used with a different payment amount or currency",
+                    code: "IDEMPOTENCY_CONFLICT",
                 }, 409)
             }
 
@@ -249,23 +287,80 @@ Deno.serve(async (req) => {
                     code: "PAYMENT_PROVIDER_UNSUPPORTED",
                 }, 409)
             }
-            notificationAttempt = existingRequest.data
+            if (
+                String(booking.payment_status || "").toLowerCase() === "paid" ||
+                ["paid", "succeeded"].includes(String(existingRequest.data.status || "").toLowerCase())
+            ) {
+                return responseJson({
+                    error: "Payment is already complete or is being reconciled. Check the booking status before retrying.",
+                    code: "PAYMENT_RECONCILIATION_PENDING",
+                }, 409)
+            }
+            const replayCredentials = razorpayCredentials()
+            if (!replayCredentials.keyId || !replayCredentials.keySecret) {
+                return responseJson({
+                    error: "Razorpay payment configuration missing",
+                    code: "PAYMENT_CONFIGURATION_MISSING",
+                }, 503)
+            }
+            let replayAttempt = existingRequest.data
+            const replayStatus = String(replayAttempt.status || "").toLowerCase()
+            const replayIsStale = isStalePaymentAttempt({
+                status: replayAttempt.status,
+                expiresAt: replayAttempt.expires_at,
+            })
+            if (["failed", "expired"].includes(replayStatus)) {
+                return responseJson({
+                    error: "This retry request has already ended. Start a fresh retry from the booking status page.",
+                    code: "PAYMENT_ATTEMPT_FINISHED",
+                }, 409)
+            }
+            if (
+                replayAttempt.provider_order_id &&
+                replayIsStale
+            ) {
+                try {
+                    const resumed = await reactivatePayablePaymentAttempt({
+                        supabase,
+                        attempt: replayAttempt,
+                        bookingId: String(booking.id),
+                        amount: amountToRetry,
+                        currency: retryCurrency,
+                        credentials: replayCredentials,
+                        idempotencyKey: retryRequestId,
+                    })
+                    if (!resumed) {
+                        return responseJson({
+                            error: "The previous Razorpay payment needs status reconciliation before it can be retried.",
+                            code: "PAYMENT_RECONCILIATION_PENDING",
+                        }, 409)
+                    }
+                    replayAttempt = resumed
+                } catch {
+                    return responseJson({
+                        error: "The previous Razorpay payment could not be verified. Check its status before retrying.",
+                        code: "PAYMENT_RECONCILIATION_PENDING",
+                    }, 409)
+                }
+            }
+            notificationAttempt = replayAttempt
             const existingGateway = await buildRazorpayPayload({
                 supabase,
-                attempt: existingRequest.data,
+                attempt: replayAttempt,
                 booking,
                 supabaseUrl,
                 statusToken: statusToken?.token,
+                credentials: replayCredentials,
             })
-            await notifyRetryStarted(existingRequest.data, String(existingGateway.order_id || ""))
+            await notifyRetryStarted(replayAttempt, String(existingGateway.order_id || ""))
             return responseJson({
                 booking_id: booking.id,
                 retry_request_id: retryRequestId,
                 replayed: true,
-                attempt_id: existingRequest.data.id,
-                attempt_no: existingRequest.data.attempt_no,
+                attempt_id: replayAttempt.id,
+                attempt_no: replayAttempt.attempt_no,
                 gateway: existingProvider,
-                payment_provider: existingRequest.data.provider,
+                payment_provider: replayAttempt.provider,
                 payment_status: booking.payment_status,
                 payment_mode: booking.payment_mode,
                 payable_now_amount: round2(toNumber(booking.payable_now_amount)),
@@ -283,6 +378,9 @@ Deno.serve(async (req) => {
             }, 409)
         }
 
+        const paymentProvider = String(
+            booking.payment_provider || Deno.env.get("PAYMENT_PROVIDER") || "razorpay",
+        ).trim().toLowerCase()
         const { data: attempts, error: attemptsError } = await supabase
             .from("payment_attempts")
             .select("*")
@@ -292,35 +390,120 @@ Deno.serve(async (req) => {
 
         const latestAttempt = Array.isArray(attempts) ? attempts[0] : null
         let latestState: any = latestAttempt || { status: booking.payment_status }
-        if (latestAttempt && isStalePaymentAttempt({
+        let reusableAttempt: Record<string, any> | null = null
+        let retryPaymentCredentials: ReturnType<typeof razorpayCredentials> | null = null
+        const latestStatus = String(latestAttempt?.status || "").toLowerCase()
+        const latestIsStale = latestAttempt && isStalePaymentAttempt({
             status: latestAttempt.status,
             expiresAt: latestAttempt.expires_at,
-        })) {
-            const expired = await supabase
-                .from("payment_attempts")
-                .update({
-                    status: "expired",
-                    error_code: "ATTEMPT_EXPIRED",
-                    error_message: "Payment attempt expired before retry",
-                    updated_at: new Date().toISOString(),
+        })
+        if (
+            paymentProvider === "razorpay" &&
+            latestAttempt?.provider_order_id &&
+            ["failed", "expired"].includes(latestStatus)
+        ) {
+            retryPaymentCredentials = razorpayCredentials()
+            if (!retryPaymentCredentials.keyId || !retryPaymentCredentials.keySecret) {
+                return responseJson({
+                    error: "Razorpay payment configuration missing",
+                    code: "PAYMENT_CONFIGURATION_MISSING",
+                }, 503)
+            }
+            let orderConfirmedUnpaid = false
+            try {
+                orderConfirmedUnpaid = await isRazorpayOrderConfirmedUnpaid({
+                    attempt: latestAttempt,
+                    bookingId: String(booking.id),
+                    amount: amountToRetry,
+                    currency: retryCurrency,
+                    credentials: retryPaymentCredentials,
                 })
-                .eq("id", latestAttempt.id)
-                .in("status", ["creating", "pending"])
-                .select("*")
-                .maybeSingle()
-            if (expired.error) throw new Error(expired.error.message || "Could not expire payment attempt")
-            if (expired.data) latestState = expired.data
-            else {
-                const refreshed = await supabase
-                    .from("payment_attempts")
-                    .select("*")
-                    .eq("id", latestAttempt.id)
-                    .single()
-                if (refreshed.error) throw new Error(refreshed.error.message || "Could not refresh payment attempt")
-                latestState = refreshed.data
+            } catch {
+                return responseJson({
+                    error: "The previous Razorpay payment could not be verified. Check its status before retrying.",
+                    code: "PAYMENT_RECONCILIATION_PENDING",
+                }, 409)
+            }
+            if (!orderConfirmedUnpaid) {
+                return responseJson({
+                    error: "The previous Razorpay payment needs status reconciliation before another collection can start.",
+                    code: "PAYMENT_RECONCILIATION_PENDING",
+                }, 409)
+            }
+        } else if (
+            paymentProvider === "razorpay" &&
+            latestAttempt?.provider_order_id &&
+            latestIsStale
+        ) {
+            retryPaymentCredentials = razorpayCredentials()
+            if (!retryPaymentCredentials.keyId || !retryPaymentCredentials.keySecret) {
+                return responseJson({
+                    error: "Razorpay payment configuration missing",
+                    code: "PAYMENT_CONFIGURATION_MISSING",
+                }, 503)
+            }
+            try {
+                reusableAttempt = await reactivatePayablePaymentAttempt({
+                    supabase,
+                    attempt: latestAttempt,
+                    bookingId: String(booking.id),
+                    amount: amountToRetry,
+                    currency: retryCurrency,
+                    credentials: retryPaymentCredentials,
+                    idempotencyKey: retryRequestId,
+                })
+            } catch {
+                return responseJson({
+                    error: "The previous Razorpay payment could not be verified. Check its status before retrying.",
+                    code: "PAYMENT_RECONCILIATION_PENDING",
+                }, 409)
+            }
+            if (!reusableAttempt) {
+                return responseJson({
+                    error: "The previous Razorpay payment needs status reconciliation before another collection can start.",
+                    code: "PAYMENT_RECONCILIATION_PENDING",
+                }, 409)
+            }
+            latestState = reusableAttempt
+        } else if (
+            latestAttempt &&
+            !latestAttempt.provider_order_id &&
+            (latestIsStale || ["failed", "expired"].includes(latestStatus))
+        ) {
+            if (paymentProvider === "razorpay") {
+                retryPaymentCredentials = razorpayCredentials()
+                if (!retryPaymentCredentials.keyId || !retryPaymentCredentials.keySecret) {
+                    return responseJson({
+                        error: "Razorpay payment configuration missing",
+                        code: "PAYMENT_CONFIGURATION_MISSING",
+                    }, 503)
+                }
+                try {
+                    reusableAttempt = await recoverPaymentAttemptForRetry({
+                        supabase,
+                        attempt: latestAttempt,
+                        bookingId: String(booking.id),
+                        amount: amountToRetry,
+                        currency: retryCurrency,
+                        credentials: retryPaymentCredentials,
+                        idempotencyKey: retryRequestId,
+                    })
+                } catch {
+                    return responseJson({
+                        error: "The previous payment attempt is still being reconciled. Try again shortly.",
+                        code: "PAYMENT_ORDER_IN_PROGRESS",
+                    }, 409)
+                }
+                if (!reusableAttempt) {
+                    return responseJson({
+                        error: "The previous payment needs status reconciliation before it can be retried.",
+                        code: "PAYMENT_RECONCILIATION_PENDING",
+                    }, 409)
+                }
+                latestState = reusableAttempt
             }
         }
-        if (!canStartPaymentRetry({ status: latestState.status, expiresAt: latestState.expires_at })) {
+        if (!reusableAttempt && !canStartPaymentRetry({ status: latestState.status, expiresAt: latestState.expires_at })) {
             const status = String(latestState.status || booking.payment_status || "unknown").toLowerCase()
             const message = status === "pending"
                 ? "A payment attempt is still pending. Mark it expired before retrying."
@@ -330,82 +513,70 @@ Deno.serve(async (req) => {
             return responseJson({ error: message, code: "RETRY_NOT_ALLOWED", attempt_status: status }, 409)
         }
 
-        const mode =
-            String(booking.payment_mode || "").trim().toLowerCase() === "partial_25"
-                ? "partial_25"
-                : "full"
-        const totalAmount = round2(Math.max(0, toNumber(booking.total_amount)))
-        const payableNow = round2(
-            Math.max(
-                0,
-                toNumber(booking.payable_now_amount || (mode === "partial_25" ? totalAmount * 0.25 : totalAmount)),
-            ),
-        )
-        const amountToRetry = mode === "partial_25" ? payableNow : totalAmount
-        if (amountToRetry <= 0) throw new Error("Invalid payment amount")
-
         const attemptNo = nextPaymentAttemptNumber(Array.isArray(attempts) ? attempts : [])
-        const paymentProvider = String(
-            booking.payment_provider || Deno.env.get("PAYMENT_PROVIDER") || "razorpay",
-        ).trim().toLowerCase()
         if (paymentProvider !== "razorpay") {
             return responseJson({
                 error: `Unsupported payment provider: ${paymentProvider}`,
                 code: "PAYMENT_PROVIDER_UNSUPPORTED",
             }, 409)
         }
-        const attemptPayload = buildPaymentAttemptInsert({
-            bookingId: booking.id,
-            attemptNo,
-            idempotencyKey: retryRequestId,
-            provider: paymentProvider,
-            amount: amountToRetry,
-            currency: booking.currency || "INR",
-            status: "pending",
-        })
-        attemptPayload.expires_at = new Date(Date.now() + 30 * 60 * 1000).toISOString()
-        if (!booking.updated_at || Number(attemptPayload.amount_minor) !== expectedPaymentAmountMinor) {
+        retryPaymentCredentials = retryPaymentCredentials || razorpayCredentials()
+        if (!retryPaymentCredentials.keyId || !retryPaymentCredentials.keySecret) {
             return responseJson({
-                error: "The booking price changed after this payment retry started. Refresh before trying again.",
-                code: "BOOKING_PRICE_CHANGED",
-            }, 409)
+                error: "Razorpay payment configuration missing",
+                code: "PAYMENT_CONFIGURATION_MISSING",
+            }, 503)
         }
+        let paymentAttempt: any = reusableAttempt
+        let replayed = Boolean(reusableAttempt)
+        let mayCreateOrder = false
+        if (!paymentAttempt) {
+            const attemptPayload = buildPaymentAttemptInsert({
+                bookingId: booking.id,
+                attemptNo,
+                idempotencyKey: retryRequestId,
+                provider: paymentProvider,
+                amount: amountToRetry,
+                currency: booking.currency || "INR",
+                status: "creating",
+            })
+            attemptPayload.expires_at = new Date(Date.now() + 30 * 60 * 1000).toISOString()
 
-        const reservation = await supabase.schema("crm").rpc("reserve_website_booking_payment_attempt", {
-            p_booking_id: booking.id,
-            p_idempotency_key: attemptPayload.idempotency_key,
-            p_expected_booking_updated_at: booking.updated_at,
-            p_attempt_no: attemptPayload.attempt_no,
-            p_provider: attemptPayload.provider,
-            p_amount_minor: attemptPayload.amount_minor,
-            p_currency: attemptPayload.currency,
-            p_status: attemptPayload.status,
-            p_expires_at: attemptPayload.expires_at,
-        })
-        const reservationRow = Array.isArray(reservation.data) ? reservation.data[0] : reservation.data
-        if (reservation.error || !reservationRow?.payment_attempt) {
-            const message = reservation.error?.message || "Could not reserve this payment retry"
-            const sqlState = reservation.error?.code
-            const conflict = ["40001", "23505", "23514"].includes(sqlState)
-            const code = sqlState === "40001"
-                ? "BOOKING_PRICE_CHANGED"
-                : sqlState === "23505"
-                    ? "IDEMPOTENCY_CONFLICT"
-                    : sqlState === "23514"
-                        ? "PAYMENT_ATTEMPT_CONFLICT"
-                        : "PAYMENT_ATTEMPT_RESERVATION_FAILED"
-            return responseJson({
-                error: message,
-                code,
-            }, conflict ? 409 : 500)
-        }
-        const paymentAttempt = reservationRow.payment_attempt
-        const replayed = reservationRow.replayed === true
-        if (replayed && !hasPaymentAttemptProviderOrder(paymentAttempt)) {
-            return responseJson({
-                error: "This payment is already starting. Wait a moment, then refresh before trying again.",
-                code: "PAYMENT_ATTEMPT_STARTING",
-            }, 409)
+            const attemptInsert = await supabase
+                .from("payment_attempts")
+                .insert(attemptPayload)
+                .select("*")
+                .single()
+            paymentAttempt = attemptInsert.data
+            mayCreateOrder = Boolean(attemptInsert.data)
+
+            if (attemptInsert.error && isUniqueViolation(attemptInsert.error)) {
+                const concurrentRequest = await supabase
+                    .from("payment_attempts")
+                    .select("*")
+                    .eq("idempotency_key", retryRequestId)
+                    .maybeSingle()
+                if (concurrentRequest.data) {
+                    if (String(concurrentRequest.data.booking_id) !== String(booking.id)) {
+                        return responseJson({
+                            error: "retry_request_id was already used for another booking",
+                            code: "IDEMPOTENCY_CONFLICT",
+                        }, 409)
+                    }
+                    paymentAttempt = concurrentRequest.data
+                    replayed = true
+                    mayCreateOrder = false
+                } else {
+                    return responseJson({
+                        error: "Another payment attempt is already active for this booking",
+                        code: "RETRY_IN_PROGRESS",
+                    }, 409)
+                }
+            }
+
+            if (attemptInsert.error && !paymentAttempt) {
+                throw new Error(attemptInsert.error.message || "Could not create payment attempt")
+            }
         }
         notificationAttempt = paymentAttempt
 
@@ -427,6 +598,8 @@ Deno.serve(async (req) => {
                 booking: { ...booking, payment_provider: "razorpay" },
                 supabaseUrl,
                 statusToken: statusToken?.token,
+                mayCreate: mayCreateOrder,
+                credentials: retryPaymentCredentials,
             })
         } else {
             throw new Error(`Unsupported payment provider: ${paymentProvider}`)
@@ -473,6 +646,7 @@ Deno.serve(async (req) => {
                 })
             }
         }
-        return responseJson({ error: error?.message || "Retry failed" }, 400)
+        const status = error instanceof PaymentOrderInProgressError ? 409 : 400
+        return responseJson({ error: error?.message || "Retry failed", ...(error?.code ? { code: error.code } : {}) }, status)
     }
 })

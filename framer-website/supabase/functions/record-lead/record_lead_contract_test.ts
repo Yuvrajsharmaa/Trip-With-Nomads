@@ -1,6 +1,9 @@
 import { assert, assertStringIncludes } from "https://deno.land/std@0.224.0/assert/mod.ts"
 
 const source = await Deno.readTextFile(new URL("./index.ts", import.meta.url))
+const abandonOrigin = await Deno.readTextFile(
+    new URL("../_shared/checkout_abandon_origin.ts", import.meta.url),
+)
 const projection = await Deno.readTextFile(
     new URL("../_shared/lead_projection.ts", import.meta.url),
 )
@@ -68,6 +71,16 @@ Deno.test("phone-only homepage and optional-email waitlist leads are accepted", 
     assertStringIncludes(source, "!normalizedEmail && !partialFill && !phoneOnlyContact")
     assertStringIncludes(wrapper, "const phoneOnlyWaitlistContact = !email && Boolean(phone)")
     assertStringIncludes(wrapper, 'source === "general_lead") && !email && Boolean(phone)')
+})
+
+Deno.test("abandoned checkout capture validates its browser origin", () => {
+    assertStringIncludes(source, "isAllowedAbandonedCheckoutOrigin(req.headers.get(\"origin\"))")
+    assertStringIncludes(abandonOrigin, "tripwithnomads.com")
+    assertStringIncludes(abandonOrigin, "maroon-aside-814100.framer.app")
+})
+
+Deno.test("record-lead does not collect or persist checkout-reminder consent", () => {
+    assert(!source.includes("reminder_opt_in"))
 })
 
 Deno.test("lead routing is explicit and custom tabs remain configuration-gated", () => {

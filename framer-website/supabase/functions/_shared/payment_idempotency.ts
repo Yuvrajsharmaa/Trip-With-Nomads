@@ -174,3 +174,12 @@ export function isCompatibleIdempotentReplay(
     const requested = String(requestedFingerprint || "").trim().toLowerCase()
     return Boolean(existing && requested && existing === requested)
 }
+
+export function isCompatiblePaymentAttemptReplay(
+    attempt: { booking_id?: unknown; amount_minor?: unknown; currency?: unknown },
+    request: { bookingId: unknown; amount: unknown; currency: unknown },
+): boolean {
+    return String(attempt?.booking_id || "") === String(request.bookingId || "") &&
+        Number(attempt?.amount_minor) === amountToMinorUnits(request.amount) &&
+        String(attempt?.currency || "").trim().toUpperCase() === String(request.currency || "").trim().toUpperCase()
+}

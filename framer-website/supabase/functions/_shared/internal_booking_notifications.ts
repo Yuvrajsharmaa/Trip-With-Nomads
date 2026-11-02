@@ -3,6 +3,7 @@ import {
   type InternalBookingEmailContent,
   type InternalBookingEmailInput,
   type InternalNotificationEventType,
+  excludeBookingEmailFromInternalNotificationRecipients,
   resolveInternalNotificationRecipients,
 } from "./internal_booking_email.ts"
 import {
@@ -10,7 +11,7 @@ import {
   safeEmailProjectionError,
   type EmailDeliveryResult,
 } from "./payment_email_delivery.ts"
-import { sendResendEmail } from "./resend.ts"
+import { normalizeResendRecipients, sendResendEmail } from "./resend.ts"
 
 export type InternalBookingNotificationRequest = Omit<
   InternalBookingEmailInput,
@@ -51,6 +52,27 @@ export function serializeInternalBookingEmailPayload(
     html: payload.html,
     text: payload.text,
     idempotencyKey: payload.idempotencyKey,
+  }
+}
+
+export function filterBookingEmailFromInternalNotificationPayload(
+  payload: InternalBookingEmailContent,
+  bookingEmail: unknown,
+): InternalBookingEmailContent | null {
+  const to = excludeBookingEmailFromInternalNotificationRecipients(
+    payload.to,
+    bookingEmail,
+  )
+  if (to.length === 0) return null
+  const previousRecipients = normalizeResendRecipients(payload.to)
+  const recipientsChanged = to.length !== previousRecipients.length ||
+    to.some((recipient, index) => recipient !== previousRecipients[index])
+  return {
+    ...payload,
+    to,
+    ...(recipientsChanged
+      ? { idempotencyKey: `${payload.idempotencyKey}:customer-excluded` }
+      : {}),
   }
 }
 
@@ -152,14 +174,7 @@ function classifyInternalDelivery(
 export async function deliverInternalBookingNotification(
   params: InternalBookingNotificationRequest,
 ): Promise<InternalBookingNotificationStatus> {
-  const recipients = resolveInternalNotificationRecipients()
-  if (recipients.length === 0) {
-    console.warn("[internal-booking-email] no recipients configured; notification skipped", {
-      eventKey: params.eventKey,
-      eventType: params.eventType,
-    })
-    return "not_required"
-  }
+  const recipients = resolveInternalNotificationRecipients(params.booking.email)
 
   let ledger: any = null
   try {
@@ -167,8 +182,22 @@ export async function deliverInternalBookingNotification(
     const status = String(ledger?.status || "").trim().toLowerCase()
     if (status === "sent" || status === "not_required") return status
 
+    if (recipients.length === 0) {
+      console.warn("[internal-booking-email] no recipients configured; notification skipped", {
+        eventKey: params.eventKey,
+        eventType: params.eventType,
+      })
+      await updateLedger(params.supabase, ledger.id, {
+        status: "not_required",
+        recipients: [],
+        email_payload: null,
+        error_message: null,
+      })
+      return "not_required"
+    }
+
     const attemptNumber = Math.max(0, Number(ledger?.attempts || 0)) + 1
-    let current = await updateLedger(params.supabase, ledger.id, {
+    const current = await updateLedger(params.supabase, ledger.id, {
       status: "pending",
       attempts: attemptNumber,
       last_attempt_at: new Date().toISOString(),
@@ -176,7 +205,23 @@ export async function deliverInternalBookingNotification(
       recipients,
     })
 
-    let payload = parseStoredInternalBookingEmailPayload(current.email_payload)
+    const storedPayload = parseStoredInternalBookingEmailPayload(current.email_payload)
+    let payload = storedPayload
+      ? filterBookingEmailFromInternalNotificationPayload(
+        storedPayload,
+        params.booking.email,
+      )
+      : null
+    if (storedPayload && !payload) {
+      await updateLedger(params.supabase, ledger.id, {
+        status: "not_required",
+        recipients: [],
+        email_payload: null,
+        error_message: null,
+      })
+      return "not_required"
+    }
+
     if (!payload) {
       const booking = params.booking as Record<string, unknown>
       const trip = await loadTripDetails(params.supabase, booking)
@@ -194,14 +239,14 @@ export async function deliverInternalBookingNotification(
         })
         return "not_required"
       }
-      current = await updateLedger(params.supabase, ledger.id, {
-        status: "pending",
-        recipients: payload.to,
-        idempotency_key: payload.idempotencyKey,
-        email_payload: serializeInternalBookingEmailPayload(payload),
-        error_message: null,
-      })
     }
+    await updateLedger(params.supabase, ledger.id, {
+      status: "pending",
+      recipients: payload.to,
+      idempotency_key: payload.idempotencyKey,
+      email_payload: serializeInternalBookingEmailPayload(payload),
+      error_message: null,
+    })
 
     const result = await sendResendEmail(payload)
     const classified = classifyInternalDelivery(result)

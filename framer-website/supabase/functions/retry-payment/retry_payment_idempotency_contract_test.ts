@@ -8,7 +8,37 @@ Deno.test("retry-payment requires a retry key and persists payment attempts", as
     assertStringIncludes(source, "canStartPaymentRetry")
     assertStringIncludes(source, "canReplayPaymentAttempt")
     assertStringIncludes(source, "isStalePaymentAttempt")
-    assertStringIncludes(source, 'status: "expired"')
+    assertStringIncludes(source, 'status: "creating"')
+    assertStringIncludes(source, "mayCreateOrder = Boolean(attemptInsert.data)")
+    const paymentCredentialCheck = source.indexOf(
+        "retryPaymentCredentials = retryPaymentCredentials || razorpayCredentials()",
+    )
+    const paymentAttemptInsert = source.indexOf(
+        "const attemptPayload = buildPaymentAttemptInsert({",
+    )
+    if (paymentCredentialCheck < 0 || paymentAttemptInsert < 0 || paymentCredentialCheck > paymentAttemptInsert) {
+        throw new Error("retry-payment must validate Razorpay credentials before creating a payment attempt")
+    }
+    assertStringIncludes(source, "isCompatiblePaymentAttemptReplay")
+    assertStringIncludes(source, "ensurePaymentAttemptOrder")
+    assertStringIncludes(source, "isRazorpayOrderConfirmedUnpaid")
+    assertStringIncludes(source, "reactivatePayablePaymentAttempt")
+    assertStringIncludes(source, "reusableAttempt = await recoverPaymentAttemptForRetry({")
+    assertStringIncludes(source, "latestState = reusableAttempt")
+    assertStringIncludes(source, "let replayed = Boolean(reusableAttempt)")
+    assertStringIncludes(source, "PAYMENT_RECONCILIATION_PENDING")
+    assertStringIncludes(source, '.or("payment_status.is.null,payment_status.neq.paid")')
+    assertStringIncludes(
+        source,
+        "idempotencyKey: retryRequestId,",
+    )
+    const failedOrderReconciliation = source.indexOf("isRazorpayOrderConfirmedUnpaid({")
+    const attemptInsertCall = source.indexOf("const attemptInsert = await supabase")
+    if (failedOrderReconciliation < 0 || attemptInsertCall < 0 || failedOrderReconciliation > attemptInsertCall) {
+        throw new Error("retry-payment must confirm a failed provider order is unpaid before creating a fresh attempt")
+    }
+    assertStringIncludes(source, 'code: "PAYMENT_ATTEMPT_FINISHED"')
+    assertStringIncludes(source, 'code: "PAYMENT_ORDER_IN_PROGRESS"')
     assertStringIncludes(source, "from(\"payment_attempts\")")
     assertStringIncludes(source, "attempt_no")
     assertStringIncludes(source, 'schema("crm").rpc("reserve_website_booking_payment_attempt"')
