@@ -11,7 +11,7 @@ import {
   safeEmailProjectionError,
   type EmailDeliveryResult,
 } from "./payment_email_delivery.ts"
-import { sendResendEmail } from "./resend.ts"
+import { normalizeResendRecipients, sendResendEmail } from "./resend.ts"
 
 export type InternalBookingNotificationRequest = Omit<
   InternalBookingEmailInput,
@@ -63,7 +63,17 @@ export function filterBookingEmailFromInternalNotificationPayload(
     payload.to,
     bookingEmail,
   )
-  return to.length > 0 ? { ...payload, to } : null
+  if (to.length === 0) return null
+  const previousRecipients = normalizeResendRecipients(payload.to)
+  const recipientsChanged = to.length !== previousRecipients.length ||
+    to.some((recipient, index) => recipient !== previousRecipients[index])
+  return {
+    ...payload,
+    to,
+    ...(recipientsChanged
+      ? { idempotencyKey: `${payload.idempotencyKey}:customer-excluded` }
+      : {}),
+  }
 }
 
 export function internalNotificationNeedsRetry(

@@ -40,8 +40,19 @@ Deno.test("stored internal email retries exclude the booking email and persist o
   assert(sanitized)
   assertEquals(sanitized.to, ["support@tripwithnomads.com"])
   assertEquals(
+    sanitized.idempotencyKey,
+    `${payload.idempotencyKey}:customer-excluded`,
+  )
+  assertEquals(
     serializeInternalBookingEmailPayload(sanitized).to,
     ["support@tripwithnomads.com"],
+  )
+  assertEquals(
+    filterBookingEmailFromInternalNotificationPayload(
+      sanitized,
+      "yuvrajtwn@gmail.com",
+    ),
+    sanitized,
   )
   assertEquals(
     filterBookingEmailFromInternalNotificationPayload(
@@ -49,6 +60,16 @@ Deno.test("stored internal email retries exclude the booking email and persist o
       "yuvrajtwn@gmail.com",
     ),
     null,
+  )
+  assertEquals(
+    filterBookingEmailFromInternalNotificationPayload(
+      {
+        ...payload,
+        to: ["SUPPORT@TripWithNomads.com", "yuvrajsharma6367@gmail.com"],
+      },
+      "yuvrajtwn@gmail.com",
+    )?.idempotencyKey,
+    payload.idempotencyKey,
   )
 })
 
@@ -99,6 +120,7 @@ Deno.test("stored notification retry sends and records only non-customer recipie
   const previousApiKey = Deno.env.get("RESEND_API_KEY")
   const previousRecipients = Deno.env.get("BOOKING_INTERNAL_NOTIFICATION_RECIPIENTS")
   let requestedTo: string[] = []
+  let requestedKey = ""
   let requestedUrl = ""
   try {
     Deno.env.set("RESEND_API_KEY", "test-only")
@@ -108,7 +130,15 @@ Deno.test("stored notification retry sends and records only non-customer recipie
     )
     globalThis.fetch = async (input, init) => {
       requestedUrl = String(input)
-      requestedTo = JSON.parse(String((init as { body?: unknown } | undefined)?.body || "{}")).to
+      const request = init as { body?: unknown; headers?: HeadersInit } | undefined
+      requestedTo = JSON.parse(String(request?.body || "{}")).to
+      requestedKey = new Headers(request?.headers).get("Idempotency-Key") || ""
+      if (requestedKey === payload.idempotencyKey) {
+        return new Response(JSON.stringify({ name: "invalid_idempotent_request" }), {
+          status: 409,
+          headers: { "Content-Type": "application/json" },
+        })
+      }
       return new Response(JSON.stringify({ id: "email-test" }), {
         status: 200,
         headers: { "Content-Type": "application/json" },
@@ -125,10 +155,18 @@ Deno.test("stored notification retry sends and records only non-customer recipie
     assertEquals(status, "sent")
     assertEquals(requestedUrl, "https://api.resend.com/emails")
     assertEquals(requestedTo, ["support@tripwithnomads.com"])
+    assertEquals(
+      requestedKey,
+      `${payload.idempotencyKey}:customer-excluded`,
+    )
     assertEquals(row.recipients, ["support@tripwithnomads.com"])
     assertEquals(
       (row.email_payload as Record<string, unknown>).to,
       ["support@tripwithnomads.com"],
+    )
+    assertEquals(
+      (row.email_payload as Record<string, unknown>).idempotencyKey,
+      requestedKey,
     )
   } finally {
     globalThis.fetch = previousFetch
