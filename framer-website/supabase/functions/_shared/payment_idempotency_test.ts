@@ -1,6 +1,8 @@
 import {
     buildPaymentAttemptInsert,
+    canReplayPaymentAttempt,
     canStartPaymentRetry,
+    expectedBookingPaymentAmountMinor,
     fingerprintBookingRequest,
     isCompatibleIdempotentReplay,
     isCompatiblePaymentAttemptReplay,
@@ -128,4 +130,24 @@ Deno.test("payment retry replay must match booking, amount, and currency", () =>
         amount: 1250.5,
         currency: "USD",
     }), false)
+})
+
+Deno.test("checkout replay requires the same active, unpaid, unexpired attempt", () => {
+    const now = new Date("2026-11-02T12:00:00.000Z")
+    const attempt = { id: "attempt-1", status: "pending", expires_at: "2026-11-02T12:30:00.000Z" }
+    const booking = { active_payment_attempt_id: "attempt-1", payment_status: "pending", paid_amount: 0 }
+
+    assertEquals(canReplayPaymentAttempt(attempt, booking, now), true)
+    assertEquals(canReplayPaymentAttempt(attempt, { ...booking, active_payment_attempt_id: "attempt-2" }, now), false)
+    assertEquals(canReplayPaymentAttempt(attempt, { ...booking, paid_amount: 1 }, now), false)
+    assertEquals(canReplayPaymentAttempt(attempt, { ...booking, payment_status: "paid" }, now), false)
+    assertEquals(canReplayPaymentAttempt({ ...attempt, expires_at: "2026-11-02T11:59:59.000Z" }, booking, now), false)
+})
+
+Deno.test("expected checkout amount is bounded by the saved booking total", () => {
+    assertEquals(expectedBookingPaymentAmountMinor({ total_amount: 1000, payment_mode: "full" }), 100000)
+    assertEquals(expectedBookingPaymentAmountMinor({ total_amount: 1000, payment_mode: "partial_25" }), 25000)
+    assertEquals(expectedBookingPaymentAmountMinor({ total_amount: 1000, payable_now_amount: 200, payment_mode: "partial_25" }), 20000)
+    assertEquals(expectedBookingPaymentAmountMinor({ total_amount: 1000, payable_now_amount: 1100, payment_mode: "partial_25" }), null)
+    assertEquals(expectedBookingPaymentAmountMinor({ total_amount: 0, payment_mode: "full" }), null)
 })

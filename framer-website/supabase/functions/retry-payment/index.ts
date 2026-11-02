@@ -1,7 +1,9 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2"
 import {
     buildPaymentAttemptInsert,
+    canReplayPaymentAttempt,
     canStartPaymentRetry,
+    expectedBookingPaymentAmountMinor,
     isUuid,
     isStalePaymentAttempt,
     isCompatiblePaymentAttemptReplay,
@@ -46,10 +48,6 @@ function toNumber(value: any): number {
 
 function round2(value: number): number {
     return Math.round((Number(value) + Number.EPSILON) * 100) / 100
-}
-
-function isUniqueViolation(error: any): boolean {
-    return String(error?.code || "").trim() === "23505"
 }
 
 function responseJson(payload: Record<string, unknown>, status = 200): Response {
@@ -212,6 +210,16 @@ Deno.serve(async (req) => {
         const amountToRetry = mode === "partial_25" ? payableNow : totalAmount
         if (amountToRetry <= 0) throw new Error("Invalid payment amount")
         const retryCurrency = String(booking.currency || "INR").trim().toUpperCase()
+        const expectedPaymentAmountMinor = expectedBookingPaymentAmountMinor(booking)
+        if (
+            expectedPaymentAmountMinor === null ||
+            Math.round(amountToRetry * 100) !== expectedPaymentAmountMinor
+        ) {
+            return responseJson({
+                error: "The booking price changed after this payment retry started. Refresh before trying again.",
+                code: "BOOKING_PRICE_CHANGED",
+            }, 409)
+        }
 
         const notifyRetryStarted = async (attempt: any, orderId: string) => {
             notificationAttempt = attempt
@@ -342,6 +350,18 @@ Deno.serve(async (req) => {
                         code: "PAYMENT_RECONCILIATION_PENDING",
                     }, 409)
                 }
+            }
+            if (!canReplayPaymentAttempt(replayAttempt, booking)) {
+                return responseJson({
+                    error: "This payment request is no longer active. Refresh the booking status before trying again.",
+                    code: "PAYMENT_ATTEMPT_CONFLICT",
+                }, 409)
+            }
+            if (!String(replayAttempt.provider_order_id || "").trim()) {
+                return responseJson({
+                    error: "This payment is already starting. Wait a moment, then refresh before trying again.",
+                    code: "PAYMENT_ATTEMPT_STARTING",
+                }, 409)
             }
             notificationAttempt = replayAttempt
             const existingGateway = await buildRazorpayPayload({
@@ -538,45 +558,51 @@ Deno.serve(async (req) => {
                 provider: paymentProvider,
                 amount: amountToRetry,
                 currency: booking.currency || "INR",
-                status: "creating",
+                status: "pending",
             })
             attemptPayload.expires_at = new Date(Date.now() + 30 * 60 * 1000).toISOString()
 
-            const attemptInsert = await supabase
-                .from("payment_attempts")
-                .insert(attemptPayload)
-                .select("*")
-                .single()
-            paymentAttempt = attemptInsert.data
-            mayCreateOrder = Boolean(attemptInsert.data)
-
-            if (attemptInsert.error && isUniqueViolation(attemptInsert.error)) {
-                const concurrentRequest = await supabase
-                    .from("payment_attempts")
-                    .select("*")
-                    .eq("idempotency_key", retryRequestId)
-                    .maybeSingle()
-                if (concurrentRequest.data) {
-                    if (String(concurrentRequest.data.booking_id) !== String(booking.id)) {
-                        return responseJson({
-                            error: "retry_request_id was already used for another booking",
-                            code: "IDEMPOTENCY_CONFLICT",
-                        }, 409)
-                    }
-                    paymentAttempt = concurrentRequest.data
-                    replayed = true
-                    mayCreateOrder = false
-                } else {
-                    return responseJson({
-                        error: "Another payment attempt is already active for this booking",
-                        code: "RETRY_IN_PROGRESS",
-                    }, 409)
-                }
+            if (!booking.updated_at || Number(attemptPayload.amount_minor) !== expectedPaymentAmountMinor) {
+                return responseJson({
+                    error: "The booking price changed after this payment retry started. Refresh before trying again.",
+                    code: "BOOKING_PRICE_CHANGED",
+                }, 409)
             }
 
-            if (attemptInsert.error && !paymentAttempt) {
-                throw new Error(attemptInsert.error.message || "Could not create payment attempt")
+            const reservation = await supabase.schema("crm").rpc("reserve_website_booking_payment_attempt", {
+                p_booking_id: booking.id,
+                p_idempotency_key: attemptPayload.idempotency_key,
+                p_expected_booking_updated_at: booking.updated_at,
+                p_attempt_no: attemptPayload.attempt_no,
+                p_provider: attemptPayload.provider,
+                p_amount_minor: attemptPayload.amount_minor,
+                p_currency: attemptPayload.currency,
+                p_status: "pending",
+                p_expires_at: attemptPayload.expires_at,
+            })
+            const reservationRow = Array.isArray(reservation.data) ? reservation.data[0] : reservation.data
+            if (reservation.error || !reservationRow?.payment_attempt) {
+                const message = reservation.error?.message || "Could not reserve this payment retry"
+                const sqlState = reservation.error?.code
+                const conflict = sqlState === "40001" || sqlState === "23505" || sqlState === "23514"
+                const code = sqlState === "40001"
+                    ? "BOOKING_PRICE_CHANGED"
+                    : sqlState === "23505"
+                        ? "IDEMPOTENCY_CONFLICT"
+                        : sqlState === "23514"
+                            ? "PAYMENT_ATTEMPT_CONFLICT"
+                            : "PAYMENT_ATTEMPT_RESERVATION_FAILED"
+                return responseJson({ error: message, code }, conflict ? 409 : 500)
             }
+            paymentAttempt = reservationRow.payment_attempt
+            replayed = reservationRow.replayed === true
+            if (replayed && !String(paymentAttempt.provider_order_id || "").trim()) {
+                return responseJson({
+                    error: "This payment is already starting. Wait a moment, then refresh before trying again.",
+                    code: "PAYMENT_ATTEMPT_STARTING",
+                }, 409)
+            }
+            mayCreateOrder = !replayed
         }
         notificationAttempt = paymentAttempt
 

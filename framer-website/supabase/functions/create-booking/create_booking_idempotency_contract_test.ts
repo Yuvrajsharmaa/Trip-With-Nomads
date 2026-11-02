@@ -13,20 +13,28 @@ Deno.test("create-booking persists a checkout request and replays its attempt", 
     assertStringIncludes(source, "fingerprintBookingRequest")
     assertStringIncludes(source, 'if (currency !== "INR")')
     assertStringIncludes(source, 'from("payment_attempts")')
-    assertStringIncludes(source, 'status: "creating"')
-    assertStringIncludes(source, "mayCreatePaymentOrder = true")
+    assertStringIncludes(source, 'status: "pending"')
+    assertStringIncludes(source, "mayCreatePaymentOrder = !reservationReplayed")
     assertStringIncludes(source, "ensurePaymentAttemptOrder")
     const paymentCredentialCheck = source.indexOf(
         "const paymentCredentials = razorpayCredentials()",
     )
-    const paymentAttemptInsert = source.indexOf(
-        '.from("payment_attempts")\n                .insert(attemptPayload)',
+    const paymentAttemptReservation = source.indexOf(
+        'schema("crm").rpc("reserve_website_booking_payment_attempt"',
     )
-    if (paymentCredentialCheck < 0 || paymentAttemptInsert < 0 || paymentCredentialCheck > paymentAttemptInsert) {
-        throw new Error("create-booking must validate Razorpay credentials before creating a payment attempt")
+    if (paymentCredentialCheck < 0 || paymentAttemptReservation < 0 || paymentCredentialCheck > paymentAttemptReservation) {
+        throw new Error("create-booking must validate Razorpay credentials before reserving a payment attempt")
     }
     assertStringIncludes(source, "IDEMPOTENCY_CONFLICT")
     assertStringIncludes(source, "!replayed")
+    assertStringIncludes(source, "expectedBookingPaymentAmountMinor")
+    assertStringIncludes(source, "canReplayPaymentAttempt")
+    assertStringIncludes(source, "hasPaymentAttemptProviderOrder")
+    assertStringIncludes(source, 'schema("crm").rpc("reserve_website_booking_payment_attempt"')
+    assertStringIncludes(source, "p_expected_booking_updated_at: data.updated_at")
+    assertStringIncludes(source, 'p_status: "pending"')
+    assertStringIncludes(source, 'code: "BOOKING_PRICE_CHANGED"')
+    assertStringIncludes(source, 'code: "PAYMENT_ATTEMPT_STARTING"')
     assertStringIncludes(source, "gateway: activeProvider")
     assertStringIncludes(source, "todayISTDateKey")
     assertStringIncludes(source, "computeBasePricing")
@@ -79,6 +87,14 @@ Deno.test("create-booking persists a checkout request and replays its attempt", 
     if (replayGuard < 0 || notificationCall < replayGuard) {
         throw new Error("Paid idempotent replays must not resend the booking-created notification")
     }
+    const activeAttemptGuard = source.indexOf("canReplayPaymentAttempt(paymentAttempt, data)")
+    const paidReplayBranchIndex = source.indexOf('if (String(data.payment_status || "").trim().toLowerCase() === "paid")')
+    if (activeAttemptGuard < 0 || paidReplayBranchIndex < 0 || activeAttemptGuard > paidReplayBranchIndex) {
+        throw new Error("Paid booking replays must be recognized before rejecting inactive attempts")
+    }
+    const couponWrite = source.slice(source.indexOf("const couponCompatibilityWrite"), source.indexOf("const latestAttemptLookup"))
+    assertStringIncludes(couponWrite, '.eq("updated_at", data.updated_at)')
+    assertStringIncludes(couponWrite, ".maybeSingle()")
     assertStringIncludes(source, "PAYMENT_PROVIDER_UNSUPPORTED")
     assertStringIncludes(source, "BOOKING_CALLBACK_SHEET_ID")
     if (source.includes('Deno.env.get("GOOGLE_SHEET_ID_TRIPS")')) {

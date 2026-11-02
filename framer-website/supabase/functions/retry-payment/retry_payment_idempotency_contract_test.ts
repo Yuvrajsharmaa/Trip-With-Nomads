@@ -8,8 +8,8 @@ Deno.test("retry-payment requires a retry key and persists payment attempts", as
     assertStringIncludes(source, "canStartPaymentRetry")
     assertStringIncludes(source, "canReplayPaymentAttempt")
     assertStringIncludes(source, "isStalePaymentAttempt")
-    assertStringIncludes(source, 'status: "creating"')
-    assertStringIncludes(source, "mayCreateOrder = Boolean(attemptInsert.data)")
+    assertStringIncludes(source, 'status: "pending"')
+    assertStringIncludes(source, "mayCreateOrder = !replayed")
     const paymentCredentialCheck = source.indexOf(
         "retryPaymentCredentials = retryPaymentCredentials || razorpayCredentials()",
     )
@@ -33,8 +33,8 @@ Deno.test("retry-payment requires a retry key and persists payment attempts", as
         "idempotencyKey: retryRequestId,",
     )
     const failedOrderReconciliation = source.indexOf("isRazorpayOrderConfirmedUnpaid({")
-    const attemptInsertCall = source.indexOf("const attemptInsert = await supabase")
-    if (failedOrderReconciliation < 0 || attemptInsertCall < 0 || failedOrderReconciliation > attemptInsertCall) {
+    const attemptReservationCall = source.indexOf('schema("crm").rpc("reserve_website_booking_payment_attempt"')
+    if (failedOrderReconciliation < 0 || attemptReservationCall < 0 || failedOrderReconciliation > attemptReservationCall) {
         throw new Error("retry-payment must confirm a failed provider order is unpaid before creating a fresh attempt")
     }
     assertStringIncludes(source, 'code: "PAYMENT_ATTEMPT_FINISHED"')
@@ -44,20 +44,22 @@ Deno.test("retry-payment requires a retry key and persists payment attempts", as
     assertStringIncludes(source, 'schema("crm").rpc("reserve_website_booking_payment_attempt"')
     assertStringIncludes(source, "PAYMENT_ATTEMPT_STARTING")
     assertStringIncludes(source, "p_expected_booking_updated_at: booking.updated_at")
+    assertStringIncludes(source, 'p_status: "pending"')
     assertStringIncludes(source, "expectedPaymentAmountMinor")
+    assertStringIncludes(source, "expectedBookingPaymentAmountMinor(booking)")
     assertStringIncludes(source, "IDEMPOTENCY_CONFLICT")
     assertStringIncludes(source, 'sqlState === "23514"')
     assertStringIncludes(source, '"PAYMENT_ATTEMPT_CONFLICT"')
     assertStringIncludes(source, '}, conflict ? 409 : 500)')
     assertStringIncludes(source, "gateway: paymentProvider")
     assertStringIncludes(source, "paymentCallbackUrl")
-    const existingReplayGuard = source.indexOf("canReplayPaymentAttempt(existingRequest.data, booking")
+    const existingReplayGuard = source.indexOf("canReplayPaymentAttempt(replayAttempt, booking")
     const existingOrderBuild = source.indexOf("const existingGateway = await buildRazorpayPayload")
     if (existingReplayGuard < 0 || existingReplayGuard > existingOrderBuild) {
         throw new Error("retry-payment must validate and reuse the same active attempt before rebuilding a gateway payload")
     }
-    const reservationReplayGuard = source.indexOf("PAYMENT_ATTEMPT_STARTING", existingOrderBuild)
-    const reservationGatewayBuild = source.indexOf("gateway = await buildRazorpayPayload", existingOrderBuild)
+    const reservationReplayGuard = source.indexOf("if (replayed && !String(paymentAttempt.provider_order_id")
+    const reservationGatewayBuild = source.indexOf("gateway = await buildRazorpayPayload")
     if (reservationReplayGuard < 0 || reservationReplayGuard > reservationGatewayBuild) {
         throw new Error("retry-payment must not create a second provider order while the first request is being prepared")
     }
