@@ -11,3 +11,12 @@ Deno.test("handle-payment is redirect-only", async () => {
     assert(!source.includes('searchParams.set("payment_status"'))
     assert(!source.includes("callback_orphan"))
 })
+
+Deno.test("handle-payment only forwards a supplied status token", async () => {
+    const source = await Deno.readTextFile(new URL("./index.ts", import.meta.url))
+
+    assert(source.includes('if (suppliedToken) {'))
+    assert(source.includes('redirectUrl.searchParams.set("status_token", suppliedToken)'))
+    assert(!source.includes("issueBookingStatusToken"))
+    assert(!source.includes("resolveBookingStatusSecret"))
+})

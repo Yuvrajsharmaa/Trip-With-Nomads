@@ -1,9 +1,4 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts"
-import {
-    issueBookingStatusToken,
-    resolveBookingStatusSecret,
-} from "../_shared/booking_status_token.ts"
-
 const corsHeaders = {
     "Access-Control-Allow-Origin": "*",
     "Access-Control-Allow-Headers": "content-type",
@@ -102,20 +97,6 @@ serve(async (req) => {
             redirectUrl.searchParams.set("booking_id", bookingId)
             if (suppliedToken) {
                 redirectUrl.searchParams.set("status_token", suppliedToken)
-            } else {
-                const fallbackSecret = firstNonEmpty(
-                    Deno.env.get("PAYU_LIVE_SALT"),
-                    Deno.env.get("PAYU_TEST_SALT"),
-                    Deno.env.get("PAYU_SALT"),
-                    Deno.env.get("RAZORPAY_LIVE_KEY_SECRET"),
-                    Deno.env.get("RAZORPAY_TEST_KEY_SECRET"),
-                    Deno.env.get("RAZORPAY_KEY_SECRET"),
-                )
-                const statusSecret = resolveBookingStatusSecret(fallbackSecret)
-                if (statusSecret) {
-                    const token = await issueBookingStatusToken(bookingId, statusSecret)
-                    redirectUrl.searchParams.set("status_token", token.token)
-                }
             }
         }
 
