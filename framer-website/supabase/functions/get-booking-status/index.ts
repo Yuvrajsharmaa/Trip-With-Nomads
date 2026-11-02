@@ -125,10 +125,29 @@ serve(async (req) => {
             }
         }
 
+        const detailsResult = await supabase
+            .schema("crm")
+            .from("booking_details")
+            .select("billing_snapshot, finance_issuer")
+            .eq("booking_id", bookingId)
+            .maybeSingle()
+        const storedBillingSnapshot = detailsResult.error ? null : detailsResult.data?.billing_snapshot
+        const billingSnapshot = storedBillingSnapshot && typeof storedBillingSnapshot === "object"
+            ? {
+                issuer: storedBillingSnapshot.issuer,
+                taxLabel: storedBillingSnapshot.taxLabel,
+                gstAmountMinor: storedBillingSnapshot.gstAmountMinor,
+                tcsAmountMinor: storedBillingSnapshot.tcsAmountMinor,
+            }
+            : null
+        const financeIssuer = detailsResult.data?.finance_issuer || null
+
         return jsonResponse({
             booking: {
                 ...booking,
                 trip_title: tripTitle || null,
+                finance_issuer: financeIssuer,
+                billing_snapshot: billingSnapshot,
                 balance_due_note: supportsBalanceDueNote
                     ? (booking as any)?.balance_due_note ?? null
                     : null,

@@ -10,6 +10,38 @@ import { getCheckoutEntryState } from "./checkout_entry_state.ts"
 
 const CHECKOUT_TIMEZONE = "Asia/Kolkata"
 const CHECKOUT_DATA_REQUEST_TIMEOUT_MS = 8000
+const CHECKOUT_PAYMENT_REQUEST_TIMEOUT_MS = 20000
+const CHECKOUT_RAZORPAY_SCRIPT_TIMEOUT_MS = 15000
+
+function CheckoutSpinner({
+    size,
+    testId,
+}: {
+    size: number
+    testId?: string
+}) {
+    return (
+        <>
+            <style>{`@keyframes twnCheckoutSpin { to { transform: rotate(360deg); } } @media (prefers-reduced-motion: reduce) { .twnCheckoutSpinner { animation: none !important; } }`}</style>
+            <span
+                aria-hidden="true"
+                className="twnCheckoutSpinner"
+                data-testid={testId}
+                style={{
+                    animation: "twnCheckoutSpin 800ms linear infinite",
+                    border: "2px solid currentColor",
+                    borderBottomColor: "transparent",
+                    borderRadius: "50%",
+                    boxSizing: "border-box",
+                    display: "inline-block",
+                    flex: "none",
+                    height: size,
+                    width: size,
+                }}
+            />
+        </>
+    )
+}
 
 async function fetchCheckoutDataWithTimeout(
     input: RequestInfo | URL,
@@ -276,14 +308,21 @@ function checkoutApiHeaders(): Record<string, string> {
 async function fetchCheckoutRequest(path: string, init: RequestInit): Promise<Response> {
     let lastError: unknown = null
     for (let attempt = 0; attempt < 2; attempt += 1) {
+        const controller = new AbortController()
+        const timeoutId = window.setTimeout(
+            () => controller.abort(),
+            CHECKOUT_PAYMENT_REQUEST_TIMEOUT_MS,
+        )
         try {
-            return await fetch(path, init)
+            return await fetch(path, { ...init, signal: controller.signal })
         } catch (error) {
             lastError = error
             if (attempt === 0) {
                 console.warn("[Checkout] Payment request failed; retrying once", error)
                 await new Promise((resolve) => window.setTimeout(resolve, 600))
             }
+        } finally {
+            window.clearTimeout(timeoutId)
         }
     }
     throw lastError || new Error("Could not reach payment service")
@@ -298,22 +337,28 @@ async function loadRazorpayScript(): Promise<void> {
         const existing = document.querySelector(
             'script[data-twn-razorpay="true"]',
         ) as HTMLScriptElement | null
-        if (existing) {
-            existing.addEventListener("load", () => resolve(), { once: true })
-            existing.addEventListener(
-                "error",
-                () => reject(new Error("Could not load payment gateway")),
-                { once: true },
-            )
-            return
+        const script = existing || document.createElement("script")
+        let timeoutId: number
+        const finish = (callback: () => void) => {
+            window.clearTimeout(timeoutId)
+            script.removeEventListener("load", onLoad)
+            script.removeEventListener("error", onError)
+            callback()
         }
-        const script = document.createElement("script")
-        script.src = "https://checkout.razorpay.com/v1/checkout.js"
-        script.async = true
-        script.dataset.twnRazorpay = "true"
-        script.onload = () => resolve()
-        script.onerror = () => reject(new Error("Could not load payment gateway"))
-        document.head.appendChild(script)
+        const onLoad = () => finish(resolve)
+        const onError = () => finish(() => reject(new Error("Could not load payment gateway")))
+        timeoutId = window.setTimeout(
+            () => finish(() => reject(new Error("Payment gateway took too long to load"))),
+            CHECKOUT_RAZORPAY_SCRIPT_TIMEOUT_MS,
+        )
+        script.addEventListener("load", onLoad, { once: true })
+        script.addEventListener("error", onError, { once: true })
+        if (!existing) {
+            script.src = "https://checkout.razorpay.com/v1/checkout.js"
+            script.async = true
+            script.dataset.twnRazorpay = "true"
+            document.head.appendChild(script)
+        }
     })
 }
 
@@ -451,6 +496,7 @@ const useStore = createStore({
     loading: true,
     pricingUnavailable: false,
     submitting: false,
+    validationAttempted: false,
 })
 
 function toNumber(value: any): number {
@@ -519,7 +565,7 @@ function formatCheckoutAmount(
     if (entryState === "missing-trip" || entryState === "unavailable") {
         return unavailableText
     }
-    if (entryState === "loading") return "Loading price…"
+    if (entryState === "loading") return ""
     return fmtINR(value)
 }
 
@@ -1199,15 +1245,24 @@ function showInlineError(errors: string | string[]) {
         .filter(Boolean)
     if (!messages.length) return
 
+    const isFieldValidation = Array.isArray(errors)
     const technicalFailure = messages.some((message) =>
         /payment_attempts|txnid|not-null|constraint|edge function error/i.test(message)
     )
-    const titleText = technicalFailure
+    const titleText = isFieldValidation
+        ? messages.length > 1
+            ? "A few details need attention"
+            : "Check your booking details"
+        : technicalFailure
         ? "Payment could not start"
         : messages.length > 1
         ? "Please check your details"
         : "Checkout needs attention"
-    const detailText = technicalFailure
+    const detailText = isFieldValidation
+        ? messages.length > 1
+            ? "See the highlighted fields below."
+            : "See the highlighted field below."
+        : technicalFailure
         ? "We couldn't start the payment. Please try again. If it keeps happening, contact us."
         : messages.length > 1
         ? messages.join(" ")
@@ -1470,7 +1525,7 @@ async function postBookingAbandonLead(store: any): Promise<boolean> {
         source: BOOKING_ABANDON_LEAD_SOURCE,
         status: BOOKING_ABANDON_LEAD_STATUS,
         reason: "checkout_abandoned_before_payment",
-        page_url: typeof window !== "undefined" ? window.location.href : null,
+        page_url: typeof window !== "undefined" ? window.location.origin + window.location.pathname : null,
         trip_id: tripId,
         trip_slug: params.get("slug") || params.get("trip_slug"),
         trip_name: firstNonEmpty(store?.tripName, params.get("trip_name")),
@@ -1740,6 +1795,7 @@ function checkoutFieldError(
     store: any,
     field: "date" | "name" | "phone" | "email",
 ): string {
+    if (!store?.validationAttempted) return ""
     if (field === "date") {
         if (!store?.date) return "Departure date is required"
         if (!isBookableDepartureDate(store.date)) {
@@ -1763,6 +1819,7 @@ function travellerFieldError(
     context: TravellerContextValue | null,
     field: "name" | "sharing" | "vehicle",
 ): string {
+    if (!store?.validationAttempted) return ""
     const traveller = getTravellerByContext(store, context)
     if (!traveller) return ""
     if (field === "name") {
@@ -1845,6 +1902,7 @@ export function withCheckoutBootstrap(Component): ComponentType {
                 if (!ctx.tripId && !ctx.slug) {
                     setStore({
                         loading: false,
+                        validationAttempted: false,
                         pricingUnavailable: true,
                         pricingData: [],
                         tripName: "",
@@ -1859,6 +1917,7 @@ export function withCheckoutBootstrap(Component): ComponentType {
 
                 setStore({
                     loading: true,
+                    validationAttempted: false,
                     pricingUnavailable: false,
                     pricingData: [],
                     financeIssuer: null,
@@ -2183,6 +2242,43 @@ export function withCheckoutBootstrap(Component): ComponentType {
                         >
                             Browse upcoming trips
                         </a>
+                    </div>
+                </main>
+            )
+        }
+
+        if (checkoutState === "loading") {
+            return (
+                <main
+                    aria-busy="true"
+                    aria-live="polite"
+                    role="status"
+                    style={{
+                        alignItems: "center",
+                        background: "#080808",
+                        boxSizing: "border-box",
+                        color: "#fff",
+                        display: "flex",
+                        fontFamily: "inherit",
+                        inset: 0,
+                        justifyContent: "center",
+                        minHeight: "100dvh",
+                        padding: "max(32px, env(safe-area-inset-top)) 24px max(32px, env(safe-area-inset-bottom))",
+                        position: "fixed",
+                        width: "100%",
+                        zIndex: 9999,
+                    }}
+                >
+                    <div style={{ maxWidth: 420, width: "100%" }}>
+                        <div style={{ alignItems: "center", color: "#1b91c9", display: "flex", gap: 12 }}>
+                            <CheckoutSpinner size={22} />
+                            <h1 style={{ color: "#fff", fontSize: 22, fontWeight: 600, lineHeight: 1.3, margin: 0 }}>
+                                Preparing your checkout
+                            </h1>
+                        </div>
+                        <p style={{ color: "#c5c5c5", lineHeight: 1.6, margin: "10px 0 0 34px" }}>
+                            Checking trip availability and current pricing.
+                        </p>
                     </div>
                 </main>
             )
@@ -2730,12 +2826,27 @@ export function withCheckoutContactEmail(Component): ComponentType {
         const handleChange = (value: string) => setStore({ contactEmail: value })
 
         return (
-            <Component
-                {...props}
-                value={store.contactEmail || ""}
-                onValueChange={handleChange}
-                onChange={(e: any) => handleChange(e.target.value)}
-            />
+            <>
+                <Component
+                    {...props}
+                    value={store.contactEmail || ""}
+                    onValueChange={handleChange}
+                    onChange={(e: any) => handleChange(e.target.value)}
+                    aria-describedby="checkout-reminder-disclosure"
+                />
+                <p
+                    id="checkout-reminder-disclosure"
+                    style={{
+                        display: "flex",
+                        fontSize: 12,
+                        lineHeight: 1.45,
+                        margin: "8px 0 0",
+                        opacity: 0.72,
+                    }}
+                >
+                    If you leave before paying, we may email up to two checkout reminders: one after 20 minutes and one the next day. No seat is held. Unsubscribe anytime.
+                </p>
+            </>
         )
     }
 }
@@ -3410,18 +3521,11 @@ export function withCheckoutPayButton(Component): ComponentType {
                 if (paymentStartedRef.current) return
                 void postBookingAbandonLead(latestStoreRef.current)
             }
-            const handleVisibilityChange = () => {
-                if (document.visibilityState === "hidden") {
-                    captureAbandonedBooking()
-                }
-            }
             window.addEventListener("pagehide", captureAbandonedBooking)
             window.addEventListener("beforeunload", captureAbandonedBooking)
-            document.addEventListener("visibilitychange", handleVisibilityChange)
             return () => {
                 window.removeEventListener("pagehide", captureAbandonedBooking)
                 window.removeEventListener("beforeunload", captureAbandonedBooking)
-                document.removeEventListener("visibilitychange", handleVisibilityChange)
             }
         }, [])
 
@@ -3531,75 +3635,97 @@ export function withCheckoutPayButton(Component): ComponentType {
                 },
             }
 
-            const checkout_request_id = getOrCreateStableRequestId(
+            const checkoutFingerprint = requestFingerprint(
+                JSON.stringify({
+                    trip_id: payload.trip_id,
+                    date: payload.date,
+                    transport: payload.transport,
+                    travellers: payload.travellers,
+                    name: payload.name,
+                    email: payload.email,
+                    phone: payload.phone,
+                    payment_mode: payload.payment_mode,
+                    coupon_code: payload.coupon_code,
+                    total_amount: payload.total_amount,
+                    payable_now_amount: payload.payable_now_amount,
+                }),
+            )
+            const checkoutRequestStorageKey = `__twn_checkout_request_id_v1:${checkoutFingerprint}`
+            let checkout_request_id = getOrCreateStableRequestId(
                 "checkout",
-                requestFingerprint(
-                    JSON.stringify({
-                        trip_id: payload.trip_id,
-                        date: payload.date,
-                        transport: payload.transport,
-                        travellers: payload.travellers,
-                        name: payload.name,
-                        email: payload.email,
-                        phone: payload.phone,
-                        payment_mode: payload.payment_mode,
-                        coupon_code: payload.coupon_code,
-                        total_amount: payload.total_amount,
-                        payable_now_amount: payload.payable_now_amount,
-                    }),
-                ),
+                checkoutFingerprint,
             )
             payload.checkout_request_id = checkout_request_id
 
             try {
-                let res = await fetchCheckoutRequest(CREATE_BOOKING_URL, {
-                    method: "POST",
-                    headers: checkoutApiHeaders(),
-                    body: JSON.stringify(payload),
-                })
-
-                let data = await res.json().catch(() => ({}))
-                const legacyMissingFieldsError = typeof data?.error === "string" &&
-                    (data.error.includes(
-                        "Missing required fields (trip_id, date, travellers, amount, email, name)",
-                    ) ||
-                        data.error.includes(
-                            "Missing required fields (trip_id, departure_date, travellers, name, email)",
-                        ))
-
-                if (!res.ok && legacyMissingFieldsError) {
-                    const form = new URLSearchParams()
-                    form.set("trip_id", String(payload.trip_id || ""))
-                    form.set("date", String(payload.date || ""))
-                    form.set("departure_date", String(payload.departure_date || ""))
-                    form.set("amount", String(payload.amount || ""))
-                    form.set("email", String(payload.email || ""))
-                    form.set("name", String(payload.name || ""))
-                    form.set("phone", String(payload.phone || ""))
-                    form.set("transport", String(payload.transport || ""))
-                    form.set("travellers", JSON.stringify(payload.travellers || []))
-                    form.set("payment_mode", String(payload.payment_mode || "full"))
-                    form.set(
-                        "checkout_request_id",
-                        String(payload.checkout_request_id || ""),
-                    )
-                    form.set("coupon_code", String(payload.coupon_code || ""))
-                    form.set(
-                        "pricing_snapshot",
-                        JSON.stringify(payload.pricing_snapshot || {}),
-                    )
-
-                    const formHeaders: Record<string, string> = {
-                        "Content-Type": "application/x-www-form-urlencoded",
-                        apikey: SUPABASE_KEY,
-                        Authorization: `Bearer ${SUPABASE_KEY}`,
-                    }
-                    res = await fetchCheckoutRequest(CREATE_BOOKING_URL, {
+                const createBooking = async () => {
+                    let res = await fetchCheckoutRequest(CREATE_BOOKING_URL, {
                         method: "POST",
-                        headers: formHeaders,
-                        body: form.toString(),
+                        headers: checkoutApiHeaders(),
+                        body: JSON.stringify(payload),
                     })
-                    data = await res.json().catch(() => ({}))
+
+                    let data = await res.json().catch(() => ({}))
+                    const legacyMissingFieldsError = typeof data?.error === "string" &&
+                        (data.error.includes(
+                            "Missing required fields (trip_id, date, travellers, amount, email, name)",
+                        ) ||
+                            data.error.includes(
+                                "Missing required fields (trip_id, departure_date, travellers, name, email)",
+                            ))
+
+                    if (!res.ok && legacyMissingFieldsError) {
+                        const form = new URLSearchParams()
+                        form.set("trip_id", String(payload.trip_id || ""))
+                        form.set("date", String(payload.date || ""))
+                        form.set("departure_date", String(payload.departure_date || ""))
+                        form.set("amount", String(payload.amount || ""))
+                        form.set("email", String(payload.email || ""))
+                        form.set("name", String(payload.name || ""))
+                        form.set("phone", String(payload.phone || ""))
+                        form.set("transport", String(payload.transport || ""))
+                        form.set("travellers", JSON.stringify(payload.travellers || []))
+                        form.set("payment_mode", String(payload.payment_mode || "full"))
+                        form.set(
+                            "checkout_request_id",
+                            String(payload.checkout_request_id || ""),
+                        )
+                        form.set("coupon_code", String(payload.coupon_code || ""))
+                        form.set(
+                            "pricing_snapshot",
+                            JSON.stringify(payload.pricing_snapshot || {}),
+                        )
+
+                        const formHeaders: Record<string, string> = {
+                            "Content-Type": "application/x-www-form-urlencoded",
+                            apikey: SUPABASE_KEY,
+                            Authorization: `Bearer ${SUPABASE_KEY}`,
+                        }
+                        res = await fetchCheckoutRequest(CREATE_BOOKING_URL, {
+                            method: "POST",
+                            headers: formHeaders,
+                            body: form.toString(),
+                        })
+                        data = await res.json().catch(() => ({}))
+                    }
+
+                    return { res, data }
+                }
+
+                let { res, data } = await createBooking()
+                if (res.ok && data?.already_paid && data?.replayed) {
+                    // A paid idempotency replay is from an earlier submit, so this click gets a new booking key.
+                    checkout_request_id = createUuid()
+                    payload.checkout_request_id = checkout_request_id
+                    try {
+                        window.sessionStorage.setItem(
+                            checkoutRequestStorageKey,
+                            checkout_request_id,
+                        )
+                    } catch (_) {
+                        // The current request can still proceed without session storage.
+                    }
+                    ;({ res, data } = await createBooking())
                 }
 
                 if (!res.ok) {
@@ -3645,6 +3771,7 @@ export function withCheckoutPayButton(Component): ComponentType {
                             setStore({ submitting: false })
                         },
                     )
+                    setStore({ submitting: false })
                     return
                 }
 
@@ -3693,6 +3820,7 @@ export function withCheckoutPayButton(Component): ComponentType {
                             "Pricing is unavailable for this trip. Please choose another departure.",
                     )
                 } else {
+                    setStore({ validationAttempted: true })
                     showInlineError(errors)
                 }
                 return
@@ -3716,19 +3844,28 @@ export function withCheckoutPayButton(Component): ComponentType {
             }
         }
 
+        const isPaymentLocked = Boolean(store?.submitting) || submitLockRef.current
+        const isPaymentBlocked = Boolean(
+            store?.loading || store?.pricingUnavailable || !isPricingReady ||
+                isPaymentLocked,
+        )
+
         return (
-            <div style={{ width: "100%" }}>
+            <div style={{ position: "relative", width: "100%" }}>
                 <Component
                     {...props}
-                    text={store?.submitting
-                        ? "Processing..."
+                    $control__pnMgUuoPi={store?.submitting
+                        ? ""
                         : store?.loading
-                        ? "Loading price…"
+                        ? ""
                         : store?.pricingUnavailable || !isPricingReady
                         ? "Price unavailable"
                         : `Pay ${fmtINR(totals.payableNow)} now`}
                     onClick={handleClick}
-                    aria-disabled={!isValid}
+                    aria-label={store?.submitting ? "Starting secure payment" : undefined}
+                    aria-busy={Boolean(store?.submitting)}
+                    aria-live="polite"
+                    aria-disabled={isPaymentBlocked}
                     role="button"
                     tabIndex={props.tabIndex ?? 0}
                     onKeyDown={handleKeyDown}
@@ -3736,10 +3873,26 @@ export function withCheckoutPayButton(Component): ComponentType {
                     style={{
                         ...(props.style || {}),
                         width: "100%",
-                        opacity: isValid ? 1 : 0.6,
-                        cursor: isValid ? "pointer" : "not-allowed",
+                        opacity: isPaymentBlocked ? 0.6 : 1,
+                        cursor: isPaymentBlocked ? "wait" : "pointer",
                     }}
                 />
+                {store?.submitting && (
+                    <span
+                        style={{
+                            alignItems: "center",
+                            color: "#fff",
+                            display: "flex",
+                            insetInlineStart: "50%",
+                            pointerEvents: "none",
+                            position: "absolute",
+                            top: "50%",
+                            transform: "translate(-50%, -50%)",
+                        }}
+                    >
+                        <CheckoutSpinner size={18} testId="checkout-payment-spinner" />
+                    </span>
+                )}
             </div>
         )
     }

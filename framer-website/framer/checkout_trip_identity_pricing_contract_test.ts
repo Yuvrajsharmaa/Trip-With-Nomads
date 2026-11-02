@@ -127,16 +127,16 @@ Deno.test("trip and checkout price labels distinguish loading from zero price", 
         formatAmountStart,
     )
     const formatAmount = source.slice(formatAmountStart, formatAmountEnd)
-    assertStringIncludes(formatAmount, "Loading price…")
+    assertStringIncludes(formatAmount, 'if (entryState === "loading") return ""')
     assertStringIncludes(formatAmount, "Price unavailable")
 
     const payButtonStart = source.indexOf(
         "export function withCheckoutPayButton(Component)",
     )
-    const payButton = source.slice(payButtonStart)
+    const payButtonEnd = source.indexOf("function readBrowserLocationKey", payButtonStart)
+    const payButton = source.slice(payButtonStart, payButtonEnd)
     assertStringIncludes(payButton, "const isPricingReady")
-    assertStringIncludes(payButton, 'store?.loading')
-    assertStringIncludes(payButton, '"Loading price…"')
+    assertFalse(payButton.includes('"Loading price…"'))
     assertStringIncludes(payButton, '"Price unavailable"')
     assertStringIncludes(payButton, "Trip pricing is still loading")
     assertStringIncludes(payButton, "store?.pricingUnavailable || !isPricingReady")
@@ -212,8 +212,96 @@ Deno.test("checkout without a valid trip replaces the form and disables payment 
     assertStringIncludes(bootstrap, 'checkoutState === "missing-trip"')
     assertStringIncludes(bootstrap, 'checkoutState === "unavailable"')
     assertStringIncludes(source, "Browse upcoming trips")
-    assertStringIncludes(payButton, "aria-disabled={!isValid}")
+    assertStringIncludes(payButton, "aria-disabled={isPaymentBlocked}")
     assertStringIncludes(payButton, "preventDefault")
+})
+
+Deno.test("checkout keeps the form behind a clear full-page loading state", () => {
+    const bootstrapStart = source.indexOf("export function withCheckoutBootstrap")
+    const bootstrapEnd = source.indexOf(
+        "export function withBookNowToCheckout",
+        bootstrapStart,
+    )
+    const bootstrap = source.slice(bootstrapStart, bootstrapEnd)
+
+    assertStringIncludes(bootstrap, 'checkoutState === "loading"')
+    assertStringIncludes(bootstrap, 'aria-busy="true"')
+    assertStringIncludes(bootstrap, 'role="status"')
+    assertStringIncludes(bootstrap, "Preparing your checkout")
+    assertStringIncludes(bootstrap, "Checking trip availability and current pricing.")
+    assert(bootstrap.indexOf('checkoutState === "loading"') < bootstrap.indexOf("return <Component {...props} />"))
+})
+
+Deno.test("checkout clearly discloses its two reminder emails beside the email field", () => {
+    const emailStart = source.indexOf("export function withCheckoutContactEmail")
+    const emailEnd = source.indexOf("export function withCouponCodeInput", emailStart)
+    const emailField = source.slice(emailStart, emailEnd)
+
+    assert(emailStart >= 0 && emailEnd > emailStart, "checkout email field override is missing")
+    assertStringIncludes(emailField, "aria-describedby=\"checkout-reminder-disclosure\"")
+    assertStringIncludes(emailField, 'id="checkout-reminder-disclosure"')
+    assertStringIncludes(emailField, "If you leave before paying, we may email up to two checkout reminders: one after 20 minutes and one the next day.")
+    assertStringIncludes(emailField, "Unsubscribe anytime.")
+})
+
+Deno.test("checkout loading state covers the full viewport", () => {
+    const bootstrapStart = source.indexOf("export function withCheckoutBootstrap(Component)")
+    const bootstrapEnd = source.indexOf("export function withBookNowToCheckout", bootstrapStart)
+    const bootstrap = source.slice(bootstrapStart, bootstrapEnd)
+    const loadingStart = bootstrap.indexOf('if (checkoutState === "loading")')
+    const loadingEnd = bootstrap.indexOf("return <Component {...props} />", loadingStart)
+    const loading = bootstrap.slice(loadingStart, loadingEnd)
+
+    assertStringIncludes(loading, 'position: "fixed"')
+    assertStringIncludes(loading, "inset: 0")
+    assertStringIncludes(loading, "zIndex: 9999")
+})
+
+Deno.test("Pay now shows an accessible in-button loader while secure payment starts", () => {
+    const payButtonStart = source.indexOf(
+        "export function withCheckoutPayButton(Component)",
+    )
+    const payButtonEnd = source.indexOf("function readBrowserLocationKey", payButtonStart)
+    const payButton = source.slice(payButtonStart, payButtonEnd)
+
+    assertStringIncludes(payButton, 'aria-label={store?.submitting ? "Starting secure payment"')
+    assertStringIncludes(payButton, 'testId="checkout-payment-spinner"')
+    assertStringIncludes(payButton, 'aria-busy={Boolean(store?.submitting)}')
+    assertStringIncludes(payButton, "aria-disabled={isPaymentBlocked}")
+    assertStringIncludes(payButton, "onClick={handleClick}")
+
+    const razorpayStart = payButton.indexOf('if (data?.gateway === "razorpay"')
+    const razorpayEnd = payButton.indexOf("const payu = data?.payu", razorpayStart)
+    const razorpayBranch = payButton.slice(razorpayStart, razorpayEnd)
+    assert(razorpayStart >= 0 && razorpayEnd > razorpayStart)
+    assert(razorpayBranch.indexOf("await openRazorpayCheckout") < razorpayBranch.indexOf("setStore({ submitting: false })"))
+})
+
+Deno.test("Pay now centers the spinner and hides button copy while payment starts", () => {
+    const payButtonStart = source.indexOf("export function withCheckoutPayButton(Component)")
+    const payButtonEnd = source.indexOf("function readBrowserLocationKey", payButtonStart)
+    const payButton = source.slice(payButtonStart, payButtonEnd)
+
+    assertStringIncludes(payButton, '$control__pnMgUuoPi={store?.submitting')
+    assertFalse(payButton.includes('text={store?.submitting'))
+    assertStringIncludes(payButton, 'aria-label={store?.submitting ? "Starting secure payment"')
+    assertStringIncludes(payButton, 'insetInlineStart: "50%"')
+    assertStringIncludes(payButton, 'transform: "translate(-50%, -50%)"')
+    assertFalse(payButton.includes('insetInlineStart: 16'))
+})
+
+Deno.test("payment setup and Razorpay loading both fail instead of spinning forever", () => {
+    const requestStart = source.indexOf("async function fetchCheckoutRequest")
+    const requestEnd = source.indexOf("async function loadRazorpayScript", requestStart)
+    const request = source.slice(requestStart, requestEnd)
+    const gatewayStart = source.indexOf("async function loadRazorpayScript")
+    const gatewayEnd = source.indexOf("async function openRazorpayCheckout", gatewayStart)
+    const gateway = source.slice(gatewayStart, gatewayEnd)
+
+    assertStringIncludes(request, "CHECKOUT_PAYMENT_REQUEST_TIMEOUT_MS")
+    assertStringIncludes(request, "AbortController")
+    assertStringIncludes(gateway, "CHECKOUT_RAZORPAY_SCRIPT_TIMEOUT_MS")
+    assertStringIncludes(gateway, "clearTimeout")
 })
 
 Deno.test("pay button prevents the Framer link from navigating on every click", () => {
@@ -242,4 +330,72 @@ Deno.test("checkout route state follows the URL context instead of stale stored 
         loading: false,
         pricingData: [{ id: "stale-trip" }],
     }), "missing-trip")
+})
+
+Deno.test("checkout field errors wait for a submit attempt and the toast avoids repeating them", () => {
+    const storeStart = source.indexOf("const useStore = createStore({")
+    const storeEnd = source.indexOf("\n})", storeStart)
+    assertStringIncludes(
+        source.slice(storeStart, storeEnd),
+        "validationAttempted: false",
+    )
+
+    const fieldErrorStart = source.indexOf("function checkoutFieldError(")
+    const travellerErrorStart = source.indexOf("function travellerFieldError(")
+    const fieldError = source.slice(fieldErrorStart, travellerErrorStart)
+    const travellerErrorEnd = source.indexOf("function withTravellerFieldError(", travellerErrorStart)
+    const travellerError = source.slice(travellerErrorStart, travellerErrorEnd)
+    assertStringIncludes(fieldError, "if (!store?.validationAttempted) return \"\"")
+    assertStringIncludes(travellerError, "if (!store?.validationAttempted) return \"\"")
+
+    const payButtonStart = source.indexOf("export function withCheckoutPayButton(Component)")
+    const payButtonEnd = source.indexOf("function readBrowserLocationKey", payButtonStart)
+    const payButton = source.slice(payButtonStart, payButtonEnd)
+    assertStringIncludes(payButton, "setStore({ validationAttempted: true })")
+    assertStringIncludes(payButton, "const isPaymentBlocked = Boolean(")
+    assertStringIncludes(
+        payButton,
+        "store?.loading || store?.pricingUnavailable || !isPricingReady ||",
+    )
+    assertStringIncludes(payButton, "isPaymentLocked,")
+    assertStringIncludes(payButton, "aria-disabled={isPaymentBlocked}")
+    assertStringIncludes(payButton, 'cursor: isPaymentBlocked ? "wait" : "pointer"')
+    const toastStart = source.indexOf("function showInlineError(")
+    const toastEnd = source.indexOf("function firstNonEmpty", toastStart)
+    const toast = source.slice(toastStart, toastEnd)
+    assertStringIncludes(toast, "const isFieldValidation = Array.isArray(errors)")
+    assertStringIncludes(toast, '"A few details need attention"')
+    assertStringIncludes(toast, '"See the highlighted fields below."')
+
+    const bootstrapStart = source.indexOf("export function withCheckoutBootstrap(Component)")
+    const bootstrapEnd = source.indexOf("export function withBookNowToCheckout", bootstrapStart)
+    const bootstrap = source.slice(bootstrapStart, bootstrapEnd)
+    assertStringIncludes(bootstrap, "validationAttempted: false")
+})
+
+Deno.test("checkout payable amount override closes before the next export", () => {
+    const payableStart = source.indexOf("export function withCheckoutPayableNow(")
+    const dueStart = source.indexOf("export function withCheckoutDueAmount(", payableStart)
+    assert(payableStart >= 0 && dueStart > payableStart)
+    assertStringIncludes(source.slice(payableStart, dueStart).trimEnd(), "\n}")
+})
+
+Deno.test("a paid idempotency replay renews the checkout key before showing success", () => {
+    const payButtonStart = source.indexOf("export function withCheckoutPayButton(Component)")
+    const payButtonEnd = source.indexOf("function readBrowserLocationKey", payButtonStart)
+    const payButton = source.slice(payButtonStart, payButtonEnd)
+    const replayStart = payButton.indexOf(
+        "if (res.ok && data?.already_paid && data?.replayed)",
+    )
+    const successStart = payButton.indexOf(
+        'if (data?.already_paid || data?.payment_status === "paid")',
+    )
+
+    assert(replayStart >= 0 && successStart > replayStart)
+    const replay = payButton.slice(replayStart, successStart)
+    assertStringIncludes(replay, "checkout_request_id = createUuid()")
+    assertStringIncludes(replay, "payload.checkout_request_id = checkout_request_id")
+    assertStringIncludes(replay, "window.sessionStorage.setItem(")
+    assertStringIncludes(replay, "await createBooking()")
+    assertEquals(payButton.match(/await createBooking\(\)/g)?.length, 2)
 })

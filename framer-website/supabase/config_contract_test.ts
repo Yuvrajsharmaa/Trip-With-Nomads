@@ -11,3 +11,8 @@ Deno.test("Razorpay browser callback is public so the gateway can follow its red
     assertStringIncludes(source, "[functions.handle-payment]")
     assertStringIncludes(source, "[functions.handle-payment]\nverify_jwt = false")
 })
+
+Deno.test("checkout reminder webhook is public only for its own secret validation", async () => {
+    const source = await Deno.readTextFile(new URL("./config.toml", import.meta.url))
+    assertStringIncludes(source, "[functions.checkout-reminders]\nverify_jwt = false")
+})

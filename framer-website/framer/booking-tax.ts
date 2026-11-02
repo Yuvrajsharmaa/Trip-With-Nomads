@@ -1,5 +1,11 @@
 export type WebsiteFinanceIssuer = "TWN" | "NTC"
 
+export function websiteTaxLabelForIssuer(issuer: unknown): string {
+    if (issuer === "NTC") return "GST (5%) + TCS (2%)"
+    if (issuer === "TWN") return "GST (5%)"
+    return "Taxes included"
+}
+
 export type WebsiteBookingTotals = {
     issuer: WebsiteFinanceIssuer
     taxableAmount: number
