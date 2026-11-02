@@ -1418,7 +1418,10 @@ serve(async (req) => {
                 }
             }
         }
-        if (!bookingIsPaid && replayed && paymentAttempt && !canReplayPaymentAttempt(paymentAttempt, data)) {
+        if (
+            !bookingIsPaid && replayed && !mayCreatePaymentOrder && paymentAttempt &&
+            !canReplayPaymentAttempt(paymentAttempt, data)
+        ) {
             return responseJson({
                 error: "This payment request is no longer active. Refresh the booking status before trying again.",
                 code: "PAYMENT_ATTEMPT_CONFLICT",

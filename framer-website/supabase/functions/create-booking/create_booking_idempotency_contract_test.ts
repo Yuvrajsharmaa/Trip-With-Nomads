@@ -31,6 +31,7 @@ Deno.test("create-booking persists a checkout request and replays its attempt", 
     assertStringIncludes(source, "canReplayPaymentAttempt")
     assertStringIncludes(source, "hasPaymentAttemptProviderOrder")
     assertStringIncludes(source, "recoverPaymentAttemptForRetry")
+    assertStringIncludes(source, "replayed && !mayCreatePaymentOrder && paymentAttempt")
     const replayOrderRecovery = source.indexOf("recoverPaymentAttemptForRetry({")
     const replayAttemptGuard = source.indexOf("!canReplayPaymentAttempt(paymentAttempt, data)")
     if (replayOrderRecovery < 0 || replayAttemptGuard < 0 || replayOrderRecovery > replayAttemptGuard) {
