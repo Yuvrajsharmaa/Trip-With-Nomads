@@ -248,6 +248,7 @@ interface BookingData {
     email: string
     phone: string
     created_at: string
+    payment_retry_available?: boolean
     // Populated from trips table join
     trip_title?: string
 }
@@ -1205,7 +1206,7 @@ export function withStatusIcon(Component): ComponentType {
     }
 }
 
-// --- Retry button: visible only on failure ---
+// --- Retry button: visible after failure or an expired order-creation attempt ---
 export function withRetryButton(Component): ComponentType {
     return (props: any) => {
         const [data, state] = useBooking()
@@ -1244,8 +1245,7 @@ export function withRetryButton(Component): ComponentType {
             return <Component {...props} style={{ ...props.style, display: "none" }} />
         }
 
-        if (data.payment_status !== "failed") {
-            // A pending attempt must be explicitly expired by the server before retrying.
+        if (data.payment_status !== "failed" && data.payment_retry_available !== true) {
             return <Component {...props} style={{ ...props.style, display: "none" }} />
         }
 

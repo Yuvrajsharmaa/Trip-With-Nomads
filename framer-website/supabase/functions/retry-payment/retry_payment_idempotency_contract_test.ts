@@ -25,6 +25,11 @@ Deno.test("retry-payment requires a retry key and persists payment attempts", as
     assertStringIncludes(source, "reactivatePayablePaymentAttempt")
     assertStringIncludes(source, "reusableAttempt = await recoverPaymentAttemptForRetry({")
     assertStringIncludes(source, "latestState = reusableAttempt")
+    const replayOrderRecovery = source.indexOf("const recovered = await recoverPaymentAttemptForRetry({")
+    const replayAttemptGuard = source.indexOf("canReplayPaymentAttempt(replayAttempt, booking")
+    if (replayOrderRecovery < 0 || replayAttemptGuard < 0 || replayOrderRecovery > replayAttemptGuard) {
+        throw new Error("retry-payment must recover a missing provider order before rejecting a stale replay")
+    }
     assertStringIncludes(source, "let replayed = Boolean(reusableAttempt)")
     assertStringIncludes(source, "PAYMENT_RECONCILIATION_PENDING")
     assertStringIncludes(source, '.or("payment_status.is.null,payment_status.neq.paid")')
@@ -60,8 +65,8 @@ Deno.test("retry-payment requires a retry key and persists payment attempts", as
     }
     const reservationReplayGuard = source.indexOf("if (replayed && !String(paymentAttempt.provider_order_id")
     const reservationGatewayBuild = source.indexOf("gateway = await buildRazorpayPayload")
-    if (reservationReplayGuard < 0 || reservationReplayGuard > reservationGatewayBuild) {
-        throw new Error("retry-payment must not create a second provider order while the first request is being prepared")
+    if (reservationReplayGuard >= 0 || reservationGatewayBuild < 0) {
+        throw new Error("retry-payment must let the shared receipt-recovery helper resolve a replay without a saved provider order")
     }
     assertStringIncludes(source, "PAYMENT_PROVIDER_UNSUPPORTED")
     if (source.includes("buildPayuPayload") || source.includes('paymentProvider === "payu"')) {

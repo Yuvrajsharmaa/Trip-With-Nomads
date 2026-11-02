@@ -16,7 +16,9 @@ import {
 } from "../_shared/payment_idempotency.ts"
 import {
     ensurePaymentAttemptOrder,
+    markPaymentAttemptOrderCreating,
     PaymentOrderInProgressError,
+    recoverPaymentAttemptForRetry,
 } from "../_shared/payment_attempt_order.ts"
 import {
     computeBasePricing,
@@ -1301,8 +1303,17 @@ serve(async (req) => {
         }
 
         let paymentAttempt = Array.isArray(latestAttemptLookup.data) ? latestAttemptLookup.data[0] : null
-        const bookingIsPaid = String(data.payment_status || "").trim().toLowerCase() === "paid"
+        const bookingIsPaid = ["paid", "succeeded"].includes(String(data.payment_status || "").trim().toLowerCase())
         const currentBookingPaymentAmountMinor = expectedBookingPaymentAmountMinor(data)
+        if (bookingIsPaid && !paymentAttempt) {
+            return responseJson({
+                booking_id: data.id,
+                checkout_request_id: checkoutRequestId,
+                replayed,
+                already_paid: true,
+                payment_status: "paid",
+            })
+        }
         if (!bookingIsPaid && currentBookingPaymentAmountMinor === null) {
             return responseJson({
                 error: "The booking payment amount could not be confirmed. Refresh checkout before trying again.",
@@ -1316,18 +1327,6 @@ serve(async (req) => {
             return responseJson({
                 error: "The booking price changed after this checkout started. Refresh checkout before trying again.",
                 code: "BOOKING_PRICE_CHANGED",
-            }, 409)
-        }
-        if (!bookingIsPaid && replayed && paymentAttempt && !canReplayPaymentAttempt(paymentAttempt, data)) {
-            return responseJson({
-                error: "This payment request is no longer active. Refresh the booking status before trying again.",
-                code: "PAYMENT_ATTEMPT_CONFLICT",
-            }, 409)
-        }
-        if (!bookingIsPaid && replayed && paymentAttempt && !hasPaymentAttemptProviderOrder(paymentAttempt)) {
-            return responseJson({
-                error: "This payment is already starting. Wait a moment, then refresh before trying again.",
-                code: "PAYMENT_ATTEMPT_STARTING",
             }, 409)
         }
         let mayCreatePaymentOrder = false
@@ -1384,13 +1383,46 @@ serve(async (req) => {
             paymentAttempt = reservationRow.payment_attempt
             const reservationReplayed = reservationRow.replayed === true
             replayed = replayed || reservationReplayed
-            if (reservationReplayed && !hasPaymentAttemptProviderOrder(paymentAttempt)) {
-                return responseJson({
-                    error: "This payment is already starting. Wait a moment, then refresh before trying again.",
-                    code: "PAYMENT_ATTEMPT_STARTING",
-                }, 409)
-            }
             mayCreatePaymentOrder = !reservationReplayed
+        }
+
+        if (!bookingIsPaid && paymentAttempt && !hasPaymentAttemptProviderOrder(paymentAttempt)) {
+            if (mayCreatePaymentOrder) {
+                paymentAttempt = await markPaymentAttemptOrderCreating(supabase, paymentAttempt)
+            } else {
+                try {
+                    const recovered = await recoverPaymentAttemptForRetry({
+                        supabase,
+                        attempt: paymentAttempt,
+                        bookingId: String(data.id),
+                        amount: round2(toNumber(data.payable_now_amount || payableNowAmount)),
+                        currency: String(data.currency || currency).trim().toUpperCase(),
+                        credentials: paymentCredentials,
+                        idempotencyKey: checkoutRequestId,
+                    })
+                    if (!recovered) {
+                        return responseJson({
+                            error: "The previous payment needs status reconciliation before checkout can resume.",
+                            code: "PAYMENT_RECONCILIATION_PENDING",
+                        }, 409)
+                    }
+                    paymentAttempt = recovered
+                } catch (error) {
+                    const isStarting = error instanceof PaymentOrderInProgressError
+                    return responseJson({
+                        error: isStarting
+                            ? "This payment is already starting. Wait a moment, then refresh before trying again."
+                            : "The previous payment could not be verified. Check its status before trying again.",
+                        code: isStarting ? "PAYMENT_ATTEMPT_STARTING" : "PAYMENT_RECONCILIATION_PENDING",
+                    }, 409)
+                }
+            }
+        }
+        if (!bookingIsPaid && replayed && paymentAttempt && !canReplayPaymentAttempt(paymentAttempt, data)) {
+            return responseJson({
+                error: "This payment request is no longer active. Refresh the booking status before trying again.",
+                code: "PAYMENT_ATTEMPT_CONFLICT",
+            }, 409)
         }
 
         notificationBooking = {

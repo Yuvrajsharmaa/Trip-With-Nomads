@@ -7,3 +7,9 @@ Deno.test("status projection uses provider-neutral transaction fields", () => {
   assert(!source.includes("payu_txnid"), "status projection must not depend on retired PayU column")
   assertStringIncludes(source, "cache-control")
 })
+
+Deno.test("status response exposes retries only after an unpaid provider-order setup expires", () => {
+  assertStringIncludes(source, 'from("payment_attempts")')
+  assertStringIncludes(source, "isStalePaymentAttempt({")
+  assertStringIncludes(source, "payment_retry_available: paymentRetryAvailable")
+})

@@ -1,6 +1,9 @@
 export type RetryState = {
     status?: unknown
     expiresAt?: string | null
+    providerOrderId?: unknown
+    createdAt?: string | null
+    updatedAt?: string | null
 }
 
 export type PaymentAttemptInsertParams = {
@@ -75,14 +78,22 @@ export function isStalePaymentAttempt(
 ): boolean {
     const status = String(state?.status || "").trim().toLowerCase()
     if (status !== "pending" && status !== "creating") return false
-    const expiresAt = String(state?.expiresAt || "").trim()
-    if (!expiresAt) return false
-    const expiry = new Date(expiresAt)
-    return !Number.isNaN(expiry.getTime()) && expiry.getTime() <= now.getTime()
+    const hasProviderOrder = Boolean(String(state?.providerOrderId || "").trim())
+    const creationStartedAt = state?.updatedAt || state?.createdAt
+    const orderIsMissing = !hasProviderOrder
+    const expirySource = orderIsMissing
+        ? creationStartedAt || state?.expiresAt
+        : state?.expiresAt
+    const expiry = new Date(String(expirySource || ""))
+    if (Number.isNaN(expiry.getTime())) return false
+    const deadline = orderIsMissing && creationStartedAt
+        ? expiry.getTime() + 2 * 60 * 1000
+        : expiry.getTime()
+    return deadline <= now.getTime()
 }
 
 export function canReplayPaymentAttempt(
-    attempt: { id?: unknown; status?: unknown; expires_at?: string | null },
+    attempt: { id?: unknown; status?: unknown; expires_at?: string | null; provider_order_id?: unknown; created_at?: string | null; updated_at?: string | null },
     booking: { active_payment_attempt_id?: unknown; payment_status?: unknown; paid_amount?: unknown; status?: unknown },
     now = new Date(),
 ): boolean {
@@ -103,7 +114,13 @@ export function canReplayPaymentAttempt(
         bookingStatus !== "canceled" &&
         Number.isFinite(paidAmount) &&
         paidAmount === 0 &&
-        !isStalePaymentAttempt({ status, expiresAt: attempt?.expires_at }, now),
+        !isStalePaymentAttempt({
+            status,
+            expiresAt: attempt?.expires_at,
+            providerOrderId: attempt?.provider_order_id,
+            createdAt: attempt?.created_at,
+            updatedAt: attempt?.updated_at,
+        }, now),
     )
 }
 

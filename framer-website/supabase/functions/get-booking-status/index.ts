@@ -4,6 +4,7 @@ import {
     listBookingStatusSecrets,
     verifyBookingStatusToken,
 } from "../_shared/booking_status_token.ts"
+import { isStalePaymentAttempt } from "../_shared/payment_idempotency.ts"
 
 const corsHeaders = {
     "Access-Control-Allow-Origin": "*",
@@ -113,6 +114,27 @@ serve(async (req) => {
             return jsonResponse({ error: "Booking not found" }, 404)
         }
 
+        let paymentRetryAvailable = false
+        if (
+            String(booking.payment_status || "").toLowerCase() === "pending" &&
+            booking.active_payment_attempt_id
+        ) {
+            const attemptResult = await supabase
+                .from("payment_attempts")
+                .select("status, provider_order_id, expires_at, created_at, updated_at")
+                .eq("id", booking.active_payment_attempt_id)
+                .maybeSingle()
+            if (!attemptResult.error && attemptResult.data && !attemptResult.data.provider_order_id) {
+                const attemptStatus = String(attemptResult.data.status || "").toLowerCase()
+                paymentRetryAvailable = ["failed", "expired"].includes(attemptStatus) || isStalePaymentAttempt({
+                    status: attemptResult.data.status,
+                    expiresAt: attemptResult.data.expires_at,
+                    createdAt: attemptResult.data.created_at,
+                    updatedAt: attemptResult.data.updated_at,
+                })
+            }
+        }
+
         let tripTitle = ""
         if (booking?.trip_id) {
             const tripRes = await supabase
@@ -147,6 +169,7 @@ serve(async (req) => {
                 ...booking,
                 trip_title: tripTitle || null,
                 finance_issuer: financeIssuer,
+                payment_retry_available: paymentRetryAvailable,
                 billing_snapshot: billingSnapshot,
                 balance_due_note: supportsBalanceDueNote
                     ? (booking as any)?.balance_due_note ?? null

@@ -70,6 +70,20 @@ Deno.test("stale pending attempts become explicitly retryable only after expiry"
     assertEquals(isStalePaymentAttempt({ status: "failed", expiresAt: "2026-10-06T11:00:00.000Z" }, now), false)
 })
 
+Deno.test("a pending attempt without a provider order expires on its order-creation lease", () => {
+    const now = new Date("2026-10-06T12:00:00.000Z")
+    const stale = {
+        status: "pending",
+        expiresAt: "2026-10-06T12:30:00.000Z",
+        updatedAt: "2026-10-06T11:57:59.000Z",
+        providerOrderId: null,
+    }
+    assertEquals(isStalePaymentAttempt(stale, now), true)
+    assertEquals(isStalePaymentAttempt({ ...stale, updatedAt: "2026-10-06T11:59:00.000Z" }, now), false)
+    assertEquals(isStalePaymentAttempt({ ...stale, providerOrderId: "order_1" }, now), false)
+    assertEquals(isStalePaymentAttempt({ ...stale, status: "creating" }, now), true)
+})
+
 Deno.test("next attempt number is monotonic", () => {
     assertEquals(nextPaymentAttemptNumber([]), 1)
     assertEquals(nextPaymentAttemptNumber([{ attempt_no: 1 }, { attempt_no: 3 }, { attempt_no: 2 }]), 4)

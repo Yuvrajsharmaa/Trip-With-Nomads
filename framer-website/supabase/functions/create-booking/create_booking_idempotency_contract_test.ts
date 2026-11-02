@@ -30,11 +30,22 @@ Deno.test("create-booking persists a checkout request and replays its attempt", 
     assertStringIncludes(source, "expectedBookingPaymentAmountMinor")
     assertStringIncludes(source, "canReplayPaymentAttempt")
     assertStringIncludes(source, "hasPaymentAttemptProviderOrder")
+    assertStringIncludes(source, "recoverPaymentAttemptForRetry")
+    const replayOrderRecovery = source.indexOf("recoverPaymentAttemptForRetry({")
+    const replayAttemptGuard = source.indexOf("!canReplayPaymentAttempt(paymentAttempt, data)")
+    if (replayOrderRecovery < 0 || replayAttemptGuard < 0 || replayOrderRecovery > replayAttemptGuard) {
+        throw new Error("create-booking must recover a missing Razorpay order before rejecting an expired replay")
+    }
     assertStringIncludes(source, 'schema("crm").rpc("reserve_website_booking_payment_attempt"')
     assertStringIncludes(source, "p_expected_booking_updated_at: data.updated_at")
     assertStringIncludes(source, 'p_status: "pending"')
+    const paidWithoutAttempt = source.indexOf("if (bookingIsPaid && !paymentAttempt)")
+    const reservationCall = source.indexOf('schema("crm").rpc("reserve_website_booking_payment_attempt"')
+    if (paidWithoutAttempt < 0 || paidWithoutAttempt > reservationCall) {
+        throw new Error("A paid booking replay without an attempt must refresh its request key before reserving another payment")
+    }
     assertStringIncludes(source, 'code: "BOOKING_PRICE_CHANGED"')
-    assertStringIncludes(source, 'code: "PAYMENT_ATTEMPT_STARTING"')
+    assertStringIncludes(source, 'isStarting ? "PAYMENT_ATTEMPT_STARTING"')
     assertStringIncludes(source, "gateway: activeProvider")
     assertStringIncludes(source, "todayISTDateKey")
     assertStringIncludes(source, "computeBasePricing")

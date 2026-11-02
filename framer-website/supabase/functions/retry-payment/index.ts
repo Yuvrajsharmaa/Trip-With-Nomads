@@ -13,6 +13,7 @@ import {
 import {
     ensurePaymentAttemptOrder,
     isRazorpayOrderConfirmedUnpaid,
+    markPaymentAttemptOrderCreating,
     PaymentOrderInProgressError,
     recoverPaymentAttemptForRetry,
     reactivatePayablePaymentAttempt,
@@ -316,6 +317,9 @@ Deno.serve(async (req) => {
             const replayIsStale = isStalePaymentAttempt({
                 status: replayAttempt.status,
                 expiresAt: replayAttempt.expires_at,
+                providerOrderId: replayAttempt.provider_order_id,
+                createdAt: replayAttempt.created_at,
+                updatedAt: replayAttempt.updated_at,
             })
             if (["failed", "expired"].includes(replayStatus)) {
                 return responseJson({
@@ -351,16 +355,38 @@ Deno.serve(async (req) => {
                     }, 409)
                 }
             }
+            if (!String(replayAttempt.provider_order_id || "").trim() && ["creating", "pending"].includes(replayStatus)) {
+                try {
+                    const recovered = await recoverPaymentAttemptForRetry({
+                        supabase,
+                        attempt: replayAttempt,
+                        bookingId: String(booking.id),
+                        amount: amountToRetry,
+                        currency: retryCurrency,
+                        credentials: replayCredentials,
+                        idempotencyKey: retryRequestId,
+                    })
+                    if (!recovered) {
+                        return responseJson({
+                            error: "The previous payment needs status reconciliation before it can be retried.",
+                            code: "PAYMENT_RECONCILIATION_PENDING",
+                        }, 409)
+                    }
+                    replayAttempt = recovered
+                } catch (error) {
+                    const isStarting = error instanceof PaymentOrderInProgressError
+                    return responseJson({
+                        error: isStarting
+                            ? "This payment is already starting. Wait a moment, then refresh before trying again."
+                            : "The previous payment could not be verified. Check its status before retrying.",
+                        code: isStarting ? "PAYMENT_ATTEMPT_STARTING" : "PAYMENT_RECONCILIATION_PENDING",
+                    }, 409)
+                }
+            }
             if (!canReplayPaymentAttempt(replayAttempt, booking)) {
                 return responseJson({
                     error: "This payment request is no longer active. Refresh the booking status before trying again.",
                     code: "PAYMENT_ATTEMPT_CONFLICT",
-                }, 409)
-            }
-            if (!String(replayAttempt.provider_order_id || "").trim()) {
-                return responseJson({
-                    error: "This payment is already starting. Wait a moment, then refresh before trying again.",
-                    code: "PAYMENT_ATTEMPT_STARTING",
                 }, 409)
             }
             notificationAttempt = replayAttempt
@@ -416,6 +442,9 @@ Deno.serve(async (req) => {
         const latestIsStale = latestAttempt && isStalePaymentAttempt({
             status: latestAttempt.status,
             expiresAt: latestAttempt.expires_at,
+            providerOrderId: latestAttempt.provider_order_id,
+            createdAt: latestAttempt.created_at,
+            updatedAt: latestAttempt.updated_at,
         })
         if (
             paymentProvider === "razorpay" &&
@@ -560,7 +589,7 @@ Deno.serve(async (req) => {
                 currency: booking.currency || "INR",
                 status: "pending",
             })
-            attemptPayload.expires_at = new Date(Date.now() + 30 * 60 * 1000).toISOString()
+            attemptPayload.expires_at = new Date(Date.now() + 2 * 60 * 1000).toISOString()
 
             if (!booking.updated_at || Number(attemptPayload.amount_minor) !== expectedPaymentAmountMinor) {
                 return responseJson({
@@ -596,13 +625,10 @@ Deno.serve(async (req) => {
             }
             paymentAttempt = reservationRow.payment_attempt
             replayed = reservationRow.replayed === true
-            if (replayed && !String(paymentAttempt.provider_order_id || "").trim()) {
-                return responseJson({
-                    error: "This payment is already starting. Wait a moment, then refresh before trying again.",
-                    code: "PAYMENT_ATTEMPT_STARTING",
-                }, 409)
-            }
             mayCreateOrder = !replayed
+            if (mayCreateOrder) {
+                paymentAttempt = await markPaymentAttemptOrderCreating(supabase, paymentAttempt)
+            }
         }
         notificationAttempt = paymentAttempt
 
