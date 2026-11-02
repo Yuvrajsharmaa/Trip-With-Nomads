@@ -174,6 +174,39 @@ Deno.test("pricing exposes only open future capacity with safe transport and sha
     assertEquals(rows[1].early_bird_ends_at, "2026-11-15T18:29:59.999Z")
 })
 
+Deno.test("started same-day Operations departures are hidden while later departures remain bookable", () => {
+    const base = {
+        publicTripId: "website-id",
+        today: "2026-11-03",
+        now: new Date("2026-11-03T13:00:00.000Z"),
+        catalogTrip: {
+            id: "crm-id",
+            website_trip_id: "website-id",
+            is_active: true,
+        },
+    }
+    const departure = (start_time: string) => [{
+        id: "departure-id",
+        departure_date: "2026-11-03",
+        start_time,
+        time_zone: "Asia/Kolkata",
+        status: "open",
+        capacity: 12,
+        reserved_count: 0,
+        unverified_booking_count: 0,
+        pricing_options: [{ sharing: "Double", transport: "SUV", price: 10000 }],
+    }]
+
+    assertEquals(buildWebsiteTripPricingRows({ ...base, departures: departure("18:00:00") }), [])
+    assertEquals(buildWebsiteTripPricingRows({ ...base, departures: departure("19:00:00") }).length, 1)
+    assertEquals(buildWebsiteTripPricingRows({
+        ...base,
+        today: "2026-11-04",
+        now: new Date("2026-11-04T04:00:00.000Z"),
+        departures: [{ ...departure("21:00:00")[0], time_zone: "America/Los_Angeles" }],
+    }).length, 1)
+})
+
 Deno.test("single sharing is priced from the selected CRM departure option", () => {
     const pricingRows = buildWebsiteTripPricingRows({
         publicTripId: "website-id",

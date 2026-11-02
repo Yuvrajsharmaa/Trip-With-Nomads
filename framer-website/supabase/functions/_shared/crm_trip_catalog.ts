@@ -126,6 +126,40 @@ function endOfIndiaDayUtc(date: string): string {
     return new Date(`${date}T23:59:59.999+05:30`).toISOString()
 }
 
+function isDepartureUpcoming(date: string, startTime: unknown, timeZone: unknown, today: string, now: Date): boolean {
+    const zone = text(timeZone)
+    if (!zone) return date > today
+
+    try {
+        const localParts = new Intl.DateTimeFormat("en-CA", {
+            timeZone: zone,
+            year: "numeric",
+            month: "2-digit",
+            day: "2-digit",
+        }).formatToParts(now)
+        const part = (type: string) => localParts.find((item) => item.type === type)?.value || ""
+        const localDate = `${part("year")}-${part("month")}-${part("day")}`
+        if (date < localDate) return false
+        if (date > localDate) return true
+
+        const start = /^(\d{2}):(\d{2})(?::(\d{2})(?:\.\d+)?)?$/.exec(text(startTime))
+        if (!start) return false
+        const timeParts = new Intl.DateTimeFormat("en-GB", {
+            timeZone: zone,
+            hour: "2-digit",
+            minute: "2-digit",
+            second: "2-digit",
+            hourCycle: "h23",
+        }).formatToParts(now)
+        const timePart = (type: string) => Number(timeParts.find((item) => item.type === type)?.value)
+        const startSeconds = Number(start[1]) * 3600 + Number(start[2]) * 60 + Number(start[3] || 0)
+        const currentSeconds = timePart("hour") * 3600 + timePart("minute") * 60 + timePart("second")
+        return startSeconds > currentSeconds
+    } catch {
+        return false
+    }
+}
+
 export function resolveWebsiteTripCatalog<T extends CatalogTrip>(
     publicTrip: PublicTrip,
     catalogTrips: T[],
@@ -390,10 +424,13 @@ export function buildLegacyWebsiteTripPricingRows(input: {
 export function buildWebsiteTripPricingRows(input: {
     publicTripId: string
     today: string
+    now?: Date
     catalogTrip: CatalogTrip
     departures: Array<{
         id?: unknown
         departure_date?: unknown
+        start_time?: unknown
+        time_zone?: unknown
         status?: unknown
         capacity?: unknown
         reserved_count?: unknown
@@ -414,11 +451,15 @@ export function buildWebsiteTripPricingRows(input: {
 
     const today = validDateKey(input.today)
     if (!today) return []
+    const now = input.now ?? new Date()
 
     const openDepartureDates = new Map<string, number>()
     for (const departure of input.departures) {
         const date = validDateKey(departure.departure_date)
-        if (text(departure.status).toLowerCase() !== "open" || !date || date < today) continue
+        if (
+            text(departure.status).toLowerCase() !== "open" || !date ||
+            !isDepartureUpcoming(date, departure.start_time, departure.time_zone, today, now)
+        ) continue
         openDepartureDates.set(date, (openDepartureDates.get(date) || 0) + 1)
     }
 
@@ -430,7 +471,7 @@ export function buildWebsiteTripPricingRows(input: {
         const unverifiedBookingCount = Number(departure.unverified_booking_count ?? 0)
         if (
             text(departure.status).toLowerCase() !== "open" ||
-            !departureDate || departureDate < today ||
+            !departureDate || !isDepartureUpcoming(departureDate, departure.start_time, departure.time_zone, today, now) ||
             openDepartureDates.get(departureDate) !== 1 ||
             !Number.isSafeInteger(capacity) || capacity < 1 ||
             !Number.isSafeInteger(reservedCount) || reservedCount < 0 ||
