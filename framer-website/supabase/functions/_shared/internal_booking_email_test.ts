@@ -70,6 +70,9 @@ Deno.test("builds a full internal booking snapshot", () => {
 
   assert(email)
   assertEquals(email.to, ["support@tripwithnomads.com", "yuvrajsharma6367@gmail.com"])
+  assertStringIncludes(email.html, "padding:20px 8px;")
+  assertStringIncludes(email.html, "padding:20px 16px 24px;")
+  assertEquals(email.html.includes("border:1px solid #cbeafa"), false)
   assertEquals(email.subject, "[TWN] Payment received: Summer Spiti | TWN-2026-00123")
   assertStringIncludes(email.html, "Guest User")
   assertStringIncludes(email.html, "3 pax")
