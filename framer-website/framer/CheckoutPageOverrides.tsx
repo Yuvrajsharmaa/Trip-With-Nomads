@@ -1,9 +1,47 @@
 import React from "react"
 import type { ComponentType } from "react"
 import { createStore } from "https://framer.com/m/framer/store.js@^1.0.0"
+import {
+    calculateWebsiteBookingTotals,
+    selectWebsiteDiscount,
+    type WebsiteFinanceIssuer,
+} from "./booking-tax.ts"
+import { getCheckoutEntryState } from "./checkout_entry_state.ts"
 
 const CHECKOUT_TIMEZONE = "Asia/Kolkata"
 const CHECKOUT_DATA_REQUEST_TIMEOUT_MS = 8000
+const CHECKOUT_PAYMENT_REQUEST_TIMEOUT_MS = 20000
+const CHECKOUT_RAZORPAY_SCRIPT_TIMEOUT_MS = 15000
+
+function CheckoutSpinner({
+    size,
+    testId,
+}: {
+    size: number
+    testId?: string
+}) {
+    return (
+        <>
+            <style>{`@keyframes twnCheckoutSpin { to { transform: rotate(360deg); } } @media (prefers-reduced-motion: reduce) { .twnCheckoutSpinner { animation: none !important; } }`}</style>
+            <span
+                aria-hidden="true"
+                className="twnCheckoutSpinner"
+                data-testid={testId}
+                style={{
+                    animation: "twnCheckoutSpin 800ms linear infinite",
+                    border: "2px solid currentColor",
+                    borderBottomColor: "transparent",
+                    borderRadius: "50%",
+                    boxSizing: "border-box",
+                    display: "inline-block",
+                    flex: "none",
+                    height: size,
+                    width: size,
+                }}
+            />
+        </>
+    )
+}
 
 async function fetchCheckoutDataWithTimeout(
     input: RequestInfo | URL,
@@ -62,7 +100,6 @@ type RuntimeConfig = {
     siteBaseUrl: string
     supabaseUrl: string
     supabaseAnonKey: string
-    apiBaseUrl: string
 }
 
 const RUNTIME_CONFIG: Record<RuntimeEnv, RuntimeConfig> = {
@@ -71,17 +108,12 @@ const RUNTIME_CONFIG: Record<RuntimeEnv, RuntimeConfig> = {
         supabaseUrl: "https://jxozzvwvprmnhvafmpsa.supabase.co",
         supabaseAnonKey:
             "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imp4b3p6dnd2cHJtbmh2YWZtcHNhIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjgwNTg2NjIsImV4cCI6MjA4MzYzNDY2Mn0.KpVa9dWlJEguL1TA00Tf4QDpziJ1mgA2I0f4_l-vlOk",
-        // Keep production on its own Supabase function origin until a
-        // production gateway is explicitly configured through the runtime
-        // override. The active worker below is staging-only evidence.
-        apiBaseUrl: "",
     },
     development: {
         siteBaseUrl: "https://maroon-aside-814100.framer.app",
         supabaseUrl: "https://ieuwiinbvbdvjrdqqzlb.supabase.co",
         supabaseAnonKey:
             "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImlldXdpaW5idmJkdmpyZHFxemxiIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzIwNDYwMTksImV4cCI6MjA4NzYyMjAxOX0.UlTMeyvArixD7byDCrGwEDXsbc4LQfx6QXDL6Je3blE",
-        apiBaseUrl: "https://twn-checkout-gateway-staging.tripwithnomads-crm.workers.dev",
     },
 }
 
@@ -186,19 +218,18 @@ function resolveRuntimeConfig(): RuntimeConfig {
         ),
         supabaseUrl: resolvedSupabaseUrl,
         supabaseAnonKey: resolvedSupabaseAnonKey,
-        apiBaseUrl: normalizeBaseUrl(
-            runtimeOverride.apiBaseUrl || selected.apiBaseUrl,
-        ),
     }
 }
 
 const CURRENT_RUNTIME = resolveRuntimeConfig()
 const SUPABASE_URL = CURRENT_RUNTIME.supabaseUrl
 const SUPABASE_KEY = CURRENT_RUNTIME.supabaseAnonKey
+const RECORD_LEAD_URL = `${SUPABASE_URL}/functions/v1/record-lead`
+const CREATE_BOOKING_URL = `${SUPABASE_URL}/functions/v1/create-booking`
 const TAX_RATE = 0.05
 const CHECKOUT_PAGE_URL = `${CURRENT_RUNTIME.siteBaseUrl}/checkout`
 const UPCOMING_TRIPS_BASE_URL = `${CURRENT_RUNTIME.siteBaseUrl}/upcoming-trips`
-const SHARING_VALUES = ["Quad", "Triple", "Double"] as const
+const SHARING_VALUES = ["Quad", "Triple", "Double", "Single"] as const
 type SharingValue = (typeof SHARING_VALUES)[number]
 type PaymentMode = "full" | "partial_25"
 
@@ -265,20 +296,11 @@ function getOrCreateStableRequestId(
     }
 }
 
-function checkoutApiUrl(path: string): string {
-    const cleanPath = String(path || "").replace(/^\/+/, "")
-    const gatewayBase = normalizeBaseUrl(CURRENT_RUNTIME.apiBaseUrl)
-    if (gatewayBase) return `${gatewayBase}/${cleanPath}`
-    return `${SUPABASE_URL}/functions/v1/${cleanPath}`
-}
-
 function checkoutApiHeaders(): Record<string, string> {
     const headers: Record<string, string> = {
         "Content-Type": "application/json",
-    }
-    if (!CURRENT_RUNTIME.apiBaseUrl) {
-        headers.apikey = SUPABASE_KEY
-        headers.Authorization = `Bearer ${SUPABASE_KEY}`
+        apikey: SUPABASE_KEY,
+        Authorization: `Bearer ${SUPABASE_KEY}`,
     }
     return headers
 }
@@ -286,14 +308,21 @@ function checkoutApiHeaders(): Record<string, string> {
 async function fetchCheckoutRequest(path: string, init: RequestInit): Promise<Response> {
     let lastError: unknown = null
     for (let attempt = 0; attempt < 2; attempt += 1) {
+        const controller = new AbortController()
+        const timeoutId = window.setTimeout(
+            () => controller.abort(),
+            CHECKOUT_PAYMENT_REQUEST_TIMEOUT_MS,
+        )
         try {
-            return await fetch(path, init)
+            return await fetch(path, { ...init, signal: controller.signal })
         } catch (error) {
             lastError = error
             if (attempt === 0) {
                 console.warn("[Checkout] Payment request failed; retrying once", error)
                 await new Promise((resolve) => window.setTimeout(resolve, 600))
             }
+        } finally {
+            window.clearTimeout(timeoutId)
         }
     }
     throw lastError || new Error("Could not reach payment service")
@@ -308,22 +337,28 @@ async function loadRazorpayScript(): Promise<void> {
         const existing = document.querySelector(
             'script[data-twn-razorpay="true"]',
         ) as HTMLScriptElement | null
-        if (existing) {
-            existing.addEventListener("load", () => resolve(), { once: true })
-            existing.addEventListener(
-                "error",
-                () => reject(new Error("Could not load payment gateway")),
-                { once: true },
-            )
-            return
+        const script = existing || document.createElement("script")
+        let timeoutId: number
+        const finish = (callback: () => void) => {
+            window.clearTimeout(timeoutId)
+            script.removeEventListener("load", onLoad)
+            script.removeEventListener("error", onError)
+            callback()
         }
-        const script = document.createElement("script")
-        script.src = "https://checkout.razorpay.com/v1/checkout.js"
-        script.async = true
-        script.dataset.twnRazorpay = "true"
-        script.onload = () => resolve()
-        script.onerror = () => reject(new Error("Could not load payment gateway"))
-        document.head.appendChild(script)
+        const onLoad = () => finish(resolve)
+        const onError = () => finish(() => reject(new Error("Could not load payment gateway")))
+        timeoutId = window.setTimeout(
+            () => finish(() => reject(new Error("Payment gateway took too long to load"))),
+            CHECKOUT_RAZORPAY_SCRIPT_TIMEOUT_MS,
+        )
+        script.addEventListener("load", onLoad, { once: true })
+        script.addEventListener("error", onError, { once: true })
+        if (!existing) {
+            script.src = "https://checkout.razorpay.com/v1/checkout.js"
+            script.async = true
+            script.dataset.twnRazorpay = "true"
+            document.head.appendChild(script)
+        }
     })
 }
 
@@ -398,6 +433,10 @@ type CouponResult = {
     discount_amount_total?: number
     taxable_amount?: number
     tax_amount?: number
+    gst_amount?: number
+    tcs_basis?: number
+    tcs_amount?: number
+    finance_issuer?: WebsiteFinanceIssuer
     total_amount?: number
     line_items?: Array<{
         traveller_id: number
@@ -417,6 +456,10 @@ type PricingBreakdown = {
     discount_amount_total: number
     taxable_amount: number
     tax_amount: number
+    gst_amount: number
+    tcs_basis: number
+    tcs_amount: number
+    finance_issuer: WebsiteFinanceIssuer
     total_amount: number
     line_items: Array<{
         traveller_id: number
@@ -436,6 +479,7 @@ const useStore = createStore({
     slug: "",
     tripName: "",
     pricingData: [] as any[],
+    financeIssuer: null as WebsiteFinanceIssuer | null,
     date: "",
     transport: "",
     travellers: [{ id: 1, name: "", transport: "", sharing: "" }] as Traveller[],
@@ -452,6 +496,7 @@ const useStore = createStore({
     loading: true,
     pricingUnavailable: false,
     submitting: false,
+    validationAttempted: false,
 })
 
 function toNumber(value: any): number {
@@ -473,17 +518,30 @@ function round2(value: number): number {
     return Math.round((Number(value) + Number.EPSILON) * 100) / 100
 }
 
-function calculateTaxInclusiveTotal(taxableAmount: any): {
+function calculateTaxInclusiveTotal(
+    taxableAmount: any,
+    discountAmount: any,
+    issuer: WebsiteFinanceIssuer,
+): {
     taxableAmount: number
     taxAmount: number
+    gstAmount: number
+    tcsBasis: number
+    tcsAmount: number
     totalAmount: number
 } {
-    const taxable = round2(Math.max(0, toNumber(taxableAmount)))
-    const tax = round2(taxable * TAX_RATE)
+    const totals = calculateWebsiteBookingTotals({
+        issuer,
+        taxableAmount: round2(Math.max(0, toNumber(taxableAmount))),
+        discountAmount: round2(Math.max(0, toNumber(discountAmount))),
+    })
     return {
-        taxableAmount: taxable,
-        taxAmount: tax,
-        totalAmount: round2(taxable + tax),
+        taxableAmount: totals.taxableAmount,
+        taxAmount: totals.taxAmount,
+        gstAmount: totals.gstAmount,
+        tcsBasis: totals.tcsBasis,
+        tcsAmount: totals.tcsAmount,
+        totalAmount: totals.totalAmount,
     }
 }
 
@@ -491,9 +549,23 @@ function fmtINR(value: number): string {
     return "₹" + toNumber(value).toLocaleString("en-IN")
 }
 
-function formatCheckoutAmount(store: any, value: number): string {
-    if (store?.loading) return "Loading price…"
-    if (store?.pricingUnavailable) return "Price unavailable"
+function formatCheckoutAmount(
+    store: any,
+    value: number,
+    unavailableText = "Price unavailable",
+): string {
+    const route = readCheckoutRouteContext()
+    const entryState = getCheckoutEntryState({
+        loading: Boolean(store?.loading),
+        tripId: route.tripId,
+        slug: route.slug,
+        pricingUnavailable: store?.pricingUnavailable,
+        pricingData: store?.pricingData,
+    })
+    if (entryState === "missing-trip" || entryState === "unavailable") {
+        return unavailableText
+    }
+    if (entryState === "loading") return ""
     return fmtINR(value)
 }
 
@@ -562,13 +634,13 @@ function buildPricingBreakdownFromQuote(
         pickFirstNumber(
             source,
             ["taxable_amount", "taxableSubtotal"],
-            Math.max(0, baseSubtotal - discountAmountTotal),
+            baseSubtotal,
         ),
     )
-    // The quote endpoint is not the final pricing source of truth for GST.
-    // Recompute the inclusive amount so an older response cannot surface or
-    // charge a pre-GST total.
-    const taxInclusive = calculateTaxInclusiveTotal(rawTaxableAmount)
+    const issuer: WebsiteFinanceIssuer = source?.finance_issuer === "NTC" || fallbackStore?.financeIssuer === "NTC"
+        ? "NTC"
+        : "TWN"
+    const taxInclusive = calculateTaxInclusiveTotal(rawTaxableAmount, discountAmountTotal, issuer)
     const taxableAmount = taxInclusive.taxableAmount
     const taxAmount = taxInclusive.taxAmount
     const totalAmount = taxInclusive.totalAmount
@@ -582,6 +654,10 @@ function buildPricingBreakdownFromQuote(
         discount_amount_total: discountAmountTotal,
         taxable_amount: taxableAmount,
         tax_amount: taxAmount,
+        gst_amount: taxInclusive.gstAmount,
+        tcs_basis: taxInclusive.tcsBasis,
+        tcs_amount: taxInclusive.tcsAmount,
+        finance_issuer: issuer,
         total_amount: totalAmount,
         line_items: Array.isArray(source?.line_items) ? source.line_items : fallback.line_items,
     }
@@ -664,6 +740,7 @@ function normalizeSharing(value: string): SharingValue | "" {
     if (lower.includes("quad")) return "Quad"
     if (lower.includes("triple")) return "Triple"
     if (lower.includes("double")) return "Double"
+    if (lower.includes("single")) return "Single"
     return ""
 }
 
@@ -926,33 +1003,34 @@ function buildLocalPricingBreakdown(store: any): PricingBreakdown {
         Math.max(0, Math.min(earlyBirdDiscount, subtotal)),
     )
 
-    const appliedSource: "none" | "early_bird" | "coupon" = couponDiscount > 0
-        ? "coupon"
-        : earlyDiscount > 0
-        ? "early_bird"
-        : "none"
-
-    const discountTotal = round2(
-        Math.max(0, Math.min(subtotal, earlyDiscount + couponDiscount)),
-    )
-    const taxInclusive = calculateTaxInclusiveTotal(
-        Math.max(0, subtotal - discountTotal)
-    )
+    const selectedDiscount = selectWebsiteDiscount({
+        subtotal,
+        earlyBirdDiscount: earlyDiscount,
+        couponDiscount,
+    })
+    const appliedSource = selectedDiscount.appliedDiscountSource
+    const discountTotal = selectedDiscount.discountAmountTotal
+    const issuer: WebsiteFinanceIssuer = store?.financeIssuer === "NTC" ? "NTC" : "TWN"
+    const taxInclusive = calculateTaxInclusiveTotal(subtotal, discountTotal, issuer)
     const taxable = taxInclusive.taxableAmount
     const tax = taxInclusive.taxAmount
     const total = taxInclusive.totalAmount
 
     return {
         base_subtotal: round2(subtotal),
-        early_bird_discount_amount: appliedSource === "early_bird" ? discountTotal : earlyDiscount,
+        early_bird_discount_amount: earlyDiscount,
         coupon_discount_amount: couponDiscount,
         applied_discount_source: appliedSource,
-        applied_discount_code: couponDiscount > 0
+        applied_discount_code: appliedSource === "coupon"
             ? String(coupon?.code || "").trim().toUpperCase() || null
             : null,
         discount_amount_total: round2(discountTotal),
         taxable_amount: taxable,
         tax_amount: tax,
+        gst_amount: taxInclusive.gstAmount,
+        tcs_basis: taxInclusive.tcsBasis,
+        tcs_amount: taxInclusive.tcsAmount,
+        finance_issuer: issuer,
         total_amount: total,
         line_items: lineItems,
     }
@@ -1042,23 +1120,15 @@ function computeTotals(store: any) {
             ? pricingBreakdown.early_bird_discount_amount
             : 0,
     )
-    const taxableSubtotal = round2(
-        pricingBreakdown.taxable_amount > 0
-            ? pricingBreakdown.taxable_amount
-            : Math.max(0, subtotal - discount),
-    )
-    const computedTaxFromTaxable = round2(taxableSubtotal * TAX_RATE)
-    const taxFromServerTotal = round2(
-        Math.max(0, round2(pricingBreakdown.total_amount) - taxableSubtotal),
-    )
-    const tax = round2(pricingBreakdown.tax_amount) > 0
-        ? round2(pricingBreakdown.tax_amount)
-        : computedTaxFromTaxable > 0
-        ? computedTaxFromTaxable
-        : taxFromServerTotal
-    const total = round2(pricingBreakdown.total_amount) > 0
-        ? round2(pricingBreakdown.total_amount)
-        : round2(taxableSubtotal + tax)
+    const issuer: WebsiteFinanceIssuer = store?.financeIssuer === "NTC" || pricingBreakdown.finance_issuer === "NTC"
+        ? "NTC"
+        : "TWN"
+    const billingTotals = subtotal > 0
+        ? calculateWebsiteBookingTotals({ issuer, taxableAmount: subtotal, discountAmount: discount })
+        : null
+    const taxableSubtotal = subtotal
+    const tax = billingTotals?.taxAmount || 0
+    const total = billingTotals?.totalAmount || 0
     const paymentMode: PaymentMode =
         String(store?.paymentMode || "").trim().toLowerCase() === "partial_25"
             ? "partial_25"
@@ -1075,12 +1145,20 @@ function computeTotals(store: any) {
         discount,
         taxableSubtotal,
         tax,
+        gstAmount: billingTotals?.gstAmount || 0,
+        tcsAmount: billingTotals?.tcsAmount || 0,
+        financeIssuer: issuer,
+        taxLabel: issuer === "NTC" ? "GST (5%) + TCS (2%)" : "GST (5%)",
         total,
         paymentMode,
         payableNow,
         dueAmount,
-        earlyBirdDiscount: round2(pricingBreakdown.early_bird_discount_amount),
-        couponDiscount: round2(pricingBreakdown.coupon_discount_amount),
+        earlyBirdDiscount: pricingBreakdown.applied_discount_source === "early_bird"
+            ? round2(pricingBreakdown.discount_amount_total)
+            : 0,
+        couponDiscount: pricingBreakdown.applied_discount_source === "coupon"
+            ? round2(pricingBreakdown.coupon_discount_amount)
+            : 0,
         appliedDiscountSource: pricingBreakdown.applied_discount_source,
         appliedDiscountCode: pricingBreakdown.applied_discount_code,
         breakdown,
@@ -1167,15 +1245,24 @@ function showInlineError(errors: string | string[]) {
         .filter(Boolean)
     if (!messages.length) return
 
+    const isFieldValidation = Array.isArray(errors)
     const technicalFailure = messages.some((message) =>
         /payment_attempts|txnid|not-null|constraint|edge function error/i.test(message)
     )
-    const titleText = technicalFailure
+    const titleText = isFieldValidation
+        ? messages.length > 1
+            ? "A few details need attention"
+            : "Check your booking details"
+        : technicalFailure
         ? "Payment could not start"
         : messages.length > 1
         ? "Please check your details"
         : "Checkout needs attention"
-    const detailText = technicalFailure
+    const detailText = isFieldValidation
+        ? messages.length > 1
+            ? "See the highlighted fields below."
+            : "See the highlighted field below."
+        : technicalFailure
         ? "We couldn't start the payment. Please try again. If it keeps happening, contact us."
         : messages.length > 1
         ? messages.join(" ")
@@ -1438,9 +1525,9 @@ async function postBookingAbandonLead(store: any): Promise<boolean> {
         source: BOOKING_ABANDON_LEAD_SOURCE,
         status: BOOKING_ABANDON_LEAD_STATUS,
         reason: "checkout_abandoned_before_payment",
-        page_url: typeof window !== "undefined" ? window.location.href : null,
+        page_url: typeof window !== "undefined" ? window.location.origin + window.location.pathname : null,
         trip_id: tripId,
-        trip_slug: params.get("slug") || params.get("trip_slug"),
+        trip_slug: firstNonEmpty(store?.slug, params.get("slug"), params.get("trip_slug")),
         trip_name: firstNonEmpty(store?.tripName, params.get("trip_name")),
         departure_date: firstNonEmpty(store?.date, params.get("date")),
         travellers: Array.isArray(store?.travellers) ? store.travellers : [],
@@ -1454,7 +1541,7 @@ async function postBookingAbandonLead(store: any): Promise<boolean> {
     }
 
     try {
-        const response = await fetch(checkoutApiUrl("record-lead"), {
+        const response = await fetch(RECORD_LEAD_URL, {
             method: "POST",
             headers: checkoutApiHeaders(),
             body: JSON.stringify(payload),
@@ -1567,30 +1654,6 @@ function isInviteOnlyTrip(pricingRows: any[]): boolean {
     return !hasSharingRows
 }
 
-async function fetchTripPricing(tripId: string): Promise<any[]> {
-    const cleanTripId = (tripId || "").trim()
-    if (!cleanTripId) return []
-
-    const res = await fetchCheckoutDataWithTimeout(
-        `${SUPABASE_URL}/rest/v1/trip_pricing?trip_id=eq.${
-            encodeURIComponent(
-                cleanTripId,
-            )
-        }&select=*`,
-        {
-            priority: "high",
-            headers: {
-                apikey: SUPABASE_KEY,
-                Authorization: `Bearer ${SUPABASE_KEY}`,
-            },
-        } as any,
-    )
-
-    if (!res.ok) return []
-    const rows = await res.json()
-    return Array.isArray(rows) ? rows : []
-}
-
 async function fetchTripDisplayPrice(
     params: { slug?: string; tripId?: string },
 ): Promise<any | null> {
@@ -1610,7 +1673,7 @@ async function fetchTripDisplayPrice(
     const query = new URLSearchParams()
     if (slug) query.set("slug", slug)
     if (tripId) query.set("trip_id", tripId)
-    query.set("v", "3")
+    query.set("v", "4")
 
     const request = fetchCheckoutDataWithTimeout(
         `${SUPABASE_URL}/functions/v1/get-trip-display-price?${query.toString()}`,
@@ -1732,6 +1795,7 @@ function checkoutFieldError(
     store: any,
     field: "date" | "name" | "phone" | "email",
 ): string {
+    if (!store?.validationAttempted) return ""
     if (field === "date") {
         if (!store?.date) return "Departure date is required"
         if (!isBookableDepartureDate(store.date)) {
@@ -1755,6 +1819,7 @@ function travellerFieldError(
     context: TravellerContextValue | null,
     field: "name" | "sharing" | "vehicle",
 ): string {
+    if (!store?.validationAttempted) return ""
     const traveller = getTravellerByContext(store, context)
     if (!traveller) return ""
     if (field === "name") {
@@ -1837,6 +1902,7 @@ export function withCheckoutBootstrap(Component): ComponentType {
                 if (!ctx.tripId && !ctx.slug) {
                     setStore({
                         loading: false,
+                        validationAttempted: false,
                         pricingUnavailable: true,
                         pricingData: [],
                         tripName: "",
@@ -1851,8 +1917,10 @@ export function withCheckoutBootstrap(Component): ComponentType {
 
                 setStore({
                     loading: true,
+                    validationAttempted: false,
                     pricingUnavailable: false,
                     pricingData: [],
+                    financeIssuer: null,
                     pricingBreakdown: null,
                     date: "",
                     transport: "",
@@ -1904,11 +1972,18 @@ export function withCheckoutBootstrap(Component): ComponentType {
                     return
                 }
 
-                const [pricing, loadedTripContext] = await Promise.all([
-                    fetchTripPricing(tripId),
+                const [pricingPayload, loadedTripContext] = await Promise.all([
+                    fetchTripDisplayPrice({ tripId }),
                     tripContext ? Promise.resolve(tripContext) : fetchTripContextById(tripId),
                 ])
                 if (disposed) return
+
+                const pricing = Array.isArray(pricingPayload?.pricing_rows)
+                    ? pricingPayload.pricing_rows
+                    : []
+                const financeIssuer: WebsiteFinanceIssuer | null = pricingPayload?.finance_issuer === "TWN" || pricingPayload?.finance_issuer === "NTC"
+                    ? pricingPayload.finance_issuer
+                    : null
 
                 tripContext = loadedTripContext || tripContext
                 if (ctx.tripId && !tripContext) {
@@ -1941,6 +2016,23 @@ export function withCheckoutBootstrap(Component): ComponentType {
                             date: "",
                             transport: "",
                             pricingBreakdown: null,
+                            loading: false,
+                            pricingUnavailable: true,
+                            couponMessageType: "error",
+                            couponMessage: message,
+                        })
+                        showInlineError(message)
+                    }
+                    return
+                }
+                if (!financeIssuer) {
+                    const message = "Trip billing details are not ready. Please contact support."
+                    if (!disposed) {
+                        setStore({
+                            tripId,
+                            slug: String(tripContext?.slug || requestedSlug || ""),
+                            pricingData: [],
+                            financeIssuer: null,
                             loading: false,
                             pricingUnavailable: true,
                             couponMessageType: "error",
@@ -2011,6 +2103,7 @@ export function withCheckoutBootstrap(Component): ComponentType {
                     slug,
                     tripName,
                     pricingData: pricing,
+                    financeIssuer,
                     date,
                     transport,
                     travellers,
@@ -2039,6 +2132,7 @@ export function withCheckoutBootstrap(Component): ComponentType {
                     slug,
                     tripName,
                     pricingData: pricing,
+                    financeIssuer,
                     date,
                     transport,
                     travellers,
@@ -2091,6 +2185,104 @@ export function withCheckoutBootstrap(Component): ComponentType {
             store.travellers,
             store.appliedCoupon,
         ])
+
+        const routeContext = readCheckoutRouteContext()
+        const currentRouteKey = routeContextKey(routeContext)
+        const checkoutState = getCheckoutEntryState({
+            loading: store?.loading || bootKeyRef.current !== currentRouteKey,
+            tripId: routeContext.tripId,
+            slug: routeContext.slug,
+            pricingUnavailable: store?.pricingUnavailable,
+            pricingData: store?.pricingData,
+        })
+
+        if (checkoutState === "missing-trip" || checkoutState === "unavailable") {
+            const missingTrip = checkoutState === "missing-trip"
+            return (
+                <main
+                    aria-labelledby="checkout-recovery-title"
+                    style={{
+                        boxSizing: "border-box",
+                        display: "grid",
+                        minHeight: "100dvh",
+                        placeItems: "center",
+                        padding: "max(32px, env(safe-area-inset-top)) 24px max(32px, env(safe-area-inset-bottom))",
+                        background: "#080808",
+                        color: "#fff",
+                        fontFamily: "inherit",
+                    width: "100%",
+                    }}
+                >
+                    <div style={{ maxWidth: 480, width: "100%" }}>
+                        <h1
+                            id="checkout-recovery-title"
+                            style={{ fontSize: 28, lineHeight: 1.2, margin: "0 0 12px" }}
+                        >
+                            {missingTrip ? "Choose a trip first" : "This trip isn’t available right now"}
+                        </h1>
+                        <p style={{ color: "#c5c5c5", lineHeight: 1.6, margin: "0 0 24px" }}>
+                            {missingTrip
+                                ? "Choose a trip to see its dates and price before booking."
+                                : String(store?.couponMessage || "Choose another trip to see available dates and prices.")}
+                        </p>
+                        <a
+                            href={UPCOMING_TRIPS_BASE_URL}
+                            style={{
+                                alignItems: "center",
+                                background: "#1b91c9",
+                                borderRadius: 8,
+                                color: "#fff",
+                                display: "inline-flex",
+                                fontWeight: 600,
+                                justifyContent: "center",
+                                minHeight: 48,
+                                padding: "0 22px",
+                                textDecoration: "none",
+                            }}
+                        >
+                            Browse upcoming trips
+                        </a>
+                    </div>
+                </main>
+            )
+        }
+
+        if (checkoutState === "loading") {
+            return (
+                <main
+                    aria-busy="true"
+                    aria-live="polite"
+                    role="status"
+                    style={{
+                        alignItems: "center",
+                        background: "#080808",
+                        boxSizing: "border-box",
+                        color: "#fff",
+                        display: "flex",
+                        fontFamily: "inherit",
+                        inset: 0,
+                        justifyContent: "center",
+                        minHeight: "100dvh",
+                        padding: "max(32px, env(safe-area-inset-top)) 24px max(32px, env(safe-area-inset-bottom))",
+                        position: "fixed",
+                        width: "100%",
+                        zIndex: 9999,
+                    }}
+                >
+                    <div style={{ maxWidth: 420, width: "100%" }}>
+                        <div style={{ alignItems: "center", color: "#1b91c9", display: "flex", gap: 12 }}>
+                            <CheckoutSpinner size={22} />
+                            <h1 style={{ color: "#fff", fontSize: 22, fontWeight: 600, lineHeight: 1.3, margin: 0 }}>
+                                Preparing your checkout
+                            </h1>
+                        </div>
+                        <p style={{ color: "#c5c5c5", lineHeight: 1.6, margin: "10px 0 0 34px" }}>
+                            Checking trip availability and current pricing.
+                        </p>
+                    </div>
+                </main>
+            )
+        }
 
         return <Component {...props} />
     }
@@ -2285,7 +2477,7 @@ export function withCheckoutVehicleSelect(Component): ComponentType {
 
 export function withTravellerList(Component): ComponentType {
     return (props: any) => {
-        const [store] = useStore()
+        const [store, setStore] = useStore()
         const travellers = normalizeTravellers(store.travellers || [])
         const childrenArray = React.Children.toArray(props.children)
         const template = childrenArray.find((child) => React.isValidElement(child)) as
@@ -2321,7 +2513,9 @@ export function withTravellerList(Component): ComponentType {
                             key={`traveller-provider-${traveller.id}`}
                             value={{ id: traveller.id, index }}
                         >
-                            {row}
+                            <div style={{ display: "grid", gap: "12px", width: "100%" }}>
+                                {row}
+                            </div>
                         </TravellerContext.Provider>
                     )
                 })}
@@ -2632,12 +2826,27 @@ export function withCheckoutContactEmail(Component): ComponentType {
         const handleChange = (value: string) => setStore({ contactEmail: value })
 
         return (
-            <Component
-                {...props}
-                value={store.contactEmail || ""}
-                onValueChange={handleChange}
-                onChange={(e: any) => handleChange(e.target.value)}
-            />
+            <>
+                <Component
+                    {...props}
+                    value={store.contactEmail || ""}
+                    onValueChange={handleChange}
+                    onChange={(e: any) => handleChange(e.target.value)}
+                    aria-describedby="checkout-reminder-disclosure"
+                />
+                <p
+                    id="checkout-reminder-disclosure"
+                    style={{
+                        display: "flex",
+                        fontSize: 12,
+                        lineHeight: 1.45,
+                        margin: "8px 0 0",
+                        opacity: 0.72,
+                    }}
+                >
+                    If you leave before paying, we may email up to two checkout reminders: one after 20 minutes and one the next day. No seat is held. Unsubscribe anytime.
+                </p>
+            </>
         )
     }
 }
@@ -2778,6 +2987,10 @@ export function withApplyCouponButton(Component): ComponentType {
                         discount_amount_total: nextBreakdown.discount_amount_total,
                         taxable_amount: nextBreakdown.taxable_amount,
                         tax_amount: nextBreakdown.tax_amount,
+                        gst_amount: nextBreakdown.gst_amount,
+                        tcs_basis: nextBreakdown.tcs_basis,
+                        tcs_amount: nextBreakdown.tcs_amount,
+                        finance_issuer: nextBreakdown.finance_issuer,
                         total_amount: nextBreakdown.total_amount,
                         line_items: nextBreakdown.line_items,
                         message: data.message,
@@ -2993,7 +3206,7 @@ export function withCheckoutTax(Component): ComponentType {
 }
 
 export function withCheckoutTaxLabel(Component): ComponentType {
-    return withTextFromState(() => "Tax (5%)")(Component)
+    return withTextFromState((store) => computeTotals(store).taxLabel)(Component)
 }
 
 export function withCheckoutTaxValue(Component): ComponentType {
@@ -3204,7 +3417,7 @@ export function withCheckoutPaymentMode(Component): ComponentType {
 
 export function withCheckoutPayableNow(Component): ComponentType {
     return withTextFromState((store) =>
-        formatCheckoutAmount(store, computeTotals(store).payableNow)
+        formatCheckoutAmount(store, computeTotals(store).payableNow, "Unavailable")
     )(
         Component,
     )
@@ -3308,18 +3521,11 @@ export function withCheckoutPayButton(Component): ComponentType {
                 if (paymentStartedRef.current) return
                 void postBookingAbandonLead(latestStoreRef.current)
             }
-            const handleVisibilityChange = () => {
-                if (document.visibilityState === "hidden") {
-                    captureAbandonedBooking()
-                }
-            }
             window.addEventListener("pagehide", captureAbandonedBooking)
             window.addEventListener("beforeunload", captureAbandonedBooking)
-            document.addEventListener("visibilitychange", handleVisibilityChange)
             return () => {
                 window.removeEventListener("pagehide", captureAbandonedBooking)
                 window.removeEventListener("beforeunload", captureAbandonedBooking)
-                document.removeEventListener("visibilitychange", handleVisibilityChange)
             }
         }, [])
 
@@ -3415,9 +3621,13 @@ export function withCheckoutPayButton(Component): ComponentType {
                 pricing_snapshot: {
                     subtotal_amount: totals.subtotal,
                     discount_amount: totals.discount,
+                    taxable_amount: totals.taxableSubtotal,
                     applied_discount_source: totals.appliedDiscountSource,
                     applied_discount_code: totals.appliedDiscountCode,
                     tax_amount: totals.tax,
+                    gst_amount: totals.gstAmount,
+                    tcs_amount: totals.tcsAmount,
+                    finance_issuer: totals.financeIssuer,
                     total_amount: totals.total,
                     payable_now_amount: totals.payableNow,
                     due_amount: totals.dueAmount,
@@ -3425,77 +3635,112 @@ export function withCheckoutPayButton(Component): ComponentType {
                 },
             }
 
-            const checkout_request_id = getOrCreateStableRequestId(
+            const checkoutFingerprint = requestFingerprint(
+                JSON.stringify({
+                    trip_id: payload.trip_id,
+                    date: payload.date,
+                    transport: payload.transport,
+                    travellers: payload.travellers,
+                    name: payload.name,
+                    email: payload.email,
+                    phone: payload.phone,
+                    payment_mode: payload.payment_mode,
+                    coupon_code: payload.coupon_code,
+                    total_amount: payload.total_amount,
+                    payable_now_amount: payload.payable_now_amount,
+                }),
+            )
+            const checkoutRequestStorageKey = `__twn_checkout_request_id_v1:${checkoutFingerprint}`
+            let checkout_request_id = getOrCreateStableRequestId(
                 "checkout",
-                requestFingerprint(
-                    JSON.stringify({
-                        trip_id: payload.trip_id,
-                        date: payload.date,
-                        transport: payload.transport,
-                        travellers: payload.travellers,
-                        name: payload.name,
-                        email: payload.email,
-                        phone: payload.phone,
-                        payment_mode: payload.payment_mode,
-                        coupon_code: payload.coupon_code,
-                        total_amount: payload.total_amount,
-                        payable_now_amount: payload.payable_now_amount,
-                    }),
-                ),
+                checkoutFingerprint,
             )
             payload.checkout_request_id = checkout_request_id
 
             try {
-                let res = await fetchCheckoutRequest(checkoutApiUrl("create-booking"), {
-                    method: "POST",
-                    headers: checkoutApiHeaders(),
-                    body: JSON.stringify(payload),
-                })
-
-                let data = await res.json().catch(() => ({}))
-                const legacyMissingFieldsError = typeof data?.error === "string" &&
-                    (data.error.includes(
-                        "Missing required fields (trip_id, date, travellers, amount, email, name)",
-                    ) ||
-                        data.error.includes(
-                            "Missing required fields (trip_id, departure_date, travellers, name, email)",
-                        ))
-
-                if (!res.ok && legacyMissingFieldsError) {
-                    const form = new URLSearchParams()
-                    form.set("trip_id", String(payload.trip_id || ""))
-                    form.set("date", String(payload.date || ""))
-                    form.set("departure_date", String(payload.departure_date || ""))
-                    form.set("amount", String(payload.amount || ""))
-                    form.set("email", String(payload.email || ""))
-                    form.set("name", String(payload.name || ""))
-                    form.set("phone", String(payload.phone || ""))
-                    form.set("transport", String(payload.transport || ""))
-                    form.set("travellers", JSON.stringify(payload.travellers || []))
-                    form.set("payment_mode", String(payload.payment_mode || "full"))
-                    form.set(
-                        "checkout_request_id",
-                        String(payload.checkout_request_id || ""),
-                    )
-                    form.set("coupon_code", String(payload.coupon_code || ""))
-                    form.set(
-                        "pricing_snapshot",
-                        JSON.stringify(payload.pricing_snapshot || {}),
-                    )
-
-                    const formHeaders: Record<string, string> = {
-                        "Content-Type": "application/x-www-form-urlencoded",
-                    }
-                    if (!CURRENT_RUNTIME.apiBaseUrl) {
-                        formHeaders.apikey = SUPABASE_KEY
-                        formHeaders.Authorization = `Bearer ${SUPABASE_KEY}`
-                    }
-                    res = await fetchCheckoutRequest(checkoutApiUrl("create-booking"), {
+                const createBooking = async () => {
+                    let res = await fetchCheckoutRequest(CREATE_BOOKING_URL, {
                         method: "POST",
-                        headers: formHeaders,
-                        body: form.toString(),
+                        headers: checkoutApiHeaders(),
+                        body: JSON.stringify(payload),
                     })
-                    data = await res.json().catch(() => ({}))
+
+                    let data = await res.json().catch(() => ({}))
+                    const legacyMissingFieldsError = typeof data?.error === "string" &&
+                        (data.error.includes(
+                            "Missing required fields (trip_id, date, travellers, amount, email, name)",
+                        ) ||
+                            data.error.includes(
+                                "Missing required fields (trip_id, departure_date, travellers, name, email)",
+                            ))
+
+                    if (!res.ok && legacyMissingFieldsError) {
+                        const form = new URLSearchParams()
+                        form.set("trip_id", String(payload.trip_id || ""))
+                        form.set("date", String(payload.date || ""))
+                        form.set("departure_date", String(payload.departure_date || ""))
+                        form.set("amount", String(payload.amount || ""))
+                        form.set("email", String(payload.email || ""))
+                        form.set("name", String(payload.name || ""))
+                        form.set("phone", String(payload.phone || ""))
+                        form.set("transport", String(payload.transport || ""))
+                        form.set("travellers", JSON.stringify(payload.travellers || []))
+                        form.set("payment_mode", String(payload.payment_mode || "full"))
+                        form.set(
+                            "checkout_request_id",
+                            String(payload.checkout_request_id || ""),
+                        )
+                        form.set("coupon_code", String(payload.coupon_code || ""))
+                        form.set(
+                            "pricing_snapshot",
+                            JSON.stringify(payload.pricing_snapshot || {}),
+                        )
+
+                        const formHeaders: Record<string, string> = {
+                            "Content-Type": "application/x-www-form-urlencoded",
+                            apikey: SUPABASE_KEY,
+                            Authorization: `Bearer ${SUPABASE_KEY}`,
+                        }
+                        res = await fetchCheckoutRequest(CREATE_BOOKING_URL, {
+                            method: "POST",
+                            headers: formHeaders,
+                            body: form.toString(),
+                        })
+                        data = await res.json().catch(() => ({}))
+                    }
+
+                    return { res, data }
+                }
+
+                let { res, data } = await createBooking()
+                if (res.ok && data?.already_paid && data?.replayed) {
+                    const replayedBookingId = String(data.booking_id || "")
+                    // A paid idempotency replay is from an earlier submit, so this click gets a new booking key.
+                    checkout_request_id = createUuid()
+                    payload.checkout_request_id = checkout_request_id
+                    try {
+                        window.sessionStorage.setItem(
+                            checkoutRequestStorageKey,
+                            checkout_request_id,
+                        )
+                    } catch (_) {
+                        // The current request can still proceed without session storage.
+                    }
+                    ;({ res, data } = await createBooking())
+
+                    if (
+                        res.ok &&
+                        (data?.already_paid || data?.payment_status === "paid") &&
+                        String(data.booking_id || "") === replayedBookingId
+                    ) {
+                        paymentStartedRef.current = false
+                        showInlineError(
+                            "This checkout is still linked to an earlier paid booking. Refresh checkout or contact us before trying again.",
+                        )
+                        submitLockRef.current = false
+                        setStore({ submitting: false })
+                        return
+                    }
                 }
 
                 if (!res.ok) {
@@ -3541,6 +3786,7 @@ export function withCheckoutPayButton(Component): ComponentType {
                             setStore({ submitting: false })
                         },
                     )
+                    setStore({ submitting: false })
                     return
                 }
 
@@ -3577,52 +3823,90 @@ export function withCheckoutPayButton(Component): ComponentType {
             }
         }
 
+        const handleClick = (e: any) => {
+            e?.preventDefault?.()
+            if (!isValid) {
+                e?.stopPropagation?.()
+                if (store?.loading) {
+                    showInlineError("Trip pricing is still loading. Please wait a moment.")
+                } else if (store?.pricingUnavailable || !isPricingReady) {
+                    showInlineError(
+                        store?.couponMessage ||
+                            "Pricing is unavailable for this trip. Please choose another departure.",
+                    )
+                } else {
+                    setStore({ validationAttempted: true })
+                    showInlineError(errors)
+                }
+                return
+            }
+            void submit()
+        }
+
+        const handleKeyDown = (e: any) => {
+            const nativeButton = e?.currentTarget?.tagName === "BUTTON"
+            if (e?.key === " " && !nativeButton) e.preventDefault()
+            if (e?.key === "Enter" && !nativeButton) {
+                e.preventDefault()
+                e.currentTarget.click()
+            }
+        }
+
+        const handleKeyUp = (e: any) => {
+            if (e?.key === " " && e?.currentTarget?.tagName !== "BUTTON") {
+                e.preventDefault()
+                e.currentTarget.click()
+            }
+        }
+
+        const isPaymentLocked = Boolean(store?.submitting) || submitLockRef.current
+        const isPaymentBlocked = Boolean(
+            store?.loading || store?.pricingUnavailable || !isPricingReady ||
+                isPaymentLocked,
+        )
+
         return (
             <div style={{ position: "relative", width: "100%" }}>
                 <Component
                     {...props}
-                    text={store?.submitting
-                        ? "Processing..."
+                    $control__pnMgUuoPi={store?.submitting
+                        ? ""
                         : store?.loading
-                        ? "Loading price…"
+                        ? ""
                         : store?.pricingUnavailable || !isPricingReady
                         ? "Price unavailable"
                         : `Pay ${fmtINR(totals.payableNow)} now`}
-                    onClick={submit}
+                    onClick={handleClick}
+                    aria-label={store?.submitting ? "Starting secure payment" : undefined}
+                    aria-busy={Boolean(store?.submitting)}
+                    aria-live="polite"
+                    aria-disabled={isPaymentBlocked}
+                    role="button"
+                    tabIndex={props.tabIndex ?? 0}
+                    onKeyDown={handleKeyDown}
+                    onKeyUp={handleKeyUp}
                     style={{
                         ...(props.style || {}),
                         width: "100%",
-                        opacity: isValid ? 1 : 0.6,
-                        cursor: isValid ? "pointer" : "not-allowed",
+                        opacity: isPaymentBlocked ? 0.6 : 1,
+                        cursor: isPaymentBlocked ? "wait" : "pointer",
                     }}
                 />
-                {!isValid && (
-                    <div
-                        onClick={(e: any) => {
-                            e?.preventDefault?.()
-                            e?.stopPropagation?.()
-                            if (store?.loading) {
-                                showInlineError(
-                                    "Trip pricing is still loading. Please wait a moment.",
-                                )
-                            } else if (
-                                store?.pricingUnavailable || !isPricingReady
-                            ) {
-                                showInlineError(
-                                    store?.couponMessage ||
-                                        "Pricing is unavailable for this trip. Please choose another departure.",
-                                )
-                            } else {
-                                showInlineError(errors)
-                            }
-                        }}
+                {store?.submitting && (
+                    <span
                         style={{
+                            alignItems: "center",
+                            color: "#fff",
+                            display: "flex",
+                            insetInlineStart: "50%",
+                            pointerEvents: "none",
                             position: "absolute",
-                            inset: 0,
-                            zIndex: 10,
-                            cursor: "not-allowed",
+                            top: "50%",
+                            transform: "translate(-50%, -50%)",
                         }}
-                    />
+                    >
+                        <CheckoutSpinner size={18} testId="checkout-payment-spinner" />
+                    </span>
                 )}
             </div>
         )

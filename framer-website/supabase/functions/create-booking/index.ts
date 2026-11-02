@@ -12,11 +12,23 @@ import {
     normalizeIdempotencyKey,
 } from "../_shared/payment_idempotency.ts"
 import {
+    ensurePaymentAttemptOrder,
+    PaymentOrderInProgressError,
+} from "../_shared/payment_attempt_order.ts"
+import {
     computeBasePricing,
+    isAvailableDateKey,
     normalizeTravellers as normalizePricingTravellers,
+    todayISTDateKey,
 } from "../_shared/pricing.ts"
 import {
-    createRazorpayOrder,
+    buildWebsiteCommercialSnapshot,
+    loadWebsiteTripCatalogPricing,
+    resolveWebsiteFinanceIssuer,
+    validateWebsiteDepartureSelection,
+} from "../_shared/crm_trip_catalog.ts"
+import { buildWebsiteBillingSnapshot, calculateWebsiteBookingTotals } from "../../../framer/booking-tax.ts"
+import {
     paymentCallbackUrl,
     razorpayCredentials,
 } from "../_shared/razorpay.ts"
@@ -33,14 +45,13 @@ const corsHeaders = {
     "Access-Control-Allow-Methods": "POST, OPTIONS",
 }
 
-const TAX_RATE = 0.05
-
 type PaymentMode = "full" | "partial_25"
-type SharingValue = "Quad" | "Triple" | "Double" | ""
+type SharingValue = "Quad" | "Triple" | "Double" | "Single" | ""
 
 type TravellerInput = {
     id?: number
     name?: string
+    gender?: string
     sharing?: string
     transport?: string
     vehicle?: string
@@ -49,6 +60,7 @@ type TravellerInput = {
 type TravellerResolved = {
     id: number
     name: string
+    gender: string
     sharing: SharingValue
     transport: string
 }
@@ -62,6 +74,10 @@ type PricingBreakdown = {
     discount_amount_total: number
     taxable_amount: number
     tax_amount: number
+    gst_amount: number
+    tcs_basis: number
+    tcs_amount: number
+    finance_issuer: "TWN" | "NTC"
     total_amount: number
     line_items: Array<{
         traveller_id: number
@@ -141,6 +157,7 @@ function normalizeSharing(value: any): SharingValue {
     if (lower.includes("quad")) return "Quad"
     if (lower.includes("triple")) return "Triple"
     if (lower.includes("double")) return "Double"
+    if (lower.includes("single")) return "Single"
     return ""
 }
 
@@ -157,17 +174,6 @@ function normalizeDateKey(value: any): string {
     }
 
     return raw
-}
-
-function todayISTDateKey(): string {
-    const parts = new Intl.DateTimeFormat("en-CA", {
-        timeZone: "Asia/Kolkata",
-        year: "numeric",
-        month: "2-digit",
-        day: "2-digit",
-    }).formatToParts(new Date())
-    const get = (type: string) => parts.find((part) => part.type === type)?.value || ""
-    return `${get("year")}-${get("month")}-${get("day")}`
 }
 
 function getDateValue(row: any): string {
@@ -220,13 +226,14 @@ function getSharingOptions(pricingRows: any[], departureDate: string, transport:
     const set = new Set<SharingValue>(
         rows
             .map((row: any) => getVariantValue(row))
-            .filter((value: SharingValue) => value === "Quad" || value === "Triple" || value === "Double")
+            .filter((value: SharingValue) => Boolean(value))
     )
 
     const ordered: SharingValue[] = []
     if (set.has("Quad")) ordered.push("Quad")
     if (set.has("Triple")) ordered.push("Triple")
     if (set.has("Double")) ordered.push("Double")
+    if (set.has("Single")) ordered.push("Single")
     return ordered
 }
 
@@ -328,6 +335,7 @@ function normalizeTravellers(input: TravellerInput[]): TravellerResolved[] {
     return source.map((traveller, index) => ({
         id: parsePositiveId(traveller?.id, index + 1),
         name: String(traveller?.name || "").trim(),
+        gender: String(traveller?.gender || "").trim(),
         sharing: normalizeSharing(traveller?.sharing),
         transport: String(traveller?.transport || traveller?.vehicle || "").trim(),
     }))
@@ -407,21 +415,17 @@ function buildPricingBreakdownFromQuote(source: any, fallback: PricingBreakdown)
             .toLowerCase()
     ) as PricingBreakdown["applied_discount_source"]
 
-    const taxableAmount = round2(
-        Math.max(
-            0,
-            toNumber(source?.taxable_amount ?? source?.taxableSubtotal ?? Math.max(0, baseSubtotal - discountAmountTotal))
-        )
-    )
-
-    const fallbackTax = round2(taxableAmount * TAX_RATE)
-    const taxAmount = round2(Math.max(0, toNumber(source?.tax_amount ?? source?.taxAmount ?? fallbackTax)))
-    const totalAmount = round2(
-        Math.max(
-            0,
-            toNumber(source?.total_amount ?? source?.totalAmount ?? taxableAmount + taxAmount)
-        )
-    )
+    const taxableAmount = round2(Math.max(0, toNumber(source?.taxable_amount ?? source?.taxableSubtotal ?? baseSubtotal)))
+    const financeIssuer: "TWN" | "NTC" = source?.finance_issuer === "NTC" || fallback.finance_issuer === "NTC"
+        ? "NTC"
+        : "TWN"
+    const billingTotals = calculateWebsiteBookingTotals({
+        issuer: financeIssuer,
+        taxableAmount,
+        discountAmount: discountAmountTotal,
+    })
+    const taxAmount = billingTotals.taxAmount
+    const totalAmount = billingTotals.totalAmount
 
     const appliedDiscountCode = String(
         source?.applied_discount_code || source?.code || fallback.applied_discount_code || ""
@@ -440,6 +444,10 @@ function buildPricingBreakdownFromQuote(source: any, fallback: PricingBreakdown)
         discount_amount_total: discountAmountTotal,
         taxable_amount: taxableAmount,
         tax_amount: taxAmount,
+        gst_amount: billingTotals.gstAmount,
+        tcs_basis: billingTotals.tcsBasis,
+        tcs_amount: billingTotals.tcsAmount,
+        finance_issuer: financeIssuer,
         total_amount: totalAmount,
         line_items: Array.isArray(source?.line_items) && source.line_items.length > 0 ? source.line_items : fallback.line_items,
     }
@@ -450,6 +458,7 @@ function buildLocalPricingBreakdown(params: {
     departureDate: string
     travellers: TravellerResolved[]
     fallbackTransport: string
+    issuer?: "TWN" | "NTC"
 }) {
     const { pricingRows, departureDate, travellers, fallbackTransport } = params
 
@@ -504,6 +513,7 @@ function buildLocalPricingBreakdown(params: {
         resolvedTravellers.push({
             id: traveller.id,
             name: normalizedName,
+            gender: String(traveller.gender || "").trim(),
             sharing: resolvedSharing,
             transport: normalizedTransport,
         })
@@ -512,9 +522,11 @@ function buildLocalPricingBreakdown(params: {
     const safeSubtotal = round2(Math.max(0, subtotal))
     const earlyDiscount = round2(Math.max(0, Math.min(earlyBirdDiscount, safeSubtotal)))
     const discountTotal = earlyDiscount
-    const taxableAmount = round2(Math.max(0, safeSubtotal - discountTotal))
-    const taxAmount = round2(taxableAmount * TAX_RATE)
-    const totalAmount = round2(taxableAmount + taxAmount)
+    const billingTotals = calculateWebsiteBookingTotals({
+        issuer: params.issuer || "TWN",
+        taxableAmount: safeSubtotal,
+        discountAmount: discountTotal,
+    })
 
     const breakdown: PricingBreakdown = {
         base_subtotal: safeSubtotal,
@@ -523,9 +535,13 @@ function buildLocalPricingBreakdown(params: {
         applied_discount_source: earlyDiscount > 0 ? "early_bird" : "none",
         applied_discount_code: null,
         discount_amount_total: discountTotal,
-        taxable_amount: taxableAmount,
-        tax_amount: taxAmount,
-        total_amount: totalAmount,
+        taxable_amount: billingTotals.taxableAmount,
+        tax_amount: billingTotals.taxAmount,
+        gst_amount: billingTotals.gstAmount,
+        tcs_basis: billingTotals.tcsBasis,
+        tcs_amount: billingTotals.tcsAmount,
+        finance_issuer: billingTotals.issuer,
+        total_amount: billingTotals.totalAmount,
         line_items: lineItems,
     }
 
@@ -583,16 +599,6 @@ async function readPayload(req: Request): Promise<any> {
     return await req.json()
 }
 
-async function fetchPricingRows(supabase: any, tripId: string): Promise<any[]> {
-    const { data, error } = await supabase
-        .from("trip_pricing")
-        .select("*")
-        .eq("trip_id", tripId)
-
-    if (error) throw new Error(`Could not read trip pricing: ${error.message}`)
-    return Array.isArray(data) ? data : []
-}
-
 async function validateCouponServerSide(params: {
     supabaseUrl: string
     functionAuthJwt: string
@@ -643,6 +649,12 @@ serve(async (req) => {
     if (req.method === "OPTIONS") {
         return new Response("ok", { headers: corsHeaders })
     }
+    if (req.method !== "POST") {
+        return new Response(JSON.stringify({ error: "Method not allowed" }), {
+            status: 405,
+            headers: { ...corsHeaders, "Content-Type": "application/json" },
+        })
+    }
 
     let notificationCheckoutRequestId = ""
     let notificationBooking: PaymentEmailBooking | null = null
@@ -676,8 +688,15 @@ serve(async (req) => {
         const name = firstNonEmpty(body?.name)
         const email = firstNonEmpty(body?.email).toLowerCase()
         const phone = firstNonEmpty(body?.phone)
-        const currency = firstNonEmpty(body?.currency, "INR")
+        const currency = firstNonEmpty(body?.currency, "INR").toUpperCase()
         const paymentMode = normalizePaymentMode(body?.payment_mode || body?.pricing_snapshot?.payment_mode)
+
+        if (currency !== "INR") {
+            return new Response(
+                JSON.stringify({ error: "Only INR payments are supported" }),
+                { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } },
+            )
+        }
 
         const couponCodeRaw = firstNonEmpty(body?.coupon_code, body?.pricing_snapshot?.applied_discount_code)
         const couponCodeRequested = couponCodeRaw ? couponCodeRaw.toUpperCase() : ""
@@ -779,7 +798,19 @@ serve(async (req) => {
             )
         }
 
+        if (!existingBooking && canonicalTravellers.some((traveller) => !traveller.name)) {
+            return new Response(
+                JSON.stringify({ error: "Enter a name for every traveller" }),
+                { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } },
+            )
+        }
+
         let data: any = existingBooking
+        let crmTripCatalogId = ""
+        let crmTripNameSnapshot = ""
+        let billingIssuer: "TWN" | "NTC" | null = null
+        let billingSnapshot: any = null
+        let commercialSnapshot: any = null
         let resolvedTravellers: TravellerResolved[]
         let pricingBreakdown: PricingBreakdown
         let couponSnapshot: any = null
@@ -798,6 +829,7 @@ serve(async (req) => {
             resolvedTravellers = storedTravellers.map((traveller) => ({
                 id: Number(traveller.id),
                 name: firstNonEmpty(traveller.name, `Traveller ${traveller.id}`),
+                gender: String(traveller.gender || "").trim(),
                 sharing: normalizeSharing(traveller.sharing),
                 transport: String(traveller.transport || "").trim(),
             }))
@@ -826,22 +858,73 @@ serve(async (req) => {
                 discount_amount_total: discountAmount,
                 taxable_amount: round2(Math.max(0, subtotalAmount - discountAmount)),
                 tax_amount: taxAmount,
+                gst_amount: Number(existingBooking.gst_amount || taxAmount),
+                tcs_basis: Number(existingBooking.tcs_basis || 0),
+                tcs_amount: Number(existingBooking.tcs_amount || 0),
+                finance_issuer: existingBooking.finance_issuer === "NTC" ? "NTC" : "TWN",
                 total_amount: totalAmount,
                 line_items: storedLineItems,
             }
         } else {
-            if (!/^\d{4}-\d{2}-\d{2}$/.test(departureDate) || departureDate < todayISTDateKey()) {
+            if (!isAvailableDateKey(departureDate, todayISTDateKey())) {
                 return new Response(
                     JSON.stringify({ error: "Departure date is unavailable or already past" }),
                     { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } },
                 )
             }
-            const pricingRows = await fetchPricingRows(supabase, tripId)
+            const { data: publicTrip, error: publicTripError } = await supabase
+                .from("trips")
+                .select("id, active")
+                .eq("id", tripId)
+                .maybeSingle()
+            if (publicTripError) throw new Error(`Could not confirm this trip: ${publicTripError.message}`)
+            if (!publicTrip?.id || publicTrip.active !== true) {
+                return new Response(
+                    JSON.stringify({ error: "This trip is not available for online booking" }),
+                    { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } },
+                )
+            }
+
+            const catalogPricing = await loadWebsiteTripCatalogPricing(tripId)
+            if (!catalogPricing) {
+                return new Response(
+                    JSON.stringify({ error: "Operations has not opened this trip for online bookings" }),
+                    { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } },
+                )
+            }
+            const pricingRows = catalogPricing.pricingRows
+            crmTripCatalogId = catalogPricing.catalogTrip.id
+            crmTripNameSnapshot = catalogPricing.catalogTrip.title
+            billingIssuer = resolveWebsiteFinanceIssuer(catalogPricing.catalogTrip)
+            if (!billingIssuer) {
+                return new Response(
+                    JSON.stringify({ error: "Trip billing details are incomplete" }),
+                    { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } },
+                )
+            }
 
             if (!pricingRows.length) {
                 return new Response(
-                    JSON.stringify({ error: "Pricing not configured for this trip" }),
+                    JSON.stringify({ error: "No open departures are available for this trip" }),
                     { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } },
+                )
+            }
+
+            const departureSelection = validateWebsiteDepartureSelection(
+                pricingRows,
+                departureDate,
+                canonicalTravellers.length,
+            )
+            if (!departureSelection.valid) {
+                const messages = {
+                    invalid_passengers: "Add between 1 and 50 travellers before booking",
+                    unavailable: "The selected departure is no longer available",
+                    ambiguous: "This departure needs an Operations update before it can be booked",
+                    capacity: "There are not enough seats left for this group",
+                }
+                return new Response(
+                    JSON.stringify({ error: messages[departureSelection.reason] }),
+                    { status: departureSelection.reason === "unavailable" ? 400 : 409, headers: { ...corsHeaders, "Content-Type": "application/json" } },
                 )
             }
 
@@ -861,14 +944,31 @@ serve(async (req) => {
             if (basePricing.missingSharings.length > 0 || basePricing.lineItems.length !== canonicalTravellers.length) {
                 throw new Error("Pricing variant or traveller combination is unavailable")
             }
+            commercialSnapshot = buildWebsiteCommercialSnapshot({
+                departureDate,
+                lineItems: basePricing.lineItems,
+                pricingRows,
+            })
+            if (!commercialSnapshot) {
+                return new Response(
+                    JSON.stringify({ error: "The selected Operations prices changed. Refresh checkout and try again." }),
+                    { status: 409, headers: { ...corsHeaders, "Content-Type": "application/json" } },
+                )
+            }
             resolvedTravellers = basePricing.lineItems.map((item) => {
                 const source = canonicalTravellers.find((traveller) => Number(traveller.id) === Number(item.traveller_id))
                 return {
                     id: Number(item.traveller_id),
                     name: firstNonEmpty(source?.name, `Traveller ${item.traveller_id}`),
+                    gender: String(source?.gender || "").trim(),
                     sharing: normalizeSharing(item.sharing),
                     transport: String(item.transport || "").trim(),
                 }
+            })
+            const baseTotals = calculateWebsiteBookingTotals({
+                issuer: billingIssuer,
+                taxableAmount: basePricing.subtotal,
+                discountAmount: basePricing.earlyBirdDiscountAmount,
             })
             const baseBreakdown: PricingBreakdown = {
                 base_subtotal: round2(basePricing.subtotal),
@@ -877,11 +977,13 @@ serve(async (req) => {
                 applied_discount_source: basePricing.earlyBirdDiscountAmount > 0 ? "early_bird" : "none",
                 applied_discount_code: null,
                 discount_amount_total: round2(basePricing.earlyBirdDiscountAmount),
-                taxable_amount: round2(Math.max(0, basePricing.subtotal - basePricing.earlyBirdDiscountAmount)),
-                tax_amount: round2(Math.max(0, basePricing.subtotal - basePricing.earlyBirdDiscountAmount) * TAX_RATE),
-                total_amount: round2(
-                    Math.max(0, basePricing.subtotal - basePricing.earlyBirdDiscountAmount) * (1 + TAX_RATE),
-                ),
+                taxable_amount: baseTotals.taxableAmount,
+                tax_amount: baseTotals.taxAmount,
+                gst_amount: baseTotals.gstAmount,
+                tcs_basis: baseTotals.tcsBasis,
+                tcs_amount: baseTotals.tcsAmount,
+                finance_issuer: billingIssuer,
+                total_amount: baseTotals.totalAmount,
                 line_items: basePricing.lineItems.map((item) => ({
                     traveller_id: Number(item.traveller_id),
                     sharing: String(item.sharing),
@@ -913,6 +1015,17 @@ serve(async (req) => {
                     payload: couponPayload,
                 })
 
+                if (
+                    round2(toNumber(couponQuote.base_subtotal)) !== baseBreakdown.base_subtotal ||
+                    couponQuote.finance_issuer !== billingIssuer ||
+                    JSON.stringify(couponQuote.line_items || []) !== JSON.stringify(baseBreakdown.line_items)
+                ) {
+                    return new Response(
+                        JSON.stringify({ error: "Trip prices changed while checkout was open. Refresh and try again." }),
+                        { status: 409, headers: { ...corsHeaders, "Content-Type": "application/json" } },
+                    )
+                }
+
                 pricingBreakdown = buildPricingBreakdownFromQuote(couponQuote, baseBreakdown)
                 couponSnapshot = {
                     ...couponQuote,
@@ -925,6 +1038,22 @@ serve(async (req) => {
             subtotalAmount = round2(Math.max(0, pricingBreakdown.base_subtotal))
             discountAmount = round2(Math.max(0, pricingBreakdown.discount_amount_total))
             taxAmount = round2(Math.max(0, pricingBreakdown.tax_amount))
+
+            billingSnapshot = buildWebsiteBillingSnapshot({
+                issuer: billingIssuer!,
+                taxableAmount: subtotalAmount,
+                discountAmount,
+                currency,
+            })
+            if (
+                billingSnapshot.totalAmountMinor !== Math.round(totalAmount * 100) ||
+                billingSnapshot.gstAmountMinor + billingSnapshot.tcsAmountMinor !== Math.round(taxAmount * 100)
+            ) {
+                return new Response(
+                    JSON.stringify({ error: "Trip billing totals changed. Refresh checkout before paying." }),
+                    { status: 409, headers: { ...corsHeaders, "Content-Type": "application/json" } },
+                )
+            }
 
             const payable = paymentModeSummary(paymentMode, totalAmount)
             payableNowAmount = payable.payableNowAmount
@@ -960,8 +1089,26 @@ serve(async (req) => {
                 ? `₹${dueAmount.toLocaleString("en-IN")} due on-site before trip departure.`
                 : null
 
-        const couponCode =
-            String(pricingBreakdown.applied_discount_code || couponCodeRequested || "").trim().toUpperCase() || null
+        const couponCode = pricingBreakdown.applied_discount_source === "coupon"
+            ? String(pricingBreakdown.applied_discount_code || couponCodeRequested || "").trim().toUpperCase() || null
+            : null
+        const crmCouponSnapshot = couponCode
+            ? {
+                code: couponCode,
+                discount_amount_minor: Math.round(pricingBreakdown.coupon_discount_amount * 100),
+            }
+            : null
+        if (commercialSnapshot) {
+            commercialSnapshot = {
+                ...commercialSnapshot,
+                applied_discount: {
+                    source: pricingBreakdown.applied_discount_source,
+                    code: couponCode,
+                    amount_minor: Math.round(discountAmount * 100),
+                },
+                coupon_snapshot: crmCouponSnapshot,
+            }
+        }
 
         const insertPayload: Record<string, any> = {
             trip_id: tripId,
@@ -971,8 +1118,6 @@ serve(async (req) => {
             payment_breakdown: paymentBreakdown,
             subtotal_amount: subtotalAmount,
             discount_amount: discountAmount,
-            coupon_code: couponCode,
-            coupon_snapshot: couponSnapshot,
             tax_amount: taxAmount,
             total_amount: totalAmount,
             currency,
@@ -986,34 +1131,47 @@ serve(async (req) => {
             name,
             email,
             phone: phone || "",
+            status: "pending_payment",
+            amount_inr: Math.round(totalAmount),
             checkout_request_id: checkoutRequestId,
             checkout_request_fingerprint: checkoutRequestFingerprint,
-            payment_provider: paymentProvider,
-            payment_attempt_number: 1,
         }
 
         let error: any = null
 
         if (!data) {
-            const inserted = await supabase
-                .from("bookings")
-                .insert(insertPayload)
-                .select("*")
-                .single()
-            data = inserted.data
-            error = inserted.error
-        }
+            const bookingWrite = await supabase.schema("crm").rpc("create_booking_draft", {
+                p_request_key: checkoutRequestId,
+                p_booking: insertPayload,
+                p_details: {
+                    request_key: checkoutRequestId,
+                    lead_id: null,
+                    sales_owner_id: null,
+                    trip_catalog_id: crmTripCatalogId,
+                    trip_name_snapshot: crmTripNameSnapshot,
+                    finance_issuer: billingIssuer,
+                    billing_snapshot: billingSnapshot,
+                    commercial_snapshot: commercialSnapshot,
+                    agreed_advance_amount_minor: null,
+                    booking_status: "payment_pending",
+                },
+            })
+            const createdBooking = Array.isArray(bookingWrite.data)
+                ? bookingWrite.data[0]
+                : bookingWrite.data
+            error = bookingWrite.error || null
 
-        if (error && isMissingColumnError(error, "balance_due_note")) {
-            const fallbackInsertPayload = { ...insertPayload }
-            delete fallbackInsertPayload.balance_due_note
-            const fallback = await supabase
-                .from("bookings")
-                .insert(fallbackInsertPayload)
-                .select("*")
-                .single()
-            data = fallback.data
-            error = fallback.error
+            if (!error && createdBooking?.created_booking_id) {
+                const bookingLookup = await supabase
+                    .from("bookings")
+                    .select("*")
+                    .eq("id", createdBooking.created_booking_id)
+                    .single()
+                data = bookingLookup.data
+                error = bookingLookup.error
+            } else if (!error) {
+                error = new Error("CRM booking service did not return a booking")
+            }
         }
 
         if (error && isUniqueViolation(error)) {
@@ -1044,6 +1202,58 @@ serve(async (req) => {
             )
         }
 
+        let couponCodeToPersist = couponCode || firstNonEmpty(existingBooking?.coupon_code).toUpperCase() || null
+        let couponSnapshotToPersist = couponCodeToPersist
+            ? couponSnapshot || existingBooking?.coupon_snapshot || crmCouponSnapshot
+            : null
+
+        // The CRM RPC stores the applied coupon in its commercial snapshot first.
+        // A retry can restore these established website fields if the compatibility
+        // write failed after the atomic booking transaction.
+        if (existingBooking && !couponCodeToPersist) {
+            const detailsLookup = await supabase
+                .schema("crm")
+                .from("booking_details")
+                .select("commercial_snapshot")
+                .eq("booking_id", data.id)
+                .maybeSingle()
+            if (detailsLookup.error) {
+                return new Response(
+                    JSON.stringify({ error: detailsLookup.error.message || "Could not restore booking discount" }),
+                    { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } },
+                )
+            }
+
+            const commercial = detailsLookup.data?.commercial_snapshot
+            const appliedDiscount = commercial?.applied_discount
+            const storedCode = firstNonEmpty(appliedDiscount?.code)
+            if (appliedDiscount?.source === "coupon" && storedCode) {
+                couponCodeToPersist = storedCode.toUpperCase()
+                couponSnapshotToPersist = commercial?.coupon_snapshot || {
+                    code: couponCodeToPersist,
+                    discount_amount_minor: appliedDiscount.amount_minor,
+                }
+            }
+        }
+
+        if (couponCodeToPersist) {
+            const couponCompatibilityPayload = {
+                coupon_code: couponCodeToPersist,
+                coupon_snapshot: couponSnapshotToPersist,
+            }
+            const couponCompatibilityWrite = await supabase
+                .from("bookings")
+                .update(couponCompatibilityPayload)
+                .eq("id", data.id)
+            if (couponCompatibilityWrite.error) {
+                return new Response(
+                    JSON.stringify({ error: couponCompatibilityWrite.error.message || "Could not save the applied coupon" }),
+                    { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } },
+                )
+            }
+            data = { ...data, ...couponCompatibilityPayload }
+        }
+
         const latestAttemptLookup = await supabase
             .from("payment_attempts")
             .select("*")
@@ -1057,7 +1267,16 @@ serve(async (req) => {
             )
         }
 
+        const paymentCredentials = razorpayCredentials()
+        if (
+            String(data.payment_status || "").trim().toLowerCase() !== "paid" &&
+            (!paymentCredentials.keyId || !paymentCredentials.keySecret)
+        ) {
+            throw new Error("Razorpay payment configuration missing")
+        }
+
         let paymentAttempt = Array.isArray(latestAttemptLookup.data) ? latestAttemptLookup.data[0] : null
+        let mayCreatePaymentOrder = false
         if (!paymentAttempt) {
             const attemptPayload = buildPaymentAttemptInsert({
                 bookingId: data.id,
@@ -1066,7 +1285,7 @@ serve(async (req) => {
                 provider: paymentProvider,
                 amount: payableNowAmount,
                 currency,
-                status: "pending",
+                status: "creating",
             })
             attemptPayload.expires_at = new Date(Date.now() + 30 * 60 * 1000).toISOString()
 
@@ -1084,6 +1303,7 @@ serve(async (req) => {
 
             if (attemptInsert.data) {
                 paymentAttempt = attemptInsert.data
+                mayCreatePaymentOrder = true
             } else {
                 const replayAttempt = await supabase
                     .from("payment_attempts")
@@ -1100,20 +1320,6 @@ serve(async (req) => {
             }
         }
 
-        const activeAttemptUpdate = await supabase
-            .from("bookings")
-            .update({
-                active_payment_attempt_id: paymentAttempt.id,
-                payment_attempt_number: paymentAttempt.attempt_no || 1,
-                payment_provider: paymentAttempt.provider || paymentProvider,
-            })
-            .eq("id", data.id)
-        if (activeAttemptUpdate.error && !isMissingColumnError(activeAttemptUpdate.error, "active_payment_attempt_id")) {
-            return new Response(
-                JSON.stringify({ error: activeAttemptUpdate.error.message || "Could not link payment attempt" }),
-                { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } },
-            )
-        }
         notificationBooking = {
             ...data,
             active_payment_attempt_id: paymentAttempt.id,
@@ -1225,9 +1431,11 @@ serve(async (req) => {
         }
 
         if (String(data.payment_status || "").trim().toLowerCase() === "paid") {
-            await sendBookingCreatedNotification(
-                firstNonEmpty(paymentAttempt.provider_order_id, data.payment_gateway_order_or_ref_id),
-            )
+            if (!replayed) {
+                await sendBookingCreatedNotification(
+                    firstNonEmpty(paymentAttempt.provider_order_id, data.payment_gateway_order_or_ref_id),
+                )
+            }
             return new Response(JSON.stringify({ ...responsePayload, already_paid: true }), {
                 status: 200,
                 headers: { ...corsHeaders, "Content-Type": "application/json" },
@@ -1235,15 +1443,18 @@ serve(async (req) => {
         }
 
         if (activeProvider === "razorpay") {
-            const credentials = razorpayCredentials()
-            if (!credentials.keyId || !credentials.keySecret) {
-                throw new Error("Razorpay payment configuration missing")
-            }
-
-            let orderId = firstNonEmpty(paymentAttempt.provider_order_id, data.payment_gateway_order_or_ref_id)
+            let orderId = firstNonEmpty(paymentAttempt.provider_order_id)
+            const priorAttemptId = firstNonEmpty(data.active_payment_attempt_id)
+            const existingOrderId = priorAttemptId === String(paymentAttempt.id)
+                ? firstNonEmpty(data.payment_gateway_order_or_ref_id)
+                : ""
+            if (!orderId && existingOrderId) orderId = existingOrderId
             let order: any = orderId ? { id: orderId, amount: Math.round(effectivePayableNowAmount * 100), currency } : null
             if (!orderId) {
-                order = await createRazorpayOrder({
+                const resolvedOrder = await ensurePaymentAttemptOrder({
+                    supabase,
+                    attempt: paymentAttempt,
+                    mayCreate: mayCreatePaymentOrder,
                     amount: effectivePayableNowAmount,
                     currency,
                     receipt: `twn_${String(paymentAttempt.id).replace(/-/g, "").slice(0, 32)}`,
@@ -1251,18 +1462,11 @@ serve(async (req) => {
                         booking_id: String(data.id),
                         attempt_id: String(paymentAttempt.id),
                     },
+                    credentials: paymentCredentials,
                 })
+                order = resolvedOrder.order
+                paymentAttempt = resolvedOrder.attempt
                 orderId = String(order.id)
-                const attemptUpdate = await supabase
-                    .from("payment_attempts")
-                    .update({
-                        provider: "razorpay",
-                        provider_order_id: orderId,
-                        updated_at: new Date().toISOString(),
-                    })
-                    .eq("id", paymentAttempt.id)
-                if (attemptUpdate.error) throw attemptUpdate.error
-                paymentAttempt = { ...paymentAttempt, provider: "razorpay", provider_order_id: orderId }
             }
 
             const bookingUpdate = await supabase
@@ -1279,7 +1483,7 @@ serve(async (req) => {
             }
 
             responsePayload.razorpay = {
-                key_id: credentials.keyId,
+                key_id: paymentCredentials.keyId,
                 order_id: orderId,
                 amount: Math.max(1, Math.round(effectivePayableNowAmount * 100)),
                 currency: String(currency || "INR").toUpperCase(),
@@ -1332,9 +1536,11 @@ serve(async (req) => {
             }
         }
         const message = String(err?.message || "Internal server error")
-        const status = /pricing|coupon|trip|traveller/i.test(message) ? 400 : 500
+        const status = err instanceof PaymentOrderInProgressError
+            ? 409
+            : /pricing|coupon|trip|traveller/i.test(message) ? 400 : 500
         return new Response(
-            JSON.stringify({ error: message || "Internal server error" }),
+            JSON.stringify({ error: message || "Internal server error", ...(err?.code ? { code: err.code } : {}) }),
             { status, headers: { ...corsHeaders, "Content-Type": "application/json" } }
         )
     }

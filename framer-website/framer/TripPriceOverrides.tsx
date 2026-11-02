@@ -1,5 +1,6 @@
 import React from "react"
 import type { ComponentType } from "react"
+import { readTripSlugFallback } from "./trip_slug_resolution.ts"
 
 const { useEffect, useState } = React
 
@@ -162,7 +163,12 @@ function formatNextBatchDate(value: any): string {
 function getTripSlugFromPathname(pathname: string): string {
     const clean = String(pathname || "")
     const match = clean.match(/\/upcoming-trips\/([^/?#]+)/i)
-    return match?.[1] ? decodeURIComponent(match[1]) : ""
+    if (!match?.[1]) return ""
+    try {
+        return decodeURIComponent(match[1]).toLowerCase()
+    } catch (_) {
+        return ""
+    }
 }
 
 function normalizeSlug(value: any): string {
@@ -170,8 +176,60 @@ function normalizeSlug(value: any): string {
     if (!raw) return ""
 
     const fromUrl = raw.match(/\/upcoming-trips\/([^/?#]+)/i)
-    const candidate = fromUrl?.[1] ? decodeURIComponent(fromUrl[1]) : raw
+    let candidate = raw
+    if (fromUrl?.[1]) {
+        try {
+            candidate = decodeURIComponent(fromUrl[1]).toLowerCase()
+        } catch (_) {
+            return ""
+        }
+    }
     return /^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(candidate) ? candidate : ""
+}
+
+const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
+const TRIP_SLUG_PROP_KEYS = ["slug", "tripSlug", "trip_slug", "data-trip-slug", "href", "link"]
+const TRIP_SLUG_SCAN_SKIP_KEYS = new Set([
+    "style", "className", "children", "key", "ref", "text", "label", "title",
+    "description", "aria-label", "placeholder", "font", "fonts", "fontFamily",
+    "fontWeight", "fontSize", "fontStyle", "lineHeight", "letterSpacing", "color",
+    "background", "backgroundColor", "border", "borderRadius", "padding", "margin",
+    "width", "height", "top", "left", "right", "bottom", "position", "display",
+    "overflow", "opacity", "transform", "transition", "animation", "boxShadow",
+    "textDecoration", "textAlign", "verticalAlign", "whiteSpace", "zIndex", "cursor",
+    "pointerEvents", "userSelect", "gap", "flex", "flexDirection", "alignItems",
+    "justifyContent", "gridTemplate", "__css", "__styles", "__styleSelectors",
+    "inlineTextStyle", "textContent", "tripId", "trip_id", "data-trip-id", "id",
+])
+
+function findSlugInCmsProps(value: any, depth = 0, key = ""): string {
+    if (depth > 3 || value == null) return ""
+    if (typeof value === "string" || typeof value === "number") {
+        const raw = String(value).trim().toLowerCase()
+        const fromPath = raw.match(/\/upcoming-trips\/([^/?#]+)/i)?.[1]
+        const slug = normalizeSlug(fromPath || raw)
+        if (!slug || UUID_REGEX.test(raw)) return ""
+        return TRIP_SLUG_PROP_KEYS.includes(key) || fromPath || slug.includes("-") ? slug : ""
+    }
+    if (Array.isArray(value)) {
+        for (const item of value) {
+            const found = findSlugInCmsProps(item, depth + 1)
+            if (found) return found
+        }
+        return ""
+    }
+    if (typeof value === "object") {
+        for (const propKey of TRIP_SLUG_PROP_KEYS) {
+            const found = findSlugInCmsProps(value[propKey], depth + 1, propKey)
+            if (found) return found
+        }
+        for (const propKey of Object.keys(value)) {
+            if (TRIP_SLUG_SCAN_SKIP_KEYS.has(propKey)) continue
+            const found = findSlugInCmsProps(value[propKey], depth + 1, propKey)
+            if (found) return found
+        }
+    }
+    return ""
 }
 
 function normalizeTripId(value: any): string {
@@ -192,14 +250,13 @@ function readTripIdCandidate(props: any): string {
 }
 
 function readTripSlugCandidate(props: any): string {
-    return normalizeSlug(
-        props?.slug ||
-            props?.["data-trip-slug"] ||
-            props?.href ||
-            props?.link ||
-            props?.text ||
-            (typeof props?.children === "string" ? props.children : ""),
-    )
+    for (const key of TRIP_SLUG_PROP_KEYS) {
+        const candidate = findSlugInCmsProps(props?.[key], 0, key)
+        if (candidate) return candidate
+    }
+    const fallback = readTripSlugFallback(props?.text, props?.children)
+    if (fallback) return fallback
+    return findSlugInCmsProps(props)
 }
 
 export function withTripIdSource(Component): ComponentType {
@@ -274,8 +331,10 @@ function useTripDisplayData(props?: any) {
         setState({ data: null, status: "loading" })
         const query = new URLSearchParams(window.location.search)
         const slugFromPath = getTripSlugFromPathname(window.location.pathname)
-        const tripId = propTripId || query.get("tripId") || query.get("trip_id") || forcedTripId ||
-            ""
+        const hasScopedSlug = Boolean(propSlug || slugFromPath)
+        const tripId = propTripId || (!hasScopedSlug
+            ? query.get("tripId") || query.get("trip_id") || forcedTripId || ""
+            : "")
         const slug = propSlug || slugFromPath || (tripId ? "" : query.get("slug") || "")
 
         fetchTripDisplayPrice({ slug, tripId })
