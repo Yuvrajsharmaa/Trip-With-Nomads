@@ -61,6 +61,17 @@ Deno.test("status UI renders payment and settlement state from the signed respon
     assertStringIncludes(source, "Retry status")
 })
 
+Deno.test("payment retry refreshes only a key rejected for a finished attempt and stays on the status page", async () => {
+    const source = await read("BookingStatusOverride.tsx")
+
+    assertStringIncludes(source, 'payload?.code === "PAYMENT_ATTEMPT_FINISHED"')
+    assertStringIncludes(source, "clearRetryRequestId(data.id, attemptKey)")
+    assertStringIncludes(source, "retryRequestId = getRetryRequestId(data.id, attemptKey)")
+    assertStringIncludes(source, "setRetryError(")
+    assertStringIncludes(source, 'role="alert"')
+    assert(!source.includes("domesticTripsBaseUrl"))
+})
+
 Deno.test("all legacy lead routes remain exported and use one guarded submission path", async () => {
     const source = await read("EmailPopupOverride.tsx")
 
