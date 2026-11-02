@@ -4,6 +4,7 @@ import {
     canStartPaymentRetry,
     expectedBookingPaymentAmountMinor,
     fingerprintBookingRequest,
+    isBookingPaymentRetryEligible,
     isCompatibleIdempotentReplay,
     isCompatiblePaymentAttemptReplay,
     isStalePaymentAttempt,
@@ -156,6 +157,16 @@ Deno.test("checkout replay requires the same active, unpaid, unexpired attempt",
     assertEquals(canReplayPaymentAttempt(attempt, { ...booking, paid_amount: 1 }, now), false)
     assertEquals(canReplayPaymentAttempt(attempt, { ...booking, payment_status: "paid" }, now), false)
     assertEquals(canReplayPaymentAttempt({ ...attempt, expires_at: "2026-11-02T11:59:59.000Z" }, booking, now), false)
+})
+
+Deno.test("payment retries reject cancelled, settled, and partially paid bookings", () => {
+    const eligible = { status: "pending", payment_status: "pending", paid_amount: 0 }
+    assertEquals(isBookingPaymentRetryEligible(eligible), true)
+    assertEquals(isBookingPaymentRetryEligible({ ...eligible, status: "cancelled" }), false)
+    assertEquals(isBookingPaymentRetryEligible({ ...eligible, status: "canceled" }), false)
+    assertEquals(isBookingPaymentRetryEligible({ ...eligible, payment_status: "succeeded" }), false)
+    assertEquals(isBookingPaymentRetryEligible({ ...eligible, paid_amount: 1 }), false)
+    assertEquals(isBookingPaymentRetryEligible({ ...eligible, paid_amount: "invalid" }), false)
 })
 
 Deno.test("expected checkout amount is bounded by the saved booking total", () => {

@@ -13,3 +13,9 @@ Deno.test("status response exposes retries only after an unpaid provider-order s
   assertStringIncludes(source, "isStalePaymentAttempt({")
   assertStringIncludes(source, "payment_retry_available: paymentRetryAvailable")
 })
+
+Deno.test("status response never exposes retry for cancelled or already-paid bookings", () => {
+  assertStringIncludes(source, "isBookingPaymentRetryEligible(booking)")
+  assertStringIncludes(source, "currency, status, payment_status, payment_mode")
+  assertStringIncludes(source, "paid_amount")
+})

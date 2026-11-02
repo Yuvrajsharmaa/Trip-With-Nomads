@@ -92,6 +92,20 @@ export function isStalePaymentAttempt(
     return deadline <= now.getTime()
 }
 
+export function isBookingPaymentRetryEligible(booking: {
+    payment_status?: unknown
+    paid_amount?: unknown
+    status?: unknown
+}): boolean {
+    const paymentStatus = String(booking?.payment_status || "").trim().toLowerCase()
+    const bookingStatus = String(booking?.status || "").trim().toLowerCase()
+    const paidAmount = booking?.paid_amount == null ? 0 : Number(booking.paid_amount)
+
+    return !["paid", "succeeded"].includes(paymentStatus) &&
+        !["cancelled", "canceled"].includes(bookingStatus) &&
+        Number.isFinite(paidAmount) && paidAmount === 0
+}
+
 export function canReplayPaymentAttempt(
     attempt: { id?: unknown; status?: unknown; expires_at?: string | null; provider_order_id?: unknown; created_at?: string | null; updated_at?: string | null },
     booking: { active_payment_attempt_id?: unknown; payment_status?: unknown; paid_amount?: unknown; status?: unknown },
@@ -100,20 +114,11 @@ export function canReplayPaymentAttempt(
     const attemptId = String(attempt?.id || "").trim().toLowerCase()
     const activeAttemptId = String(booking?.active_payment_attempt_id || "").trim().toLowerCase()
     const status = String(attempt?.status || "").trim().toLowerCase()
-    const paymentStatus = String(booking?.payment_status || "").trim().toLowerCase()
-    const bookingStatus = String(booking?.status || "").trim().toLowerCase()
-    const paidAmount = booking?.paid_amount == null ? 0 : Number(booking.paid_amount)
-
     return Boolean(
         attemptId &&
         attemptId === activeAttemptId &&
         (status === "creating" || status === "pending") &&
-        paymentStatus !== "paid" &&
-        paymentStatus !== "succeeded" &&
-        bookingStatus !== "cancelled" &&
-        bookingStatus !== "canceled" &&
-        Number.isFinite(paidAmount) &&
-        paidAmount === 0 &&
+        isBookingPaymentRetryEligible(booking) &&
         !isStalePaymentAttempt({
             status,
             expiresAt: attempt?.expires_at,

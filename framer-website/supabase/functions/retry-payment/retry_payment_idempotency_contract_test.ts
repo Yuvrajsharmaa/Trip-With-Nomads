@@ -7,6 +7,7 @@ Deno.test("retry-payment requires a retry key and persists payment attempts", as
     assertStringIncludes(source, "normalizeIdempotencyKey")
     assertStringIncludes(source, "canStartPaymentRetry")
     assertStringIncludes(source, "canReplayPaymentAttempt")
+    assertStringIncludes(source, "isBookingPaymentRetryEligible")
     assertStringIncludes(source, "isStalePaymentAttempt")
     assertStringIncludes(source, 'status: "pending"')
     assertStringIncludes(source, "mayCreateOrder = !replayed")
@@ -43,6 +44,11 @@ Deno.test("retry-payment requires a retry key and persists payment attempts", as
         throw new Error("retry-payment must confirm a failed provider order is unpaid before creating a fresh attempt")
     }
     assertStringIncludes(source, 'code: "PAYMENT_ATTEMPT_FINISHED"')
+    const bookingEligibilityGuard = source.indexOf("if (!isBookingPaymentRetryEligible(booking))")
+    const firstAttemptRecovery = source.indexOf("recoverPaymentAttemptForRetry({")
+    if (bookingEligibilityGuard < 0 || firstAttemptRecovery < 0 || bookingEligibilityGuard > firstAttemptRecovery) {
+        throw new Error("retry-payment must reject cancelled or paid bookings before any payment-order recovery")
+    }
     assertStringIncludes(source, 'code: "PAYMENT_ORDER_IN_PROGRESS"')
     assertStringIncludes(source, "from(\"payment_attempts\")")
     assertStringIncludes(source, "attempt_no")

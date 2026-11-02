@@ -5,6 +5,7 @@ import {
     canStartPaymentRetry,
     expectedBookingPaymentAmountMinor,
     isUuid,
+    isBookingPaymentRetryEligible,
     isStalePaymentAttempt,
     isCompatiblePaymentAttemptReplay,
     nextPaymentAttemptNumber,
@@ -197,6 +198,16 @@ Deno.serve(async (req) => {
         const bookingEmail = normalizeEmail(booking.email)
         if (!bookingEmail || bookingEmail !== providedEmail) {
             return responseJson({ error: "Booking not found" }, 404)
+        }
+        if (!isBookingPaymentRetryEligible(booking)) {
+            const isPaid = ["paid", "succeeded"].includes(String(booking.payment_status || "").trim().toLowerCase()) ||
+                Number(booking.paid_amount || 0) > 0
+            return responseJson({
+                error: isPaid
+                    ? "Booking is already paid. Retry is not allowed."
+                    : "This booking is not eligible for a payment retry.",
+                code: isPaid ? "BOOKING_ALREADY_PAID" : "BOOKING_NOT_PAYABLE",
+            }, 409)
         }
         notificationBooking = booking as PaymentEmailBooking
 

@@ -4,7 +4,10 @@ import {
     listBookingStatusSecrets,
     verifyBookingStatusToken,
 } from "../_shared/booking_status_token.ts"
-import { isStalePaymentAttempt } from "../_shared/payment_idempotency.ts"
+import {
+    isBookingPaymentRetryEligible,
+    isStalePaymentAttempt,
+} from "../_shared/payment_idempotency.ts"
 
 const corsHeaders = {
     "Access-Control-Allow-Origin": "*",
@@ -92,7 +95,7 @@ serve(async (req) => {
         let { data: booking, error: bookingError } = await supabase
             .from("bookings")
             .select(
-                "id, booking_ref, trip_id, departure_date, transport, travellers, payment_breakdown, subtotal_amount, discount_amount, coupon_code, coupon_snapshot, tax_amount, total_amount, currency, payment_status, payment_mode, payable_now_amount, paid_amount, due_amount, settlement_status, balance_due_note, payment_provider, active_payment_attempt_id, payment_attempt_number, payment_gateway_order_or_ref_id, payment_gateway_payment_id, payment_gateway_txn_id, name, email, phone, created_at"
+                "id, booking_ref, trip_id, departure_date, transport, travellers, payment_breakdown, subtotal_amount, discount_amount, coupon_code, coupon_snapshot, tax_amount, total_amount, currency, status, payment_status, payment_mode, payable_now_amount, paid_amount, due_amount, settlement_status, balance_due_note, payment_provider, active_payment_attempt_id, payment_attempt_number, payment_gateway_order_or_ref_id, payment_gateway_payment_id, payment_gateway_txn_id, name, email, phone, created_at"
             )
             .eq("id", bookingId)
             .single()
@@ -102,7 +105,7 @@ serve(async (req) => {
             const fallback = await supabase
                 .from("bookings")
                 .select(
-                    "id, booking_ref, trip_id, departure_date, transport, travellers, payment_breakdown, subtotal_amount, discount_amount, coupon_code, coupon_snapshot, tax_amount, total_amount, currency, payment_status, payment_mode, payable_now_amount, paid_amount, due_amount, settlement_status, payment_provider, active_payment_attempt_id, payment_attempt_number, payment_gateway_order_or_ref_id, payment_gateway_payment_id, payment_gateway_txn_id, name, email, phone, created_at"
+                    "id, booking_ref, trip_id, departure_date, transport, travellers, payment_breakdown, subtotal_amount, discount_amount, coupon_code, coupon_snapshot, tax_amount, total_amount, currency, status, payment_status, payment_mode, payable_now_amount, paid_amount, due_amount, settlement_status, payment_provider, active_payment_attempt_id, payment_attempt_number, payment_gateway_order_or_ref_id, payment_gateway_payment_id, payment_gateway_txn_id, name, email, phone, created_at"
                 )
                 .eq("id", bookingId)
                 .single()
@@ -116,6 +119,7 @@ serve(async (req) => {
 
         let paymentRetryAvailable = false
         if (
+            isBookingPaymentRetryEligible(booking) &&
             String(booking.payment_status || "").toLowerCase() === "pending" &&
             booking.active_payment_attempt_id
         ) {
