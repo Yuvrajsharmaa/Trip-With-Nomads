@@ -11,7 +11,20 @@ Deno.test("create-booking persists a checkout request and replays its attempt", 
     assertStringIncludes(source, "canonicalizing trip ID from slug")
     assertStringIncludes(source, "checkout_request_fingerprint")
     assertStringIncludes(source, "fingerprintBookingRequest")
+    assertStringIncludes(source, 'if (currency !== "INR")')
     assertStringIncludes(source, 'from("payment_attempts")')
+    assertStringIncludes(source, 'status: "creating"')
+    assertStringIncludes(source, "mayCreatePaymentOrder = true")
+    assertStringIncludes(source, "ensurePaymentAttemptOrder")
+    const paymentCredentialCheck = source.indexOf(
+        "const paymentCredentials = razorpayCredentials()",
+    )
+    const paymentAttemptInsert = source.indexOf(
+        '.from("payment_attempts")\n                .insert(attemptPayload)',
+    )
+    if (paymentCredentialCheck < 0 || paymentAttemptInsert < 0 || paymentCredentialCheck > paymentAttemptInsert) {
+        throw new Error("create-booking must validate Razorpay credentials before creating a payment attempt")
+    }
     assertStringIncludes(source, "IDEMPOTENCY_CONFLICT")
     assertStringIncludes(source, "!replayed")
     assertStringIncludes(source, "gateway: activeProvider")
@@ -60,8 +73,8 @@ Deno.test("create-booking persists a checkout request and replays its attempt", 
             "create-booking must never use the trip-lead workbook as a booking Sheet fallback",
         )
     }
-    assertStringIncludes(source, "key_id: credentials.keyId")
-    if (source.includes("key: credentials.keyId")) {
+    assertStringIncludes(source, "key_id: paymentCredentials.keyId")
+    if (source.includes("key: paymentCredentials.keyId")) {
         throw new Error(
             "create-booking must return the key_id field consumed by the checkout client",
         )

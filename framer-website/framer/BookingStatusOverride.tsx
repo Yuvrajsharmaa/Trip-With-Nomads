@@ -1,5 +1,13 @@
 import type { ComponentType } from "react"
 import React from "react"
+import { websiteTaxLabelForIssuer } from "./booking-tax.ts"
+import {
+    bookingStatusDetailsReady,
+    bookingStatusCopy,
+    bookingStatusView,
+    shouldShowBookingStatusContent,
+    verifiedStatusDestination,
+} from "./booking_status_presentation_state.ts"
 
 const { useEffect, useRef, useState } = React
 
@@ -48,7 +56,6 @@ type RuntimeConfig = {
     siteBaseUrl: string
     supabaseUrl: string
     supabaseAnonKey: string
-    apiBaseUrl: string
 }
 
 const RUNTIME_CONFIG: Record<RuntimeEnv, RuntimeConfig> = {
@@ -57,15 +64,12 @@ const RUNTIME_CONFIG: Record<RuntimeEnv, RuntimeConfig> = {
         supabaseUrl: "https://jxozzvwvprmnhvafmpsa.supabase.co",
         supabaseAnonKey:
             "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imp4b3p6dnd2cHJtbmh2YWZtcHNhIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjgwNTg2NjIsImV4cCI6MjA4MzYzNDY2Mn0.KpVa9dWlJEguL1TA00Tf4QDpziJ1mgA2I0f4_l-vlOk",
-        // Production must not call the staging worker by default.
-        apiBaseUrl: "",
     },
     development: {
         siteBaseUrl: "https://maroon-aside-814100.framer.app",
         supabaseUrl: "https://ieuwiinbvbdvjrdqqzlb.supabase.co",
         supabaseAnonKey:
             "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImlldXdpaW5idmJkdmpyZHFxemxiIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzIwNDYwMTksImV4cCI6MjA4NzYyMjAxOX0.UlTMeyvArixD7byDCrGwEDXsbc4LQfx6QXDL6Je3blE",
-        apiBaseUrl: "https://twn-checkout-gateway-staging.tripwithnomads-crm.workers.dev",
     },
 }
 
@@ -108,7 +112,6 @@ function resolveRuntimeConfig(): RuntimeConfig {
         supabaseAnonKey: String(
             runtimeOverride.supabaseAnonKey || selected.supabaseAnonKey || ""
         ).trim(),
-        apiBaseUrl: normalizeBaseUrl(runtimeOverride.apiBaseUrl || selected.apiBaseUrl),
     }
 }
 
@@ -138,19 +141,16 @@ function getRetryRequestId(bookingId: string, attempt: any): string {
 
 function retryApiUrl(): string {
     const runtime = resolveRuntimeConfig()
-    return runtime.apiBaseUrl
-        ? `${runtime.apiBaseUrl}/retry-payment`
-        : `${runtime.supabaseUrl}/functions/v1/retry-payment`
+    return `${runtime.supabaseUrl}/functions/v1/retry-payment`
 }
 
 function retryApiHeaders(): Record<string, string> {
     const runtime = resolveRuntimeConfig()
-    const headers: Record<string, string> = { "Content-Type": "application/json" }
-    if (!runtime.apiBaseUrl) {
-        headers.apikey = runtime.supabaseAnonKey
-        headers.Authorization = `Bearer ${runtime.supabaseAnonKey}`
+    return {
+        "Content-Type": "application/json",
+        apikey: runtime.supabaseAnonKey,
+        Authorization: `Bearer ${runtime.supabaseAnonKey}`,
     }
-    return headers
 }
 
 async function loadRazorpayScript(): Promise<void> {
@@ -219,6 +219,13 @@ interface BookingData {
     discount_amount?: number
     coupon_code?: string | null
     coupon_snapshot?: any
+    finance_issuer?: "TWN" | "NTC"
+    billing_snapshot?: {
+        issuer?: "TWN" | "NTC"
+        taxLabel?: string
+        gstAmountMinor?: number
+        tcsAmountMinor?: number
+    } | null
     tax_amount: number
     total_amount: number
     currency: string
@@ -238,7 +245,7 @@ interface BookingData {
     trip_title?: string
 }
 
-type LoadState = "loading" | "ready" | "error"
+type LoadState = "loading" | "pending" | "ready" | "error"
 
 
 // ─── SHARED STATE ────────────────────────────────────────────
@@ -248,7 +255,6 @@ type LoadState = "loading" | "ready" | "error"
 let _data: BookingData | null = null
 let _state: LoadState = "loading"
 let _subs: Array<() => void> = []
-let _pendingCountdown = 0
 let _errorMessage = ""
 
 type StatusTextOptions = {
@@ -259,15 +265,20 @@ type StatusTextOptions = {
 }
 
 function statusTextForState(state: LoadState, options: StatusTextOptions): string {
-    if (state === "loading") return options.loadingText
+    if (state === "loading" || state === "pending") return options.loadingText
     if (state === "error") return options.errorText
     return options.readyText ?? options.fallbackText
 }
 
 type StatusIconState = "checking" | "unavailable" | "failed" | "pending" | "success"
 
+const STATUS_ANIMATIONS = {
+    success: "https://framerusercontent.com/images/JqlipMvB3Ep71YHLcH2zMA0poJM.gif",
+    failed: "https://framerusercontent.com/images/htuHYQJnFALBNXmy6NMMmBMtYg.gif",
+}
+
 function statusIconForState(state: LoadState, paymentStatus?: string): StatusIconState {
-    if (state === "loading") return "checking"
+    if (state === "loading" || state === "pending") return "checking"
     if (state === "error") return "unavailable"
     if (paymentStatus === "failed") return "failed"
     if (paymentStatus === "pending") return "pending"
@@ -275,8 +286,19 @@ function statusIconForState(state: LoadState, paymentStatus?: string): StatusIco
     return "unavailable"
 }
 
+function shouldRenderStatusAnimation(
+    iconState: StatusIconState,
+    pathname: string,
+): iconState is "success" | "failed" {
+    const route = pathname.replace(/\/+$/, "") || "/"
+    return (
+        (iconState === "success" && route === "/payment-success") ||
+        (iconState === "failed" && route === "/payment-failed")
+    )
+}
+
 function shouldShowPaymentSummary(state: LoadState, paymentStatus?: string): boolean {
-    return state === "ready" && paymentStatus !== "failed"
+    return state === "ready" && paymentStatus === "paid"
 }
 
 function notify() { _subs.forEach((fn) => fn()) }
@@ -444,13 +466,16 @@ function buildStatusUrl(
 
 export function withBookingStatus(Component): ComponentType {
     return (props: any) => {
+        const [started, setStarted] = useState(false)
+        const [data, state] = useBooking()
+
         useEffect(() => {
             let cancelled = false
             const controllers = new Set<AbortController>()
             _data = null
             _state = "loading"
-            _pendingCountdown = 0
             _errorMessage = ""
+            setStarted(true)
 
             const fetchBooking = async () => {
                 const params = new URLSearchParams(window.location.search)
@@ -497,19 +522,15 @@ export function withBookingStatus(Component): ComponentType {
                 const params = new URLSearchParams(window.location.search)
                 const bookingId = normalizeBookingId(params.get("booking_id") || "")
                 const statusToken = String(params.get("status_token") || "").trim()
-                const isSuccessRoute = window.location.pathname.includes("/payment-success")
-                const successUrl = buildStatusUrl("/payment-success", bookingId, statusToken)
-                const failedUrl = buildStatusUrl("/payment-failed", bookingId, statusToken, {
-                    reason: "pending-timeout",
-                })
-
-                const maybeRedirectOnStatus = (status: string) => {
-                    if (status === "paid" && !isSuccessRoute) {
-                        window.location.href = successUrl
-                        return true
-                    }
-                    if (status === "failed" && isSuccessRoute) {
-                        window.location.href = failedUrl
+                const maybeRedirectOnStatus = (booking: BookingData) => {
+                    const destination = verifiedStatusDestination(booking?.payment_status)
+                    if (!destination) return false
+                    if (!bookingStatusDetailsReady(booking)) return false
+                    const currentRoute = window.location.pathname.replace(/\/+$/, "") || "/"
+                    if (destination !== currentRoute) {
+                        window.location.replace(
+                            buildStatusUrl(destination, bookingId, statusToken),
+                        )
                         return true
                     }
                     return false
@@ -527,72 +548,57 @@ export function withBookingStatus(Component): ComponentType {
                     return
                 }
 
+                const initialStatus = String(result.data?.payment_status || "")
+                if (maybeRedirectOnStatus(result.data)) return
+                const detailsReady = bookingStatusDetailsReady(result.data)
+                const initialView = bookingStatusView("ready", initialStatus, detailsReady)
+                if (initialView === "unavailable") {
+                    _errorMessage = "The payment provider returned an unknown status."
+                    _state = "error"
+                    notify()
+                    return
+                }
                 _data = result.data
-                _state = "ready"
+                _state = initialStatus === "pending" || !detailsReady ? "pending" : "ready"
                 notify()
 
-                // 2. Poll if pending (max 10 times, 2s interval)
-                if (_data.payment_status === "pending") {
-                    console.log("[BookingStatus] Status is pending, starting poll...")
-                    let attempts = 0
-                    while (attempts < 15) {
-                        await new Promise((r) => setTimeout(r, 2000))
+                if (initialStatus === "pending" || !detailsReady) {
+                    for (let attempt = 0; attempt < 15; attempt++) {
+                        await new Promise((resolve) => setTimeout(resolve, 2000))
                         if (cancelled) return
-                        attempts++
-
                         result = await fetchBooking()
                         if (cancelled) return
                         if (!result.data) continue
 
-                        // Update data
-                        const newStatus = result.data.payment_status
-                        if (newStatus !== _data.payment_status) {
-                            console.log("[BookingStatus] Status changed:", newStatus)
+                        const latestStatus = String(result.data.payment_status || "")
+                        const destination = verifiedStatusDestination(latestStatus)
+                        if (destination && bookingStatusDetailsReady(result.data)) {
                             _data = result.data
-                            // Ensure trip_title is preserved
-                            if (result.data.trip_title) _data.trip_title = result.data.trip_title
-                            notify()
-
-                            if (maybeRedirectOnStatus(newStatus)) return
-                        }
-
-                        if (newStatus !== "pending") break
-                    }
-
-                    // 3. Still pending after polling:
-                    //    show countdown, keep rechecking each second, then route to failed if unresolved.
-                    if (_data?.payment_status === "pending") {
-                        for (let remaining = 8; remaining > 0; remaining--) {
-                            _pendingCountdown = remaining
-                            notify()
-                            await new Promise((r) => setTimeout(r, 1000))
-                            if (cancelled) return
-
-                            const recheck = await fetchBooking()
-                            if (cancelled) return
-                            if (!recheck?.data) continue
-
-                            const latest = recheck.data
-                            const latestStatus = latest.payment_status
-                            const changed = _data.payment_status !== latestStatus
-                            _data = {
-                                ...latest,
-                                trip_title: latest.trip_title || _data.trip_title,
+                            if (destination !== (window.location.pathname.replace(/\/+$/, "") || "/")) {
+                                window.location.replace(
+                                    buildStatusUrl(destination, bookingId, statusToken),
+                                )
+                                return
                             }
+                            _state = "ready"
                             notify()
-
-                            if (changed && maybeRedirectOnStatus(latestStatus)) return
-                            if (latestStatus !== "pending") break
-                        }
-
-                        _pendingCountdown = 0
-                        notify()
-
-                        if (_data?.payment_status === "pending" && bookingId) {
-                            window.location.href = failedUrl
                             return
                         }
+                        if (latestStatus !== "pending" && !destination) {
+                            _errorMessage = "The payment provider returned an unknown status."
+                            _state = "error"
+                            notify()
+                            return
+                        }
+                        _data = result.data
                     }
+                    if (verifiedStatusDestination(_data?.payment_status)) {
+                        _errorMessage = "Booking details are taking longer to load."
+                        _state = "error"
+                    } else {
+                        _state = "ready"
+                    }
+                    notify()
                 }
             }
 
@@ -602,6 +608,98 @@ export function withBookingStatus(Component): ComponentType {
                 controllers.forEach((controller) => controller.abort())
             }
         }, [])
+
+        const detailsReady = bookingStatusDetailsReady(data)
+        const hasVerifiedOutcome = Boolean(verifiedStatusDestination(data?.payment_status))
+        const view = bookingStatusView(state, data?.payment_status, detailsReady)
+        if (!shouldShowBookingStatusContent(started, view)) {
+            const isSuccessRoute = typeof window !== "undefined" &&
+                window.location.pathname.includes("/payment-success")
+            const background = isSuccessRoute ? "#ffffff" : "#080808"
+            const foreground = isSuccessRoute ? "#171717" : "#ffffff"
+            const copyState = view === "unavailable"
+                ? hasVerifiedOutcome && !detailsReady
+                    ? "details"
+                    : "unavailable"
+                : state === "pending" && !hasVerifiedOutcome
+                  ? "pending"
+                  : "loading"
+            const copy = bookingStatusCopy(copyState)
+            return (
+                <main
+                    style={{
+                        alignItems: "center",
+                        background,
+                        boxSizing: "border-box",
+                        color: foreground,
+                        display: "flex",
+                        flexDirection: "column",
+                        fontFamily: "inherit",
+                        justifyContent: "center",
+                        inset: 0,
+                        minHeight: "100dvh",
+                        padding: "max(32px, env(safe-area-inset-top)) 24px max(32px, env(safe-area-inset-bottom))",
+                        position: "fixed",
+                        textAlign: "center",
+                        width: "100%",
+                        zIndex: 9999,
+                    }}
+                >
+                    <div
+                        role="status"
+                        aria-live="polite"
+                        aria-busy={view === "checking"}
+                        style={{ maxWidth: 420, textAlign: "center", width: "100%" }}
+                    >
+                        <style>{`@keyframes twnPaymentStatusSpin { to { transform: rotate(360deg); } } @media (prefers-reduced-motion: reduce) { .twnPaymentStatusSpinner { animation: none !important; } }`}</style>
+                        <div style={{ alignItems: "center", color: "#168ac1", display: "flex", flexDirection: "column", gap: 16 }}>
+                            {view === "checking" && (
+                                <span
+                                    aria-hidden="true"
+                                    className="twnPaymentStatusSpinner"
+                                    style={{
+                                        animation: "twnPaymentStatusSpin 800ms linear infinite",
+                                        border: "2px solid currentColor",
+                                        borderBottomColor: "transparent",
+                                        borderRadius: "50%",
+                                        boxSizing: "border-box",
+                                        display: "inline-block",
+                                        flex: "none",
+                                        height: 28,
+                                        width: 28,
+                                    }}
+                                />
+                            )}
+                            <h1 style={{ color: foreground, fontSize: 22, fontWeight: 600, lineHeight: 1.3, margin: 0 }}>
+                                {copy.title}
+                            </h1>
+                        </div>
+                        <p style={{ color: isSuccessRoute ? "#555555" : "#c5c5c5", fontSize: 16, lineHeight: 1.6, margin: "10px 0 0" }}>
+                            {copy.description}
+                        </p>
+                    </div>
+                    {(view === "pending" || view === "unavailable") && (
+                        <button
+                            type="button"
+                            onClick={() => window.location.reload()}
+                            style={{
+                                background: "#168ac1",
+                                border: 0,
+                                borderRadius: 12,
+                                color: "#ffffff",
+                                cursor: "pointer",
+                                fontSize: 16,
+                                fontWeight: 600,
+                                marginTop: 24,
+                                padding: "12px 20px",
+                            }}
+                        >
+                            Check payment status
+                        </button>
+                    )}
+                </main>
+            )
+        }
 
         return <Component {...props} />
     }
@@ -709,7 +807,10 @@ export function withTaxAmount(Component): ComponentType {
 // Legacy summary bindings retained for existing success/failure page instances.
 // They read the same provider-neutral booking fields as the current bindings.
 export function withTaxLabel(Component): ComponentType {
-    return textOverride(() => "GST (5%)")(Component)
+    return textOverride((d) => {
+        const snapshot = (d as any)?.billing_snapshot
+        return websiteTaxLabelForIssuer(snapshot?.issuer || (d as any)?.finance_issuer)
+    })(Component)
 }
 
 export function withTotalAmount(Component): ComponentType {
@@ -750,7 +851,7 @@ export function withBalanceDueNote(Component): ComponentType {
         const due = dueAmount(d)
         if (due <= 0) return ""
         const explicit = String((d as any)?.balance_due_note || "").trim()
-        return explicit || `${fmt(due)} due on-site before trip departure.`
+        return explicit || `${fmt(due)} remains to be paid before departure.`
     })(Component)
 }
 
@@ -801,8 +902,9 @@ export function withDueLabel(Component): ComponentType {
 export function withPaymentOutcomeTag(Component): ComponentType {
     return textOverride((d) => {
         const status = settlementStatus(d)
-        if (status === "fully_paid" || status === "partially_paid") return "Booking confirmed"
-        if (d.payment_status === "failed") return "Payment failed"
+        if (status === "fully_paid") return "Paid in full"
+        if (status === "partially_paid") return "Advance received"
+        if (d.payment_status === "failed") return "Action needed"
         return "Payment processing"
     })(Component)
 }
@@ -971,7 +1073,7 @@ export function withHeadingText(Component): ComponentType {
             return "Processing…"
         },
         "We couldn't verify this booking.",
-        "Checking payment status…",
+        bookingStatusCopy("loading").title,
         "We couldn't verify this booking.",
     )(Component)
     return Wrapped
@@ -983,20 +1085,17 @@ export function withSubheadingText(Component): ComponentType {
         (d) => {
             const status = settlementStatus(d)
             if (status === "fully_paid")
-                return "Your adventure awaits. Here's everything you need to know."
+                return "Your payment is complete. Your trip details are below."
             if (status === "partially_paid")
-                return `Booking confirmed. ${fmt(
+                return `${fmt(
                     dueAmount(d)
-                )} is due on-site before trip departure.`
+                )} remains to be paid before departure.`
             if (d.payment_status === "failed")
-                return "Your payment didn't go through. Don't worry, you can try again."
-            if (_pendingCountdown > 0) {
-                return `We're still confirming your payment. Rechecking and redirecting in ${_pendingCountdown}s.`
-            }
-            return "We're confirming your payment…"
+                return "Payment wasn’t completed. You can try again or contact us if you were charged."
+            return "We’re still checking your payment. Please refresh in a moment."
         },
         "Refresh this page or contact us if the issue continues.",
-        "Loading your booking details securely…",
+        bookingStatusCopy("loading").description,
         "Your payment status could not be verified. Please refresh or contact us.",
     )(Component)
     return Wrapped
@@ -1007,11 +1106,7 @@ export function withStatusIcon(Component): ComponentType {
     return (props: any) => {
         const [data, state] = useBooking()
         const iconState = statusIconForState(state, data?.payment_status)
-
-        // Keep the original Framer animation only for a server-verified payment.
-        // Declarative replacement prevents async animation children from
-        // reintroducing a green success mark while the status is unknown.
-        if (iconState === "success") return <Component {...props} />
+        const pathname = typeof window === "undefined" ? "" : window.location.pathname
 
         const accessibleLabel =
             iconState === "checking"
@@ -1020,7 +1115,37 @@ export function withStatusIcon(Component): ComponentType {
                   ? "Booking status unavailable"
                   : iconState === "failed"
                     ? "Payment failed"
-                    : "Payment pending"
+                    : iconState === "success"
+                      ? "Payment confirmed"
+                      : "Payment pending"
+
+        if (shouldRenderStatusAnimation(iconState, pathname)) {
+            return (
+                <div
+                    {...props}
+                    role="status"
+                    aria-label={accessibleLabel}
+                    style={{
+                        ...(props.style || {}),
+                        background: "transparent",
+                        overflow: "hidden",
+                    }}
+                >
+                    <img
+                        src={STATUS_ANIMATIONS[iconState]}
+                        alt=""
+                        aria-hidden="true"
+                        style={{
+                            width: "100%",
+                            height: "100%",
+                            display: "block",
+                            objectFit: "contain",
+                        }}
+                    />
+                </div>
+            )
+        }
+
         const circleStyle: React.CSSProperties = {
             width: 64,
             height: 64,
@@ -1029,12 +1154,7 @@ export function withStatusIcon(Component): ComponentType {
             alignItems: "center",
             justifyContent: "center",
             margin: "0 auto",
-            background:
-                iconState === "checking"
-                    ? "#e5e7eb"
-                    : iconState === "failed"
-                      ? "#ef4444"
-                      : "#f59e0b",
+            background: iconState === "checking" ? "#e5e7eb" : "#f59e0b",
             color: iconState === "checking" ? "#475569" : "white",
             fontSize: 30,
             fontWeight: 600,
@@ -1047,27 +1167,17 @@ export function withStatusIcon(Component): ComponentType {
                 aria-label={accessibleLabel}
                 style={{
                     ...(props.style || {}),
+                    background: "transparent",
                     display: "flex",
                     alignItems: "center",
                     justifyContent: "center",
                 }}
             >
                 <div aria-hidden="true" style={circleStyle}>
-                    {iconState === "checking" || iconState === "unavailable" ? (
-                        iconState === "checking" ? "…" : "!"
-                    ) : iconState === "failed" ? (
-                        <svg
-                            width="32"
-                            height="32"
-                            viewBox="0 0 24 24"
-                            fill="none"
-                            stroke="currentColor"
-                            strokeWidth="2.5"
-                            strokeLinecap="round"
-                        >
-                            <line x1="18" y1="6" x2="6" y2="18" />
-                            <line x1="6" y1="6" x2="18" y2="18" />
-                        </svg>
+                    {iconState === "checking" ? (
+                        "…"
+                    ) : iconState === "unavailable" ? (
+                        "!"
                     ) : (
                         <svg
                             width="32"

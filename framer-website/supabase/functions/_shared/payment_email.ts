@@ -71,11 +71,6 @@ const BRAND_NAVY = "#0b3550";
 const REGISTERED_OFFICE_MAP_URL = "https://maps.app.goo.gl/TS9umsDXBHxs6K2d6";
 const REGISTERED_OFFICE =
   "Near Old Capital Bus Stand Holi Gate, 2nd Floor, Shop No-07, Ballabgargh, Faridabad, Haryana, 121004";
-const BANK_ACCOUNT_NAME = "TRIP WITH NOMADS";
-const BANK_ACCOUNT_NUMBER = "8447333965";
-const BANK_IFSC = "KKBK0004369";
-const BANK_NAME = "KOTAK MAHINDRA BANK";
-const BANK_UPI_ID = "9318405401@kotak";
 
 function text(value: unknown): string {
   return String(value || "").trim();
@@ -182,17 +177,6 @@ function paymentStateChanged(
     (nextStatus === "paid" && previousTransaction !== nextTransaction);
 }
 
-function statusLabel(booking: PaymentEmailBooking): string {
-  const status = normalizedStatus(booking.payment_status);
-  const settlement = normalizedSettlement(booking.settlement_status);
-  if (status === "paid" && settlement === "partially_paid") {
-    return "Advance payment received";
-  }
-  if (status === "paid") return "Payment received";
-  if (status === "failed") return "Payment not completed";
-  return "Payment update";
-}
-
 function paymentModeLabel(booking: PaymentEmailBooking): string {
   return normalizedStatus(booking.payment_mode) === "partial_25"
     ? "25% advance payment"
@@ -292,11 +276,6 @@ function buildPhoneUrl(): string {
   return "tel:+" + SUPPORT_PHONE_DIGITS;
 }
 
-function buildUnsubscribeUrl(): string {
-  return "mailto:" + SUPPORT_EMAIL + "?subject=" +
-    encodeURIComponent("Unsubscribe from Trip With Nomads emails");
-}
-
 function footerLink(label: string, url: string): string {
   return '<a href="' + escapeHtml(url) +
     '" style="color:#0b3550;text-decoration:underline;">' +
@@ -320,10 +299,7 @@ export function buildPaymentEmail(
 
   const recipientName = text(next.name) || "there";
   const trip = text(tripTitle) || "your Trip With Nomads trip";
-  const tripType = text(next.trip_type) || text(next.tripType);
-  const tripDescriptor = tripType ? " (Trip Type: " + tripType + ")" : "";
   const departureDate = formatDate(next.departure_date) || "Not specified";
-  const label = statusLabel(next);
   const paymentMode = paymentModeLabel(next);
   const isPaid = paymentStatus === "paid";
   const isPartial =
@@ -334,40 +310,23 @@ export function buildPaymentEmail(
   const selectionDetails = buildSelectionDetails(next);
   const paxCount = paxDetails.length ||
     selectionDetails.reduce((total, item) => total + item.count, 0);
-  const paxLabel = String(paxCount) + " pax";
+  const paxLabel = String(paxCount) +
+    (paxCount === 1 ? " traveller" : " travellers");
   const subjectTrip = truncate(trip.replace(/\|/g, "-"), 56);
   const subject = isPaid
-    ? (isPartial ? "Advance received: " : "Booking confirmed: ") + subjectTrip +
+    ? (isPartial ? "Advance received: " : "Payment received: ") + subjectTrip +
       " | " + bookingRef
-    : "Action needed: complete payment | " + bookingRef;
+    : "Payment not completed | " + bookingRef;
   const dueAmount = number(next.due_amount);
   const intro = isPaid
     ? isPartial
-      ? "We are glad to confirm your booking for " + trip + tripDescriptor +
-        ". Your advance payment has been received and your place is reserved."
-      : "We are delighted to inform you that your booking for " + trip +
-        tripDescriptor + " has been successfully confirmed."
-    : "We could not complete your payment for " + trip +
-      ". Your booking is not confirmed yet.";
-  const bookingGuidance = isPaid
-    ? isPartial && dueAmount > 0
-      ? "Please review the booking summary below, including your traveller details, selected variant, and pending amount of " +
-        formatAmount(dueAmount) +
-        ". The remaining amount should be cleared at least 14 days before your travel date."
-      : "Please review the booking summary below, including your traveller details, selected variant, and payment information."
-    : "Please review the booking summary below. If you have any questions or concerns, reply to this email or contact us on WhatsApp. We are here to assist you.";
-  const closingCopy = isPaid
-    ? "Thank you for choosing Trip With Nomads. We look forward to welcoming you on your trip."
-    : "";
+      ? `We received your advance for ${trip}. ${formatAmount(dueAmount)} remains due.`
+      : `We received your payment for ${trip}. Your booking is paid in full.`
+    : `We couldn’t confirm your payment for ${trip}. If your bank shows a debit, contact us before trying again.`;
   const animationUrl = isPaid
     ? PAYMENT_ANIMATION_URLS.success
     : PAYMENT_ANIMATION_URLS.failed;
   const animationAlt = isPaid ? "Payment received" : "Payment not completed";
-  const nextStep = isPaid
-    ? isPartial && dueAmount > 0
-      ? "Balance due before departure: " + formatAmount(dueAmount) + "."
-      : "Your booking payment is complete. Keep this email for your records."
-    : "Use the button below to try payment again. If checkout still does not work, reply to this email.";
   const normalizedWebsiteUrl = normalizeHttpUrl(
     websiteUrl,
     "https://tripwithnomads.com",
@@ -382,32 +341,25 @@ export function buildPaymentEmail(
     : normalizedRetryUrl;
   const actionLabel = isPaid ? "View booking status" : "Try payment again";
   const preheader = isPaid
-    ? label + " for " + trip + ". Booking " + bookingRef + "."
-    : "Payment action needed for booking " + bookingRef + ".";
+    ? isPartial
+      ? "Balance due for " + trip + ": " + formatAmount(dueAmount) + "."
+      : "Your booking details and payment summary for " + trip + "."
+    : "Payment wasn’t completed for booking " + bookingRef + ".";
   const whatsappUrl = buildWhatsAppUrl(bookingRef);
-  const unsubscribeUrl = buildUnsubscribeUrl();
   const privacyUrl = normalizedWebsiteUrl + "/privacy-policy";
   const termsUrl = normalizedWebsiteUrl + "/terms-and-conditions";
   const cancellationUrl = normalizedWebsiteUrl + "/cancellation-refund-policy";
 
-  const travellerRowsHtml = paxDetails.length > 0
-    ? paxDetails.map((traveller) => {
-      const meta = [traveller.variant, traveller.transport].filter(Boolean)
-        .join(" | ");
+  const travellerRowsHtml = paxDetails.map((traveller) => {
       return "<tr>" +
         '<td style="padding:8px 0;border-bottom:1px solid #dceef7;color:' +
         BRAND_NAVY + ';font-size:14px;font-weight:600;">' +
         escapeHtml(traveller.name) +
         "</td>" +
-        '<td style="padding:8px 0;border-bottom:1px solid #dceef7;color:#5e7d8d;font-size:13px;text-align:right;">' +
-        escapeHtml(meta || "Selection recorded") +
-        "</td>" +
         "</tr>";
-    }).join("")
-    : '<tr><td colspan="2" style="padding:8px 0;color:#5e7d8d;font-size:14px;">Selection details are recorded with your booking.</td></tr>';
+    }).join("");
 
-  const selectionRowsHtml = selectionDetails.length > 0
-    ? selectionDetails.map((selection) => {
+  const selectionRowsHtml = selectionDetails.map((selection) => {
       return "<tr>" +
         '<td style="padding:7px 0;color:' + BRAND_NAVY + ';font-size:14px;">' +
         escapeHtml(selectionLabel(selection)) +
@@ -419,8 +371,7 @@ export function buildPaymentEmail(
           : "") +
         "</td>" +
         "</tr>";
-    }).join("")
-    : '<tr><td colspan="2" style="padding:7px 0;color:#5e7d8d;font-size:14px;">No variant breakdown available.</td></tr>';
+    }).join("");
 
   const subtotalAmount = number(next.subtotal_amount);
   const discountAmount = number(next.discount_amount);
@@ -453,40 +404,33 @@ export function buildPaymentEmail(
       : []),
   ].join("");
 
-  const travellerRowsText = paxDetails.length > 0
-    ? paxDetails.map((traveller) => {
-      const meta = [traveller.variant, traveller.transport].filter(Boolean)
-        .join(" | ");
-      return "- " + traveller.name + (meta ? " | " + meta : "");
-    })
-    : ["- Selection details are recorded with your booking."];
-  const selectionRowsText = selectionDetails.length > 0
-    ? selectionDetails.map((selection) => {
+  const travellerRowsText = paxDetails.map((traveller) => {
+      return "- " + traveller.name;
+    });
+  const selectionRowsText = selectionDetails.map((selection) => {
       const amount = selection.amount > 0
         ? ": " + formatAmount(selection.amount)
         : "";
       return "- " + selectionLabel(selection) + amount;
-    })
-    : ["- No variant breakdown available."];
+    });
 
   const textBody = [
     "Trip With Nomads",
-    label,
     "",
     "Hi " + recipientName + ",",
     intro,
-    bookingGuidance,
     "",
     "Booking reference: " + bookingRef,
     "Trip: " + trip,
     "Departure: " + departureDate,
-    "Pax: " + paxLabel,
+    "Travellers: " + paxCount,
     "",
-    "Travellers:",
-    ...travellerRowsText,
-    "",
-    "Selections:",
-    ...selectionRowsText,
+    ...(paxDetails.length > 0
+      ? ["Travellers:", ...travellerRowsText, ""]
+      : []),
+    ...(selectionDetails.length > 0
+      ? ["Trip options:", ...selectionRowsText, ""]
+      : []),
     "",
     "Payment:",
     "Payment type: " + paymentMode,
@@ -508,24 +452,7 @@ export function buildPaymentEmail(
       ? ["Balance due: " + formatAmount(dueAmount)]
       : []),
     ...(isPaid && transactionId ? ["Payment reference: " + transactionId] : []),
-    ...(isPaid && isPartial && dueAmount > 0
-      ? [
-        "",
-        "Important payment information:",
-        "Pending amount: " + formatAmount(dueAmount),
-        "The pending amount must be cleared at least 14 days prior to your travel date.",
-        "Make any further payment only to the official Trip With Nomads bank account. Trip With Nomads is not responsible for payments made to personal accounts or third parties.",
-        "Bank details:",
-        "Account name: " + BANK_ACCOUNT_NAME,
-        "Account number: " + BANK_ACCOUNT_NUMBER,
-        "IFSC code: " + BANK_IFSC,
-        "Bank: " + BANK_NAME,
-        "UPI ID: " + BANK_UPI_ID,
-      ]
-      : []),
     "",
-    nextStep,
-    ...(closingCopy ? [closingCopy] : []),
     actionLabel + ": " + actionUrl,
     "",
     "Need help? Chat on WhatsApp: " + whatsappUrl,
@@ -535,12 +462,8 @@ export function buildPaymentEmail(
     "Privacy policy: " + privacyUrl,
     "Terms and conditions: " + termsUrl,
     "Cancellation and refund policy: " + cancellationUrl,
-    "Unsubscribe from non-essential updates: " + unsubscribeUrl,
-    "",
-    "Trip With Nomads",
     "Registered office: " + REGISTERED_OFFICE,
     "Map: " + REGISTERED_OFFICE_MAP_URL,
-    "Booking and payment messages may still be sent when needed to manage your reservation.",
   ].join("\n");
 
   const logoHtml = '<a href="' + escapeHtml(normalizedWebsiteUrl) +
@@ -553,25 +476,7 @@ export function buildPaymentEmail(
     footerLink("Privacy policy", privacyUrl),
     footerLink("Terms and conditions", termsUrl),
     footerLink("Cancellation policy", cancellationUrl),
-    footerLink("Unsubscribe", unsubscribeUrl),
   ].join(' <span style="color:#70bddd;">|</span> ');
-  const pendingPaymentHtml = isPaid && isPartial && dueAmount > 0
-    ? [
-      '<div style="margin:24px 0 0;padding-top:18px;border-top:1px solid #dceef7;">',
-      '<p style="margin:0 0 8px;color:' + BRAND_NAVY +
-      ';font-size:14px;font-weight:700;line-height:1.4;">Important payment information</p>',
-      '<p style="margin:0 0 10px;color:#355d73;font-size:13px;line-height:1.55;">Pending amount: ' +
-      escapeHtml(formatAmount(dueAmount)) +
-      ". Please clear it at least 14 days before your travel date.</p>",
-      '<p style="margin:0 0 10px;color:#355d73;font-size:13px;line-height:1.55;">Please make any further payment only to the official Trip With Nomads bank account. Trip With Nomads is not responsible for payments made to personal accounts or third parties.</p>',
-      '<p style="margin:0;color:#355d73;font-size:13px;line-height:1.65;"><strong>Bank details</strong><br>Account name: ' +
-      escapeHtml(BANK_ACCOUNT_NAME) + "<br>Account number: " +
-      escapeHtml(BANK_ACCOUNT_NUMBER) + "<br>IFSC code: " +
-      escapeHtml(BANK_IFSC) + "<br>Bank: " + escapeHtml(BANK_NAME) +
-      "<br>UPI ID: " + escapeHtml(BANK_UPI_ID) + "</p>",
-      "</div>",
-    ].join("\n")
-    : "";
 
   const htmlBody = [
     "<!doctype html>",
@@ -612,8 +517,6 @@ export function buildPaymentEmail(
     escapeHtml(recipientName) + ",</h2>",
     '                <p style="margin:0;color:#5e7d8d;font-size:14px;line-height:1.5;">' +
     escapeHtml(intro) + "</p>",
-    '                <p style="margin:12px 0 0;color:#355d73;font-size:14px;line-height:1.55;">' +
-    escapeHtml(bookingGuidance) + "</p>",
     '                <div style="height:22px;line-height:22px;">&nbsp;</div>',
     "                " + sectionLabel("Your trip"),
     '                <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="border-collapse:separate;background:#f6fcff;border:1px solid #dceef7;border-radius:12px;">',
@@ -639,16 +542,24 @@ export function buildPaymentEmail(
     "                  " + detailRow("Booking reference", bookingRef, true),
     "                  " + detailRow("Payment type", paymentMode),
     "                </table>",
-    '                <div style="height:22px;line-height:22px;">&nbsp;</div>',
-    "                " + sectionLabel("Travellers"),
-    '                <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="border-collapse:collapse;">',
-    "                  " + travellerRowsHtml,
-    "                </table>",
-    '                <div style="height:22px;line-height:22px;">&nbsp;</div>',
-    "                " + sectionLabel("Variant selections"),
-    '                <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="border-collapse:collapse;">',
-    "                  " + selectionRowsHtml,
-    "                </table>",
+    ...(paxDetails.length > 0
+      ? [
+        '                <div style="height:22px;line-height:22px;">&nbsp;</div>',
+        "                " + sectionLabel("Travellers"),
+        '                <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="border-collapse:collapse;">',
+        "                  " + travellerRowsHtml,
+        "                </table>",
+      ]
+      : []),
+    ...(selectionDetails.length > 0
+      ? [
+        '                <div style="height:22px;line-height:22px;">&nbsp;</div>',
+        "                " + sectionLabel("Trip options"),
+        '                <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="border-collapse:collapse;">',
+        "                  " + selectionRowsHtml,
+        "                </table>",
+      ]
+      : []),
     '                <div style="height:22px;line-height:22px;">&nbsp;</div>',
     "                " + sectionLabel("Payment summary"),
     '                <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="border-collapse:separate;background:#f6fcff;border:1px solid #dceef7;border-radius:12px;">',
@@ -658,14 +569,7 @@ export function buildPaymentEmail(
     "                    </table>",
     "                  </td></tr>",
     "                </table>",
-    "                " + pendingPaymentHtml,
     '                <div style="height:24px;line-height:24px;">&nbsp;</div>',
-    '                <p style="margin:0 0 18px;color:#355d73;font-size:14px;line-height:1.55;">' +
-    escapeHtml(nextStep) + "</p>",
-    closingCopy
-      ? '                <p style="margin:0 0 18px;color:#355d73;font-size:14px;line-height:1.55;">' +
-        escapeHtml(closingCopy) + "</p>"
-      : "",
     '                <table role="presentation" cellpadding="0" cellspacing="0" border="0">',
     "                  <tr>",
     '                    <td style="border-radius:10px;background:' +
@@ -713,7 +617,6 @@ export function buildPaymentEmail(
     '                <p style="margin:16px 0 0;color:' + BRAND_NAVY +
     ';font-size:11px;line-height:1.7;">' +
     legalLinks + "</p>",
-    '                <p style="margin:12px 0 0;color:#174e6a;font-size:10px;line-height:1.5;">You are receiving this service email because you made a booking or payment request. Booking and payment messages may still be sent when needed to manage your reservation.</p>',
     "              </td>",
     "            </tr>",
     "          </table>",
@@ -731,8 +634,5 @@ export function buildPaymentEmail(
     text: textBody,
     idempotencyKey: "payment-" + paymentStatus + "-" + settlement + "-" +
       bookingId + "-" + (transactionId || "unknown"),
-    headers: {
-      "List-Unsubscribe": "<" + unsubscribeUrl + ">",
-    },
   };
 }

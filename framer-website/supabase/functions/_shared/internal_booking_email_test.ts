@@ -83,6 +83,64 @@ Deno.test("builds a full internal booking snapshot", () => {
   assertStringIncludes(email.text, "Phone: +91 9876543210")
 })
 
+Deno.test("shows the full outstanding amount before a full payment is verified", () => {
+  const email = buildInternalBookingEmail({
+    recipients: ["support@tripwithnomads.com"],
+    eventType: "booking_created",
+    eventKey: "booking-created:booking-123:attempt-1",
+    booking: {
+      ...booking,
+      payment_status: "pending",
+      settlement_status: "pending",
+      paid_amount: 0,
+      payable_now_amount: 24780,
+      due_amount: 0,
+    },
+  })
+
+  assert(email)
+  assertStringIncludes(email.text, "Balance due: ₹24,780.00")
+})
+
+Deno.test("uses stored due amount when an unpaid booking has no total amount", () => {
+  const email = buildInternalBookingEmail({
+    recipients: ["support@tripwithnomads.com"],
+    eventType: "booking_created",
+    eventKey: "booking-created:booking-123:attempt-1",
+    booking: {
+      ...booking,
+      payment_status: "pending",
+      settlement_status: "pending",
+      total_amount: null,
+      paid_amount: 0,
+      due_amount: 1234,
+    },
+  })
+
+  assert(email)
+  assertStringIncludes(email.text, "Balance due: ₹1,234.00")
+})
+
+Deno.test("shows total minus verified payments as outstanding before an advance clears", () => {
+  const email = buildInternalBookingEmail({
+    recipients: ["support@tripwithnomads.com"],
+    eventType: "booking_created",
+    eventKey: "booking-created:booking-123:attempt-1",
+    booking: {
+      ...booking,
+      payment_status: "pending",
+      settlement_status: "pending",
+      payment_mode: "partial_25",
+      paid_amount: 0,
+      payable_now_amount: 6195,
+      due_amount: 18585,
+    },
+  })
+
+  assert(email)
+  assertStringIncludes(email.text, "Balance due: ₹24,780.00")
+})
+
 Deno.test("builds a payment failure alert with actionable error context", () => {
   const email = buildInternalBookingEmail({
     recipients: ["support@tripwithnomads.com"],

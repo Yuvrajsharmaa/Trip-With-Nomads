@@ -64,22 +64,23 @@ Deno.test("builds a designed paid email with booking details", () => {
   assertEquals(email.to, "guest@example.com");
   assertEquals(
     email.subject,
-    "Booking confirmed: Summer Spiti | TWN-2026-00123",
+    "Payment received: Summer Spiti | TWN-2026-00123",
   );
   assertStringIncludes(email.html, "A &lt;Guest&gt;");
   assertStringIncludes(email.html, "9 May 2026");
-  assertStringIncludes(email.html, "3 pax");
-  assertStringIncludes(
-    email.html,
-    "We are delighted to inform you that your booking for Summer Spiti has been successfully confirmed.",
-  );
+  assertStringIncludes(email.html, "3 travellers");
+  assertStringIncludes(email.html, "We received your payment for Summer Spiti. Your booking is paid in full.");
+  assertEquals(email.html.includes("Booking confirmed: Summer Spiti"), false);
+  assertEquals(email.html.includes("Payment received in full. Your booking is confirmed."), false);
   assertEquals(email.html.includes("Trip Type:"), false);
-  assertStringIncludes(
-    email.html,
-    "Please review the booking summary below, including your traveller details, selected variant, and payment information.",
-  );
+  assertEquals(email.html.includes("We are delighted"), false);
+  assertEquals(email.html.includes("Please review the booking summary"), false);
+  assertEquals(email.html.includes("Thank you for choosing Trip With Nomads"), false);
+  assertStringIncludes(email.html, "Trip options");
   assertStringIncludes(email.html, "2 x Double | SUV");
   assertStringIncludes(email.html, "1 x Quad | Bike");
+  assertEquals(email.html.split("Double | SUV").length - 1, 1);
+  assertEquals(email.html.split("Quad | Bike").length - 1, 1);
   assertStringIncludes(email.html, "Discount (NOMAD10)");
   assertStringIncludes(email.html, "₹24,780.00");
   assertStringIncludes(email.html, "#08b1ff");
@@ -120,13 +121,42 @@ Deno.test("builds a designed paid email with booking details", () => {
     'href="https://tripwithnomads.com/cancellation-refund-policy"',
   );
   assertStringIncludes(email.html, 'href="https://tripwithnomads.com"');
-  assertStringIncludes(email.html, "Unsubscribe");
-  assertEquals(
-    email.headers?.["List-Unsubscribe"],
-    "<mailto:support@tripwithnomads.com?subject=Unsubscribe%20from%20Trip%20With%20Nomads%20emails>",
+  assertEquals(email.html.includes("Unsubscribe"), false);
+  assertEquals(email.headers?.["List-Unsubscribe"], undefined);
+  assertStringIncludes(email.text, "We received your payment for Summer Spiti. Your booking is paid in full.");
+  assertEquals(email.text.includes("Booking and payment messages may still be sent"), false);
+  assertStringIncludes(email.text, "Travellers: 3");
+  assertStringIncludes(
+    email.text,
+    "Travellers:\n- Guest User\n- A <Guest>\n- Third Traveller\n\nTrip options:\n- 2 x Double | SUV",
   );
-  assertStringIncludes(email.text, "Pax: 3 pax");
+  assertEquals(email.html.includes("Variant selections"), false);
+  assertEquals(email.text.includes("Pax:"), false);
+  assertEquals(email.text.includes("Selections:"), false);
+  assertEquals(email.text.includes("- A <Guest> | Quad | Bike"), false);
   assertStringIncludes(email.text, "Payment reference: pay_123");
+});
+
+Deno.test("payment email omits empty traveller and trip-option filler", () => {
+  const booking = {
+    ...pendingBooking,
+    travellers: [],
+    payment_breakdown: [],
+    payment_status: "paid",
+    settlement_status: "fully_paid",
+    paid_amount: 24780,
+  };
+  const email = buildPaymentEmail(
+    pendingBooking,
+    booking,
+    "Summer Spiti",
+  );
+
+  assert(email);
+  assertEquals(email.html.includes("Selection details are recorded with your booking."), false);
+  assertEquals(email.html.includes("No variant breakdown available."), false);
+  assertEquals(email.text.includes("Selection details are recorded with your booking."), false);
+  assertEquals(email.text.includes("No variant breakdown available."), false);
 });
 
 Deno.test("builds a partial-payment email with the balance due", () => {
@@ -152,31 +182,14 @@ Deno.test("builds a partial-payment email with the balance due", () => {
   );
   assertStringIncludes(email.html, "25% advance payment");
   assertStringIncludes(email.html, "Balance due");
-  assertStringIncludes(email.html, "Important payment information");
-  assertStringIncludes(email.html, "TRIP WITH NOMADS");
-  assertStringIncludes(email.html, "8447333965");
-  assertStringIncludes(email.html, "KKBK0004369");
-  assertStringIncludes(email.html, "KOTAK MAHINDRA BANK");
-  assertStringIncludes(email.html, "9318405401@kotak");
-  assertStringIncludes(
-    email.html,
-    'href="https://maps.app.goo.gl/TS9umsDXBHxs6K2d6"',
-  );
-  assertStringIncludes(email.html, "Ballabgargh, Faridabad, Haryana, 121004");
-  assertStringIncludes(
-    email.text,
-    "The pending amount must be cleared at least 14 days prior to your travel date.",
-  );
+  assertStringIncludes(email.html, "We received your advance for Summer Spiti. ₹18,585.00 remains due.");
+  assertStringIncludes(email.html, "Balance due for Summer Spiti: ₹18,585.00.");
+  assertEquals(email.html.includes("14 days"), false);
+  assertEquals(email.html.includes("Bank details"), false);
+  assertEquals(email.html.includes("8447333965"), false);
+  assertEquals(email.text.includes("14 days"), false);
+  assertEquals(email.text.includes("Account number:"), false);
   assertStringIncludes(email.text, "Balance due: ₹18,585.00");
-  assertStringIncludes(email.text, "Account name: TRIP WITH NOMADS");
-  assertStringIncludes(email.text, "Account number: 8447333965");
-  assertStringIncludes(email.text, "IFSC code: KKBK0004369");
-  assertStringIncludes(email.text, "Bank: KOTAK MAHINDRA BANK");
-  assertStringIncludes(email.text, "UPI ID: 9318405401@kotak");
-  assertStringIncludes(
-    email.text,
-    "Map: https://maps.app.goo.gl/TS9umsDXBHxs6K2d6",
-  );
 });
 
 Deno.test("builds a failed email with the signed retry destination", () => {
@@ -199,13 +212,14 @@ Deno.test("builds a failed email with the signed retry destination", () => {
   assert(email);
   assertEquals(
     email.subject,
-    "Action needed: complete payment | TWN-2026-00123",
+    "Payment not completed | TWN-2026-00123",
   );
   assertStringIncludes(
     email.html,
     'src="https://framerusercontent.com/assets/jtbxonFosA8D3IAyIFdpHJMXUPI.gif" alt="Payment not completed"',
   );
-  assertStringIncludes(email.html, "not confirmed yet");
+  assertStringIncludes(email.html, "We couldn’t confirm your payment for Summer Spiti. If your bank shows a debit, contact us before trying again.");
+  assertEquals(email.html.includes("Please review the booking summary"), false);
   assertStringIncludes(email.html, "Try payment again");
   assertStringIncludes(email.html, "status_token=abc");
   assertStringIncludes(email.text, "Try payment again: " + retryUrl);

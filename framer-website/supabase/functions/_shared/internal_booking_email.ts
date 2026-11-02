@@ -278,6 +278,13 @@ export function buildInternalBookingEmail(
   const eventTimestamp = text(input.occurredAt) || new Date().toISOString()
   const paymentId = text(booking.payment_gateway_payment_id) || text(booking.payment_gateway_txn_id)
   const orderId = text(booking.payment_gateway_order_or_ref_id)
+  const paymentStatus = text(booking.payment_status).toLowerCase()
+  const isUnpaid = ["pending", "failed"].includes(paymentStatus) ||
+    text(booking.settlement_status).toLowerCase() === "pending"
+  const balanceDue = isUnpaid && booking.total_amount !== null &&
+      booking.total_amount !== undefined && Number.isFinite(Number(booking.total_amount))
+    ? Math.max(0, number(booking.total_amount) - number(booking.paid_amount))
+    : number(booking.due_amount)
   const errorDetails = [text(input.errorCode), text(input.errorMessage)].filter(Boolean).join(" — ")
   const statusUrl = normalizeUrl(input.statusUrl)
   const retryUrl = normalizeUrl(input.retryUrl)
@@ -311,7 +318,7 @@ export function buildInternalBookingEmail(
     row("Trip total", formatAmount(booking.total_amount)),
     row("Payable now", formatAmount(booking.payable_now_amount)),
     row("Paid amount", formatAmount(booking.paid_amount)),
-    row("Balance due", formatAmount(booking.due_amount)),
+    row("Balance due", formatAmount(balanceDue)),
     row("Provider", booking.payment_provider),
     row("Payment reference", paymentId),
     row("Order reference", orderId),
@@ -370,7 +377,7 @@ export function buildInternalBookingEmail(
       `Trip total: ${formatAmount(booking.total_amount)}`,
       `Payable now: ${formatAmount(booking.payable_now_amount)}`,
       `Paid amount: ${formatAmount(booking.paid_amount)}`,
-      `Balance due: ${formatAmount(booking.due_amount)}`,
+      `Balance due: ${formatAmount(balanceDue)}`,
       `Provider: ${text(booking.payment_provider) || "Not available"}`,
       `Payment reference: ${paymentId || "Not available"}`,
       `Order reference: ${orderId || "Not available"}`,

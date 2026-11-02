@@ -1,5 +1,16 @@
 import { assertEquals, assertThrows } from "https://deno.land/std@0.224.0/assert/mod.ts"
-import { buildWebsiteBillingSnapshot, calculateWebsiteBookingTotals, selectWebsiteDiscount } from "./booking-tax.ts"
+import {
+    buildWebsiteBillingSnapshot,
+    calculateWebsiteBookingTotals,
+    selectWebsiteDiscount,
+    websiteTaxLabelForIssuer,
+} from "./booking-tax.ts"
+
+Deno.test("status tax labels show the saved rates and avoid guessing for legacy bookings", () => {
+    assertEquals(websiteTaxLabelForIssuer("TWN"), "GST (5%)")
+    assertEquals(websiteTaxLabelForIssuer("NTC"), "GST (5%) + TCS (2%)")
+    assertEquals(websiteTaxLabelForIssuer(null), "Taxes included")
+})
 
 Deno.test("TWN checkout billing snapshot reconciles GST, coupon discount, and booking total", () => {
     const totals = calculateWebsiteBookingTotals({
@@ -47,6 +58,7 @@ Deno.test("NTC checkout adds TCS on taxable amount plus GST before discount", ()
     assertEquals(totals.tcsAmount, 210)
     assertEquals(totals.taxAmount, 710)
     assertEquals(totals.totalAmount, 9710)
+    assertEquals(totals.taxLabel, "GST (5%) + TCS (2%)")
 })
 
 Deno.test("billing rejects unsafe money and discounts larger than the catalogue subtotal", () => {
