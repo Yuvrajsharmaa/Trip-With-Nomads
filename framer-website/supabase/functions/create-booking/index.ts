@@ -1431,9 +1431,11 @@ serve(async (req) => {
         }
 
         if (String(data.payment_status || "").trim().toLowerCase() === "paid") {
-            await sendBookingCreatedNotification(
-                firstNonEmpty(paymentAttempt.provider_order_id, data.payment_gateway_order_or_ref_id),
-            )
+            if (!replayed) {
+                await sendBookingCreatedNotification(
+                    firstNonEmpty(paymentAttempt.provider_order_id, data.payment_gateway_order_or_ref_id),
+                )
+            }
             return new Response(JSON.stringify({ ...responsePayload, already_paid: true }), {
                 status: 200,
                 headers: { ...corsHeaders, "Content-Type": "application/json" },

@@ -4,6 +4,7 @@ import {
 } from "https://deno.land/std@0.224.0/assert/mod.ts"
 import {
     ensurePaymentAttemptOrder,
+    isRazorpayOrderConfirmedUnpaid,
     recoverPaymentAttemptForRetry,
     reactivatePayablePaymentAttempt,
 } from "./payment_attempt_order.ts"
@@ -479,6 +480,84 @@ Deno.test("retry reactivates the same failed attempt and reuses its unpaid provi
     assertEquals(supabase.row.provider_order_id, canonicalOrder.id)
     assertEquals(supabase.row.expires_at, "2026-11-01T00:30:00.000Z")
     assertEquals(methods, ["GET", "GET"])
+})
+
+Deno.test("a new retry is safe only after Razorpay confirms every payment on the prior order failed", async () => {
+    const existing = attempt("failed", canonicalOrder.id)
+    const request: typeof fetch = async (input) => {
+        const url = new URL(String(input))
+        if (url.pathname.endsWith("/payments")) {
+            return new Response(JSON.stringify({
+                count: 2,
+                items: [
+                    { id: "pay_failed_1", order_id: canonicalOrder.id, status: "failed" },
+                    { id: "pay_failed_2", order_id: canonicalOrder.id, status: "failed" },
+                ],
+            }), { status: 200 })
+        }
+        return new Response(JSON.stringify({
+            ...canonicalOrder,
+            status: "attempted",
+            attempts: 2,
+            amount_paid: 0,
+            amount_due: 120000,
+        }), { status: 200 })
+    }
+
+    assertEquals(await isRazorpayOrderConfirmedUnpaid({
+        attempt: existing,
+        bookingId: "booking-1",
+        amount: 1200,
+        currency: "INR",
+        credentials: shared.credentials,
+        request,
+    }), true)
+})
+
+Deno.test("a paid or unresolved payment on the prior order blocks a new retry", async () => {
+    const existing = attempt("failed", canonicalOrder.id)
+    const orders = [
+        {
+            ...canonicalOrder,
+            status: "paid",
+            attempts: 1,
+            amount_paid: 120000,
+            amount_due: 0,
+        },
+        {
+            ...canonicalOrder,
+            status: "attempted",
+            attempts: 1,
+            amount_paid: 0,
+            amount_due: 120000,
+        },
+    ]
+
+    for (const order of orders) {
+        const request: typeof fetch = async (input) => {
+            const url = new URL(String(input))
+            if (url.pathname.endsWith("/payments")) {
+                return new Response(JSON.stringify({
+                    count: 1,
+                    items: [{
+                        id: "pay_pending",
+                        order_id: canonicalOrder.id,
+                        status: "authorized",
+                    }],
+                }), { status: 200 })
+            }
+            return new Response(JSON.stringify(order), { status: 200 })
+        }
+
+        assertEquals(await isRazorpayOrderConfirmedUnpaid({
+            attempt: existing,
+            bookingId: "booking-1",
+            amount: 1200,
+            currency: "INR",
+            credentials: shared.credentials,
+            request,
+        }), false)
+    }
 })
 
 Deno.test("retry persists the new request identity when reusing a failed attempt", async () => {

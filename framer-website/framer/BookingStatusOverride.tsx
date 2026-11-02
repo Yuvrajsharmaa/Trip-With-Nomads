@@ -139,6 +139,13 @@ function getRetryRequestId(bookingId: string, attempt: any): string {
     }
 }
 
+function clearRetryRequestId(bookingId: string, attempt: any): void {
+    const attemptKey = String(attempt || "latest").trim() || "latest"
+    try {
+        window.sessionStorage.removeItem(`__twn_retry_request_id_v1:${bookingId}:${attemptKey}`)
+    } catch (_) {}
+}
+
 function retryApiUrl(): string {
     const runtime = resolveRuntimeConfig()
     return `${runtime.supabaseUrl}/functions/v1/retry-payment`
@@ -1203,6 +1210,7 @@ export function withRetryButton(Component): ComponentType {
     return (props: any) => {
         const [data, state] = useBooking()
         const [isRetrying, setIsRetrying] = useState(false)
+        const [retryError, setRetryError] = useState("")
         const retryLockRef = useRef(false)
 
         if (state === "error") {
@@ -1245,27 +1253,34 @@ export function withRetryButton(Component): ComponentType {
             if (isRetrying || retryLockRef.current) return
             retryLockRef.current = true
             setIsRetrying(true)
+            setRetryError("")
+            const attemptKey =
+                (data as any).active_payment_attempt_id ||
+                (data as any).payment_attempt_number ||
+                (data as any).payment_attempt ||
+                "latest"
 
             try {
-                const retryRequestId = getRetryRequestId(
-                    data.id,
-                    (data as any).active_payment_attempt_id ||
-                        (data as any).payment_attempt_number ||
-                        (data as any).payment_attempt ||
-                        "latest"
-                )
-                const res = await fetch(retryApiUrl(), {
+                let retryRequestId = getRetryRequestId(data.id, attemptKey)
+                const retryRequest = (requestId: string) => fetch(retryApiUrl(), {
                     method: "POST",
                     headers: retryApiHeaders(),
                     body: JSON.stringify({
                         booking_id: data.id,
                         email: String(data.email || "").trim(),
-                        retry_request_id: retryRequestId,
+                        retry_request_id: requestId,
                     }),
                 })
+                let res = await retryRequest(retryRequestId)
+                let payload = await res.json().catch(() => null)
+                if (!res.ok && payload?.code === "PAYMENT_ATTEMPT_FINISHED") {
+                    clearRetryRequestId(data.id, attemptKey)
+                    retryRequestId = getRetryRequestId(data.id, attemptKey)
+                    res = await retryRequest(retryRequestId)
+                    payload = await res.json().catch(() => null)
+                }
                 if (!res.ok) throw new Error(`Retry failed (${res.status})`)
 
-                const payload = await res.json().catch(() => null)
                 if (payload?.gateway === "razorpay" && payload?.razorpay?.order_id) {
                     await openRetryRazorpay(payload, data, () => {
                         retryLockRef.current = false
@@ -1297,47 +1312,51 @@ export function withRetryButton(Component): ComponentType {
                 console.error("[RetryPayment] Error:", err)
                 retryLockRef.current = false
                 setIsRetrying(false)
-                const runtime = resolveRuntimeConfig()
-                const domesticTripsBaseUrl = `${runtime.siteBaseUrl}/domestic-trips`
-                if (data.trip_id) {
-                    window.location.href = `${domesticTripsBaseUrl}/${data.trip_id}`
-                } else {
-                    window.location.href = domesticTripsBaseUrl
-                }
+                setRetryError("We couldn’t start the retry. Check payment status before trying again, especially if you were charged.")
             } finally {
                 // Keep the retry locked while the gateway modal is open or the browser is redirecting.
             }
         }
 
         return (
-            <div
-                onClick={handleRetry}
-                style={{
-                    cursor: isRetrying ? "wait" : "pointer",
-                    display: "inline-block",
-                    padding: "14px 32px",
-                    background: isRetrying
-                        ? "linear-gradient(135deg, #94a3b8, #64748b)"
-                        : "linear-gradient(135deg, #1b91c9, #0085c1)",
-                    color: "#fff",
-                    borderRadius: "12px",
-                    fontSize: "16px",
-                    fontWeight: 600,
-                    textAlign: "center" as const,
-                    marginTop: "16px",
-                    transition: "all 0.2s",
-                    opacity: isRetrying ? 0.7 : 1,
-                    pointerEvents: isRetrying ? "none" : "auto",
-                }}
-                onMouseEnter={(e) => {
-                    if (!isRetrying) (e.target as HTMLElement).style.opacity = "0.85"
-                }}
-                onMouseLeave={(e) => {
-                    if (!isRetrying) (e.target as HTMLElement).style.opacity = "1"
-                }}
-            >
-                {isRetrying ? "Retrying…" : "Try Again"}
-            </div>
+            <>
+                <div
+                    onClick={handleRetry}
+                    style={{
+                        cursor: isRetrying ? "wait" : "pointer",
+                        display: "inline-block",
+                        padding: "14px 32px",
+                        background: isRetrying
+                            ? "linear-gradient(135deg, #94a3b8, #64748b)"
+                            : "linear-gradient(135deg, #1b91c9, #0085c1)",
+                        color: "#fff",
+                        borderRadius: "12px",
+                        fontSize: "16px",
+                        fontWeight: 600,
+                        textAlign: "center" as const,
+                        marginTop: "16px",
+                        transition: "all 0.2s",
+                        opacity: isRetrying ? 0.7 : 1,
+                        pointerEvents: isRetrying ? "none" : "auto",
+                    }}
+                    onMouseEnter={(e) => {
+                        if (!isRetrying) (e.target as HTMLElement).style.opacity = "0.85"
+                    }}
+                    onMouseLeave={(e) => {
+                        if (!isRetrying) (e.target as HTMLElement).style.opacity = "1"
+                    }}
+                >
+                    {isRetrying ? "Retrying…" : "Try Again"}
+                </div>
+                {retryError && (
+                    <div
+                        role="alert"
+                        style={{ color: "#fecaca", fontSize: "14px", marginTop: "12px" }}
+                    >
+                        {retryError}
+                    </div>
+                )}
+            </>
         )
     }
 }

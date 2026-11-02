@@ -66,6 +66,19 @@ Deno.test("create-booking persists a checkout request and replays its attempt", 
         throw new Error("new website bookings must go through the CRM shared booking RPC")
     }
     assertStringIncludes(source, "already_paid")
+    const paidReplayBranchStart = source.indexOf(
+        'if (String(data.payment_status || "").trim().toLowerCase() === "paid")',
+    )
+    const paidReplayBranchEnd = source.indexOf(
+        'if (activeProvider === "razorpay")',
+        paidReplayBranchStart,
+    )
+    const paidReplayBranch = source.slice(paidReplayBranchStart, paidReplayBranchEnd)
+    const replayGuard = paidReplayBranch.indexOf("if (!replayed)")
+    const notificationCall = paidReplayBranch.indexOf("await sendBookingCreatedNotification(")
+    if (replayGuard < 0 || notificationCall < replayGuard) {
+        throw new Error("Paid idempotent replays must not resend the booking-created notification")
+    }
     assertStringIncludes(source, "PAYMENT_PROVIDER_UNSUPPORTED")
     assertStringIncludes(source, "BOOKING_CALLBACK_SHEET_ID")
     if (source.includes('Deno.env.get("GOOGLE_SHEET_ID_TRIPS")')) {

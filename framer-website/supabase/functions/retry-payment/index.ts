@@ -10,6 +10,7 @@ import {
 } from "../_shared/payment_idempotency.ts"
 import {
     ensurePaymentAttemptOrder,
+    isRazorpayOrderConfirmedUnpaid,
     PaymentOrderInProgressError,
     recoverPaymentAttemptForRetry,
     reactivatePayablePaymentAttempt,
@@ -308,9 +309,15 @@ Deno.serve(async (req) => {
                 status: replayAttempt.status,
                 expiresAt: replayAttempt.expires_at,
             })
+            if (["failed", "expired"].includes(replayStatus)) {
+                return responseJson({
+                    error: "This retry request has already ended. Start a fresh retry from the booking status page.",
+                    code: "PAYMENT_ATTEMPT_FINISHED",
+                }, 409)
+            }
             if (
                 replayAttempt.provider_order_id &&
-                (replayIsStale || ["failed", "expired"].includes(replayStatus))
+                replayIsStale
             ) {
                 try {
                     const resumed = await reactivatePayablePaymentAttempt({
@@ -393,7 +400,40 @@ Deno.serve(async (req) => {
         if (
             paymentProvider === "razorpay" &&
             latestAttempt?.provider_order_id &&
-            (latestIsStale || ["failed", "expired"].includes(latestStatus))
+            ["failed", "expired"].includes(latestStatus)
+        ) {
+            retryPaymentCredentials = razorpayCredentials()
+            if (!retryPaymentCredentials.keyId || !retryPaymentCredentials.keySecret) {
+                return responseJson({
+                    error: "Razorpay payment configuration missing",
+                    code: "PAYMENT_CONFIGURATION_MISSING",
+                }, 503)
+            }
+            let orderConfirmedUnpaid = false
+            try {
+                orderConfirmedUnpaid = await isRazorpayOrderConfirmedUnpaid({
+                    attempt: latestAttempt,
+                    bookingId: String(booking.id),
+                    amount: amountToRetry,
+                    currency: retryCurrency,
+                    credentials: retryPaymentCredentials,
+                })
+            } catch {
+                return responseJson({
+                    error: "The previous Razorpay payment could not be verified. Check its status before retrying.",
+                    code: "PAYMENT_RECONCILIATION_PENDING",
+                }, 409)
+            }
+            if (!orderConfirmedUnpaid) {
+                return responseJson({
+                    error: "The previous Razorpay payment needs status reconciliation before another collection can start.",
+                    code: "PAYMENT_RECONCILIATION_PENDING",
+                }, 409)
+            }
+        } else if (
+            paymentProvider === "razorpay" &&
+            latestAttempt?.provider_order_id &&
+            latestIsStale
         ) {
             retryPaymentCredentials = razorpayCredentials()
             if (!retryPaymentCredentials.keyId || !retryPaymentCredentials.keySecret) {
@@ -427,9 +467,10 @@ Deno.serve(async (req) => {
             latestState = reusableAttempt
         } else if (
             latestAttempt &&
+            !latestAttempt.provider_order_id &&
             (latestIsStale || ["failed", "expired"].includes(latestStatus))
         ) {
-            if (paymentProvider === "razorpay" && !latestAttempt.provider_order_id) {
+            if (paymentProvider === "razorpay") {
                 retryPaymentCredentials = razorpayCredentials()
                 if (!retryPaymentCredentials.keyId || !retryPaymentCredentials.keySecret) {
                     return responseJson({
