@@ -820,6 +820,7 @@ serve(async (req) => {
         let data: any = existingBooking
         let crmTripCatalogId = ""
         let crmTripNameSnapshot = ""
+        let crmTripSource = "operations"
         let billingIssuer: "TWN" | "NTC" | null = null
         let billingSnapshot: any = null
         let commercialSnapshot: any = null
@@ -907,6 +908,9 @@ serve(async (req) => {
             const pricingRows = catalogPricing.pricingRows
             crmTripCatalogId = catalogPricing.catalogTrip.id
             crmTripNameSnapshot = catalogPricing.catalogTrip.title
+            crmTripSource = catalogPricing.source === "legacy_public_prices"
+                ? "website_legacy_pricing"
+                : "operations"
             billingIssuer = resolveWebsiteFinanceIssuer(catalogPricing.catalogTrip)
             if (!billingIssuer) {
                 return new Response(
@@ -956,16 +960,18 @@ serve(async (req) => {
             if (basePricing.missingSharings.length > 0 || basePricing.lineItems.length !== canonicalTravellers.length) {
                 throw new Error("Pricing variant or traveller combination is unavailable")
             }
-            commercialSnapshot = buildWebsiteCommercialSnapshot({
-                departureDate,
-                lineItems: basePricing.lineItems,
-                pricingRows,
-            })
-            if (!commercialSnapshot) {
-                return new Response(
-                    JSON.stringify({ error: "The selected Operations prices changed. Refresh checkout and try again." }),
-                    { status: 409, headers: { ...corsHeaders, "Content-Type": "application/json" } },
-                )
+            if (catalogPricing.source === "operations_departures") {
+                commercialSnapshot = buildWebsiteCommercialSnapshot({
+                    departureDate,
+                    lineItems: basePricing.lineItems,
+                    pricingRows,
+                })
+                if (!commercialSnapshot) {
+                    return new Response(
+                        JSON.stringify({ error: "The selected Operations prices changed. Refresh checkout and try again." }),
+                        { status: 409, headers: { ...corsHeaders, "Content-Type": "application/json" } },
+                    )
+                }
             }
             resolvedTravellers = basePricing.lineItems.map((item) => {
                 const source = canonicalTravellers.find((traveller) => Number(traveller.id) === Number(item.traveller_id))
@@ -1160,6 +1166,7 @@ serve(async (req) => {
                     lead_id: null,
                     sales_owner_id: null,
                     trip_catalog_id: crmTripCatalogId,
+                    trip_source: crmTripSource,
                     trip_name_snapshot: crmTripNameSnapshot,
                     finance_issuer: billingIssuer,
                     billing_snapshot: billingSnapshot,
