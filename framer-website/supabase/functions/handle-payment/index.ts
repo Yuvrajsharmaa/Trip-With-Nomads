@@ -1,4 +1,10 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts"
+import {
+    listBookingStatusSecrets,
+    resolveBookingStatusSecret,
+} from "../_shared/booking_status_token.ts"
+import { razorpayCredentials } from "../_shared/razorpay.ts"
+import { resolveCallbackStatusToken } from "./callback_status_token.ts"
 import { buildPaymentStatusRedirectUrl } from "./redirect_url.ts"
 const corsHeaders = {
     "Access-Control-Allow-Origin": "*",
@@ -73,6 +79,22 @@ serve(async (req) => {
         const input = await readRedirectInput(req)
         const bookingId = firstNonEmpty(input.booking_id, input.udf1)
         const suppliedToken = firstNonEmpty(input.status_token)
+        const credentials = razorpayCredentials()
+        let statusToken = suppliedToken
+        try {
+            statusToken = await resolveCallbackStatusToken({
+                bookingId,
+                suppliedToken,
+                statusSecrets: listBookingStatusSecrets(),
+                statusSecret: resolveBookingStatusSecret(credentials.keySecret),
+                credentials,
+                razorpayOrderId: firstNonEmpty(input.razorpay_order_id),
+                razorpayPaymentId: firstNonEmpty(input.razorpay_payment_id),
+                razorpaySignature: firstNonEmpty(input.razorpay_signature),
+            })
+        } catch {
+            console.warn("[handle-payment] verified callback token refresh unavailable")
+        }
 
         // The callback is intentionally not a payment decision point. It only
         // carries the browser to the status UI; the signed webhook owns all
@@ -85,7 +107,7 @@ serve(async (req) => {
         const statusPath = isPaymentFailureCallback(input)
             ? "/payment-failed"
             : firstNonEmpty(Deno.env.get("PAYMENT_STATUS_PATH"), "/payment-success")
-        const redirectUrl = buildPaymentStatusRedirectUrl(siteBase, statusPath, bookingId, suppliedToken)
+        const redirectUrl = buildPaymentStatusRedirectUrl(siteBase, statusPath, bookingId, statusToken)
         return Response.redirect(redirectUrl, 303)
     } catch (error: any) {
         console.error("[handle-payment] redirect adapter failed", error)

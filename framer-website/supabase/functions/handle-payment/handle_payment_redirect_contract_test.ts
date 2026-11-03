@@ -13,12 +13,13 @@ Deno.test("handle-payment is redirect-only", async () => {
     assert(!source.includes("callback_orphan"))
 })
 
-Deno.test("handle-payment only forwards a supplied status token", async () => {
+Deno.test("handle-payment uses verified callback tokens and never mints from a booking UUID", async () => {
     const source = await Deno.readTextFile(new URL("./index.ts", import.meta.url))
 
-    assert(source.includes('buildPaymentStatusRedirectUrl(siteBase, statusPath, bookingId, suppliedToken)'))
+    assert(source.includes("resolveCallbackStatusToken({"))
+    assert(source.includes('buildPaymentStatusRedirectUrl(siteBase, statusPath, bookingId, statusToken)'))
     assert(!source.includes("issueBookingStatusToken"))
-    assert(!source.includes("resolveBookingStatusSecret"))
+    assert(source.includes("resolveBookingStatusSecret"))
 })
 
 Deno.test("handle-payment redirects with a supplied signed status token", () => {
