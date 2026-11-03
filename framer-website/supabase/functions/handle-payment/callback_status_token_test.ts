@@ -206,6 +206,45 @@ Deno.test("does not refresh a status token from an old signed payment callback",
     assertEquals(token, "")
 })
 
+Deno.test("does not refresh when Razorpay's payment does not match the signed callback pair", async () => {
+    const signature = await checkoutSignature()
+    for (
+        const payment of [
+            {
+                id: "pay_different123",
+                order_id: orderId,
+                created_at: Math.floor(Date.now() / 1000),
+            },
+            {
+                id: paymentId,
+                order_id: "order_different123",
+                created_at: Math.floor(Date.now() / 1000),
+            },
+        ]
+    ) {
+        const request: typeof fetch = async (input) => {
+            if (String(input).endsWith(`/orders/${orderId}/payments`)) {
+                return new Response(
+                    JSON.stringify({ count: 1, items: [payment] }),
+                    { status: 200 },
+                )
+            }
+            return new Response(
+                JSON.stringify({
+                    id: orderId,
+                    notes: { booking_id: bookingId },
+                }),
+                { status: 200 },
+            )
+        }
+        const token = await resolveCallbackStatusToken({
+            ...callbackParams({ razorpaySignature: signature }),
+            request,
+        })
+        assertEquals(token, "")
+    }
+})
+
 Deno.test("does not fetch or issue a token for a malformed checkout signature", async () => {
     let calls = 0
     const token = await resolveCallbackStatusToken({
