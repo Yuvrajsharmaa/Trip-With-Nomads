@@ -6,6 +6,7 @@ export type StoredPaymentEmailPayload = {
   html: string
   text: string
   idempotencyKey: string
+  settlementStatus?: string
   headers?: Record<string, string>
 }
 
@@ -27,6 +28,7 @@ export function parseStoredPaymentEmailPayload(value: unknown): StoredPaymentEma
   const html = String(candidate.html || "")
   const text = String(candidate.text || "")
   const idempotencyKey = String(candidate.idempotencyKey || "").trim()
+  const settlementStatus = String(candidate.settlementStatus || "").trim().toLowerCase()
   if (!to || !subject || !html || !text || !idempotencyKey) return null
   const rawHeaders = candidate.headers
   const headers = rawHeaders && typeof rawHeaders === "object" && !Array.isArray(rawHeaders)
@@ -36,7 +38,15 @@ export function parseStoredPaymentEmailPayload(value: unknown): StoredPaymentEma
         return result
       }, {} as Record<string, string>)
     : undefined
-  return { to, subject, html, text, idempotencyKey, headers }
+  return {
+    to,
+    subject,
+    html,
+    text,
+    idempotencyKey,
+    ...(settlementStatus ? { settlementStatus } : {}),
+    headers,
+  }
 }
 
 export function serializePaymentEmailPayload(payload: StoredPaymentEmailPayload): Record<string, unknown> {
@@ -46,6 +56,7 @@ export function serializePaymentEmailPayload(payload: StoredPaymentEmailPayload)
     html: payload.html,
     text: payload.text,
     idempotencyKey: payload.idempotencyKey,
+    ...(payload.settlementStatus ? { settlementStatus: payload.settlementStatus } : {}),
     headers: payload.headers || undefined,
   }
 }
@@ -79,6 +90,30 @@ export async function shouldSuppressFailurePaymentEmailForCurrentBooking(params:
   if (!current.data?.payment_status) throw new Error("Current booking payment status could not be verified")
 
   return shouldSuppressFailurePaymentEmail(params.eventName, current.data.payment_status)
+}
+
+export async function shouldSuppressStalePartialPaymentEmailForCurrentBooking(params: {
+  supabase: any
+  booking: Record<string, unknown>
+  payload: StoredPaymentEmailPayload
+}): Promise<boolean> {
+  const storedSettlement = String(params.payload.settlementStatus || "").trim().toLowerCase()
+  const isPartialEmail = storedSettlement === "partially_paid" ||
+    (!storedSettlement && /^Advance received:/i.test(params.payload.subject))
+  if (!isPartialEmail) return false
+
+  const current = await params.supabase
+    .from("bookings")
+    .select("payment_status, settlement_status, due_amount")
+    .eq("id", params.booking.id)
+    .maybeSingle()
+  if (current.error) throw current.error
+  if (!current.data?.payment_status) throw new Error("Current booking payment status could not be verified")
+
+  const dueAmount = current.data.due_amount == null ? Number.NaN : Number(current.data.due_amount)
+  const isSettled = String(current.data.settlement_status || "").trim().toLowerCase() === "fully_paid" ||
+    (Number.isFinite(dueAmount) && dueAmount <= 0)
+  return isPaidStatus(current.data.payment_status) && isSettled
 }
 
 export function classifyEmailDeliveryResult(

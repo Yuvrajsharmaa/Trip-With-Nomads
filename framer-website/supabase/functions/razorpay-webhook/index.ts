@@ -43,6 +43,7 @@ import {
     safeEmailProjectionError,
     shouldSuppressFailurePaymentEmail,
     shouldSuppressFailurePaymentEmailForCurrentBooking,
+    shouldSuppressStalePartialPaymentEmailForCurrentBooking,
     serializePaymentEmailPayload,
     type StoredPaymentEmailPayload,
 } from "../_shared/payment_email_delivery.ts"
@@ -693,7 +694,21 @@ async function sendPaymentEmailProjection(params: {
 
         try {
             let payload = parseStoredPaymentEmailPayload(currentEvent.email_payload)
-            if (!payload) {
+            let stalePartialEmailSuppressed = false
+            if (payload && await shouldSuppressStalePartialPaymentEmailForCurrentBooking({
+                supabase: params.supabase,
+                booking: params.booking,
+                payload,
+            })) {
+                await updatePaymentEvent(params.supabase, eventRow.id, {
+                    email_sync_status: "not_required",
+                    email_payload: null,
+                    email_error: null,
+                })
+                payload = null
+                stalePartialEmailSuppressed = true
+            }
+            if (!payload && !stalePartialEmailSuppressed) {
                 const previousState = currentEvent.email_previous_state && typeof currentEvent.email_previous_state === "object"
                     ? currentEvent.email_previous_state
                     : {}
