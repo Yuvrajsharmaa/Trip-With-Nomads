@@ -45,6 +45,12 @@ Deno.test("create-booking persists a checkout request and replays its attempt", 
     if (paidWithoutAttempt < 0 || paidWithoutAttempt > reservationCall) {
         throw new Error("A paid booking replay without an attempt must refresh its request key before reserving another payment")
     }
+    const paidWithoutAttemptBranch = source.slice(
+        paidWithoutAttempt,
+        source.indexOf("if (!bookingIsPaid && currentBookingPaymentAmountMinor === null)", paidWithoutAttempt),
+    )
+    assertStringIncludes(paidWithoutAttemptBranch, "status_token: bookingStatusToken.token")
+    assertStringIncludes(paidWithoutAttemptBranch, 'code: "BOOKING_STATUS_UNAVAILABLE"')
     assertStringIncludes(source, 'code: "BOOKING_PRICE_CHANGED"')
     assertStringIncludes(source, 'isStarting ? "PAYMENT_ATTEMPT_STARTING"')
     assertStringIncludes(source, "gateway: activeProvider")
