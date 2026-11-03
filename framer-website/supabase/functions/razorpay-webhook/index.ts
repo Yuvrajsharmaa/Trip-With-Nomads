@@ -472,6 +472,45 @@ async function ignoreSupersededPaymentFailure(params: {
     })
 }
 
+async function suppressSupersededPaymentRecovery(supabase: any, eventRow: Record<string, any>): Promise<boolean> {
+    if (
+        String(eventRow.event_type || "").trim().toLowerCase() !== "payment.failed" ||
+        !eventRow.payment_attempt_id ||
+        !eventRow.provider_payment_id
+    ) return false
+
+    const attemptLookup = await supabase
+        .from("payment_attempts")
+        .select("*")
+        .eq("id", eventRow.payment_attempt_id)
+        .maybeSingle()
+    if (attemptLookup.error) throw attemptLookup.error
+    const attempt = attemptLookup.data
+    if (!attempt || !isSupersededPaymentFailure({
+        eventName: eventRow.event_type,
+        paymentId: eventRow.provider_payment_id,
+        attempt,
+    })) return false
+
+    const booking = await loadBooking(
+        supabase,
+        String(eventRow.booking_id || ""),
+        String(eventRow.provider_order_id || ""),
+    )
+    if (!booking) throw new Error("Booking for superseded payment recovery was not found")
+    await ignoreSupersededPaymentFailure({
+        supabase,
+        eventRow,
+        booking,
+        attempt,
+        orderId: String(eventRow.provider_order_id || ""),
+        paymentId: String(eventRow.provider_payment_id || ""),
+        amountMinor: Number(eventRow.amount_minor || 0),
+        currency: String(eventRow.currency || "INR"),
+    })
+    return true
+}
+
 async function loadBooking(supabase: any, bookingId: string, orderId: string): Promise<any> {
     if (bookingId) {
         const direct = await supabase.from("bookings").select("*").eq("id", bookingId).maybeSingle()
@@ -887,7 +926,7 @@ async function reconcilePayment(params: {
                 "superseded_payment_ids",
                 "cs",
                 `{${params.paymentId}}`,
-            )
+                ).or(`provider_payment_id.is.null,provider_payment_id.neq.${params.paymentId}`)
         }
     }
     const attemptUpdate = await attemptUpdateQuery.select("id").maybeSingle()
@@ -1254,6 +1293,14 @@ serve(async (req) => {
     let paymentApplied = false
     try {
         const claim = await claimPaymentEvent(supabase, eventRow)
+        if ((claim === "sheet" || claim === "email") && await suppressSupersededPaymentRecovery(supabase, eventRow)) {
+            return jsonResponse({
+                ok: true,
+                duplicate: true,
+                ignored: true,
+                reason: "superseded_payment_failure",
+            })
+        }
         if (claim === "done") return jsonResponse({ ok: true, duplicate: true })
 
         if (claim === "sheet") {

@@ -126,6 +126,11 @@ export async function reactivatePayablePaymentAttempt(params: {
         .eq("id", attemptId)
         .eq("provider_order_id", orderId)
         .in("status", ["creating", "pending", "failed", "expired"])
+    if (Object.prototype.hasOwnProperty.call(params.attempt, "updated_at")) {
+        updateQuery = params.attempt.updated_at == null
+            ? updateQuery.is("updated_at", null)
+            : updateQuery.eq("updated_at", params.attempt.updated_at)
+    }
     if (params.idempotencyKey) {
         const previousKey = String(params.attempt?.idempotency_key || "")
         updateQuery = previousKey
