@@ -37,14 +37,14 @@ export async function markPaymentAttemptOrderCreating(
     return update.data
 }
 
-export async function isRazorpayOrderConfirmedUnpaid(params: {
+export async function getRazorpayFailedPaymentIdsForRetry(params: {
     attempt: Record<string, any>
     bookingId: string
     amount: number
     currency: string
     credentials: RazorpayCredentials
     request?: typeof fetch
-}): Promise<boolean> {
+}): Promise<string[] | null> {
     const attemptId = String(params.attempt?.id || "")
     const orderId = String(params.attempt?.provider_order_id || "")
     const currency = String(params.currency || "INR").toUpperCase()
@@ -53,7 +53,7 @@ export async function isRazorpayOrderConfirmedUnpaid(params: {
         !orderId ||
         Number(params.attempt?.amount_minor) !== Math.round(params.amount * 100) ||
         String(params.attempt?.currency || "").toUpperCase() !== currency
-    ) return false
+    ) return null
 
     const order = await fetchRazorpayOrderById(orderId, params.credentials, params.request)
     if (!canReuseRazorpayOrderForRetry(order, {
@@ -61,17 +61,20 @@ export async function isRazorpayOrderConfirmedUnpaid(params: {
         currency,
         receipt: "twn_" + attemptId.replace(/-/g, "").slice(0, 32),
         notes: { booking_id: params.bookingId, attempt_id: attemptId },
-    })) return false
-    if (String(order.status).toLowerCase() === "created") return true
+    })) return null
+    if (String(order.status).toLowerCase() === "created") return []
 
     const payments = await fetchRazorpayPaymentsForOrder(orderId, params.credentials, params.request)
-    return payments.length === Number(order.attempts) &&
+    const allPaymentsFailed = payments.length === Number(order.attempts) &&
         payments.length > 0 &&
         payments.every((payment) =>
             Boolean(payment?.id) &&
             payment.order_id === orderId &&
             String(payment.status || "").toLowerCase() === "failed"
         )
+    return allPaymentsFailed
+        ? [...new Set(payments.map((payment) => String(payment.id).trim()))]
+        : null
 }
 
 type EnsurePaymentAttemptOrderParams = RazorpayOrderParams & {
@@ -96,11 +99,19 @@ export async function reactivatePayablePaymentAttempt(params: {
 }): Promise<Record<string, any> | null> {
     const attemptId = String(params.attempt?.id || "")
     const orderId = String(params.attempt?.provider_order_id || "")
-    if (!attemptId || !orderId || !await isRazorpayOrderConfirmedUnpaid(params)) return null
+    if (!attemptId || !orderId) return null
+    const failedPaymentIds = await getRazorpayFailedPaymentIdsForRetry(params)
+    if (failedPaymentIds === null) return null
 
     const now = params.now || new Date()
     const updatePayload: Record<string, unknown> = {
         status: "pending",
+        superseded_payment_ids: [...new Set([
+            ...(Array.isArray(params.attempt.superseded_payment_ids)
+                ? params.attempt.superseded_payment_ids
+                : []),
+            ...failedPaymentIds,
+        ].map((value) => String(value || "").trim()).filter(Boolean))],
         failed_at: null,
         error_code: null,
         error_message: null,

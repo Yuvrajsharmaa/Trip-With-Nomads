@@ -3,6 +3,7 @@ import {
     bookingStatusesAfterSuccessfulPayment,
     isAmountMatch,
     isPaidStatus,
+    isSupersededPaymentFailure,
     paymentAttemptMatchesBookingOrder,
     transitionPaymentStatus,
 } from "./payment_reconciliation.ts"
@@ -44,6 +45,30 @@ Deno.test("a late webhook is accepted only for the order on its booking attempt"
         bookingOrderId: "order-current",
         attemptOrderId: null,
         eventOrderId: "order-current",
+    }), true)
+})
+
+Deno.test("a delayed failure for a payment superseded by retry is ignored", () => {
+    const attempt = { superseded_payment_ids: ["pay_old"] }
+    assertEquals(isSupersededPaymentFailure({
+        eventName: "payment.failed",
+        paymentId: "pay_old",
+        attempt,
+    }), true)
+    assertEquals(isSupersededPaymentFailure({
+        eventName: "payment.failed",
+        paymentId: "pay_current",
+        attempt,
+    }), false)
+    assertEquals(isSupersededPaymentFailure({
+        eventName: "payment.captured",
+        paymentId: "pay_old",
+        attempt,
+    }), false)
+    assertEquals(isSupersededPaymentFailure({
+        eventName: "payment.failed",
+        paymentId: "pay_legacy_retry",
+        attempt: { status: "pending", provider_payment_id: "pay_legacy_retry" },
     }), true)
 })
 

@@ -4,7 +4,7 @@ import {
 } from "https://deno.land/std@0.224.0/assert/mod.ts"
 import {
     ensurePaymentAttemptOrder,
-    isRazorpayOrderConfirmedUnpaid,
+    getRazorpayFailedPaymentIdsForRetry,
     markPaymentAttemptOrderCreating,
     recoverPaymentAttemptForRetry,
     reactivatePayablePaymentAttempt,
@@ -548,11 +548,12 @@ Deno.test("retry reactivates the same failed attempt and reuses its unpaid provi
     assertEquals(resumed?.provider_order_id, canonicalOrder.id)
     assertEquals(resumed?.status, "pending")
     assertEquals(supabase.row.provider_order_id, canonicalOrder.id)
+    assertEquals(supabase.row.superseded_payment_ids, ["pay_failed"])
     assertEquals(supabase.row.expires_at, "2026-11-01T00:30:00.000Z")
     assertEquals(methods, ["GET", "GET"])
 })
 
-Deno.test("a new retry is safe only after Razorpay confirms every payment on the prior order failed", async () => {
+Deno.test("a new retry records every failed payment ID on the reused order", async () => {
     const existing = attempt("failed", canonicalOrder.id)
     const request: typeof fetch = async (input) => {
         const url = new URL(String(input))
@@ -574,14 +575,14 @@ Deno.test("a new retry is safe only after Razorpay confirms every payment on the
         }), { status: 200 })
     }
 
-    assertEquals(await isRazorpayOrderConfirmedUnpaid({
+    assertEquals(await getRazorpayFailedPaymentIdsForRetry({
         attempt: existing,
         bookingId: "booking-1",
         amount: 1200,
         currency: "INR",
         credentials: shared.credentials,
         request,
-    }), true)
+    }), ["pay_failed_1", "pay_failed_2"])
 })
 
 Deno.test("a paid or unresolved payment on the prior order blocks a new retry", async () => {
@@ -619,14 +620,14 @@ Deno.test("a paid or unresolved payment on the prior order blocks a new retry", 
             return new Response(JSON.stringify(order), { status: 200 })
         }
 
-        assertEquals(await isRazorpayOrderConfirmedUnpaid({
+        assertEquals(await getRazorpayFailedPaymentIdsForRetry({
             attempt: existing,
             bookingId: "booking-1",
             amount: 1200,
             currency: "INR",
             credentials: shared.credentials,
             request,
-        }), false)
+        }), null)
     }
 })
 

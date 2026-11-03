@@ -19,6 +19,7 @@ import {
     calculateSettlementStatus,
     isAmountMatch,
     isPaidStatus,
+    isSupersededPaymentFailure,
     paymentAttemptMatchesBookingOrder,
     transitionPaymentStatus,
 } from "../_shared/payment_reconciliation.ts"
@@ -439,6 +440,38 @@ async function updatePaymentEvent(supabase: any, eventId: string, patch: Record<
     return result.data
 }
 
+async function ignoreSupersededPaymentFailure(params: {
+    supabase: any
+    eventRow: Record<string, any>
+    booking: Record<string, any>
+    attempt: Record<string, any>
+    orderId: string
+    paymentId: string
+    amountMinor: number
+    currency: string
+}) {
+    return await updatePaymentEvent(params.supabase, String(params.eventRow.id), {
+        booking_id: params.booking.id,
+        payment_attempt_id: params.attempt.id,
+        provider_order_id: params.orderId,
+        provider_payment_id: params.paymentId || null,
+        amount_minor: params.amountMinor,
+        currency: params.currency,
+        verification_status: "verified",
+        processing_status: "ignored",
+        sheet_sync_status: "not_required",
+        email_sync_status: "not_required",
+        email_payload: null,
+        email_recipient: null,
+        email_idempotency_key: null,
+        email_error: null,
+        reconciliation_result: "ignored_superseded_payment_failure",
+        notes: "Delayed failure belongs to a payment superseded by retry",
+        processed_at: new Date().toISOString(),
+        error_message: null,
+    })
+}
+
 async function loadBooking(supabase: any, bookingId: string, orderId: string): Promise<any> {
     if (bookingId) {
         const direct = await supabase.from("bookings").select("*").eq("id", bookingId).maybeSingle()
@@ -847,9 +880,37 @@ async function reconcilePayment(params: {
         .from("payment_attempts")
         .update(attemptPatch)
         .eq("id", params.attempt.id)
-    if (!success) attemptUpdateQuery = attemptUpdateQuery.neq("status", "paid")
-    const attemptUpdate = await attemptUpdateQuery
+    if (!success) {
+        attemptUpdateQuery = attemptUpdateQuery.neq("status", "paid")
+        if (params.paymentId) {
+            attemptUpdateQuery = attemptUpdateQuery.not(
+                "superseded_payment_ids",
+                "cs",
+                `{${params.paymentId}}`,
+            )
+        }
+    }
+    const attemptUpdate = await attemptUpdateQuery.select("id").maybeSingle()
     if (attemptUpdate.error) throw attemptUpdate.error
+    if (!success && !attemptUpdate.data && params.paymentId) {
+        const currentAttempt = await params.supabase
+            .from("payment_attempts")
+            .select("superseded_payment_ids")
+            .eq("id", params.attempt.id)
+            .maybeSingle()
+        if (currentAttempt.error) throw currentAttempt.error
+        if (currentAttempt.data && isSupersededPaymentFailure({
+            eventName: params.eventName,
+            paymentId: params.paymentId,
+            attempt: currentAttempt.data,
+        })) {
+            return {
+                booking: params.booking,
+                reconciliationResult: "ignored_superseded_payment_failure",
+                notes: "Delayed failure belongs to a payment superseded by retry",
+            }
+        }
+    }
 
     const currentIsPaid = isPaidStatus(currentStatus)
     const activeAttemptId = firstNonEmpty(params.booking.active_payment_attempt_id)
@@ -1285,7 +1346,7 @@ serve(async (req) => {
 
         const booking = await loadBooking(supabase, identifiers.bookingId, identifiers.orderId)
         if (!booking) throw new InvalidWebhookError("Webhook booking is unknown")
-        const attempt = await loadPaymentAttempt(supabase, booking, identifiers.orderId, identifiers.paymentId)
+        let attempt = await loadPaymentAttempt(supabase, booking, identifiers.orderId, identifiers.paymentId)
         validateOwnership({ booking, attempt, orderId: identifiers.orderId, paymentId: identifiers.paymentId })
 
         const credentials = razorpayCredentials()
@@ -1313,6 +1374,36 @@ serve(async (req) => {
             throw new InvalidWebhookError(
                 `Razorpay currency ${gatewayState.currency} does not match expected ${expectedCurrency}`,
             )
+        }
+
+        const latestAttempt = await supabase
+            .from("payment_attempts")
+            .select("*")
+            .eq("id", attempt.id)
+            .maybeSingle()
+        if (latestAttempt.error) throw latestAttempt.error
+        if (!latestAttempt.data) throw new InvalidWebhookError("Payment attempt no longer exists")
+        attempt = latestAttempt.data
+        if (isSupersededPaymentFailure({
+            eventName,
+            paymentId: identifiers.paymentId,
+            attempt,
+        })) {
+            await ignoreSupersededPaymentFailure({
+                supabase,
+                eventRow,
+                booking,
+                attempt,
+                orderId: identifiers.orderId,
+                paymentId: identifiers.paymentId,
+                amountMinor: gatewayState.amountMinor,
+                currency: gatewayState.currency,
+            })
+            return jsonResponse({
+                ok: true,
+                ignored: true,
+                reason: "superseded_payment_failure",
+            })
         }
 
         eventRow = await updatePaymentEvent(supabase, eventRow.id, {
@@ -1347,6 +1438,23 @@ serve(async (req) => {
             amountMinor: gatewayState.amountMinor,
             currency: gatewayState.currency,
         })
+        if (reconciliation.reconciliationResult === "ignored_superseded_payment_failure") {
+            await ignoreSupersededPaymentFailure({
+                supabase,
+                eventRow,
+                booking,
+                attempt,
+                orderId: identifiers.orderId,
+                paymentId: identifiers.paymentId,
+                amountMinor: gatewayState.amountMinor,
+                currency: gatewayState.currency,
+            })
+            return jsonResponse({
+                ok: true,
+                ignored: true,
+                reason: "superseded_payment_failure",
+            })
+        }
         const reconciliationNotes = [
             reconciliation.notes,
             gatewayState.failureCode ? `Gateway code: ${gatewayState.failureCode}` : "",
