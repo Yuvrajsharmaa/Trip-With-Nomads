@@ -153,4 +153,10 @@ Deno.test("retry button supports failed payments and expired order setup", () =>
     const retry = source.slice(source.indexOf("export function withRetryButton"))
     assertStringIncludes(retry, "data.payment_retry_available !== true")
     assertStringIncludes(statusEndpoint, "payment_retry_available: paymentRetryAvailable")
+
+    const loaderStart = source.indexOf("if (!shouldShowBookingStatusContent(started, view)) {")
+    const loaderEnd = source.indexOf("return <Component {...props} />", loaderStart)
+    const loader = source.slice(loaderStart, loaderEnd)
+    assertStringIncludes(loader, "shouldShowPendingPaymentRetry(")
+    assertStringIncludes(loader, "<PaymentRetryAction data={data} pendingStatus />")
 })

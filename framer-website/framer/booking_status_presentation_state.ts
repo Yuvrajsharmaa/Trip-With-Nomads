@@ -43,6 +43,14 @@ export function shouldShowBookingStatusContent(
   return started && (view === "success" || view === "failed");
 }
 
+export function shouldShowPendingPaymentRetry(
+  started: boolean,
+  view: BookingStatusView,
+  retryAvailable: boolean,
+): boolean {
+  return started && view === "pending" && retryAvailable;
+}
+
 export function bookingStatusCopy(state: BookingStatusCopyState) {
   if (state === "pending") {
     return {

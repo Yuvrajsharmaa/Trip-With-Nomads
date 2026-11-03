@@ -5,6 +5,7 @@ import {
 import {
   bookingStatusDetailsReady,
   bookingStatusView,
+  shouldShowPendingPaymentRetry,
   verifiedStatusDestination,
 } from "./booking_status_presentation_state.ts";
 import * as statusPresentation from "./booking_status_presentation_state.ts";
@@ -93,6 +94,16 @@ Deno.test("booking content appears only after a terminal status is ready", () =>
   assertEquals(shouldShow(true, "unavailable"), false);
   assertEquals(shouldShow(true, "success"), true);
   assertEquals(shouldShow(true, "failed"), true);
+});
+
+Deno.test("pending status exposes retry only when the server marks the attempt retryable", () => {
+  assertEquals(shouldShowPendingPaymentRetry(true, "pending", true), true);
+  assertEquals(shouldShowPendingPaymentRetry(false, "pending", true), false);
+  assertEquals(shouldShowPendingPaymentRetry(true, "checking", true), false);
+  assertEquals(shouldShowPendingPaymentRetry(true, "unavailable", true), false);
+  assertEquals(shouldShowPendingPaymentRetry(true, "success", true), false);
+  assertEquals(shouldShowPendingPaymentRetry(true, "failed", true), false);
+  assertEquals(shouldShowPendingPaymentRetry(true, "pending", false), false);
 });
 
 Deno.test("payment confirmation copy distinguishes waiting from unavailable status", () => {
