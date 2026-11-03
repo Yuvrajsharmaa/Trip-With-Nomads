@@ -15,4 +15,18 @@ Deno.test("Razorpay webhook ignores failed payments superseded by a retry", asyn
     assertEquals(earlyDuplicateGate < source.indexOf('if (claim === "email")'), true)
     assertStringIncludes(source, 'current attempt could not be verified before failure email')
     assertStringIncludes(source, 'processing_status: "ignored"')
+    assertStringIncludes(source, "failureEvent && await suppressSupersededPaymentRecovery(params.supabase, eventRow)")
+
+    const sheetBranch = source.indexOf('if (claim === "sheet")')
+    const sheetGate = source.indexOf("if (await suppressSupersededPaymentRecovery(supabase, eventRow))", sheetBranch)
+    const sheetRetry = source.indexOf("await syncPaymentSheets({", sheetBranch)
+    assertEquals(sheetGate < sheetRetry, true)
+
+    const emailGate = source.indexOf("failureEvent && await suppressSupersededPaymentRecovery(params.supabase, eventRow)")
+    const emailSend = source.indexOf("const result = await sendResendEmail(payload)")
+    assertEquals(emailGate < emailSend, true)
+
+    const internalGate = source.indexOf("const supersededAttempt = await findSupersededPaymentAttempt(params.supabase, eventRow)")
+    const internalSend = source.indexOf("const internalStatus = await deliverInternalBookingNotification({")
+    assertEquals(internalGate < internalSend, true)
 })

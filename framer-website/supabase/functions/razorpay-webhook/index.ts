@@ -450,6 +450,14 @@ async function ignoreSupersededPaymentFailure(params: {
     amountMinor: number
     currency: string
 }) {
+    const currentEvent = await params.supabase
+        .from("payment_events")
+        .select("sheet_sync_status,sheet_synced_at,email_sync_status,email_payload,email_recipient,email_idempotency_key,email_provider_id,email_sent_at")
+        .eq("id", String(params.eventRow.id))
+        .maybeSingle()
+    if (currentEvent.error) throw currentEvent.error
+    const sheetWasSynced = String(currentEvent.data?.sheet_sync_status || "").toLowerCase() === "synced"
+    const emailWasSent = String(currentEvent.data?.email_sync_status || "").toLowerCase() === "sent"
     return await updatePaymentEvent(params.supabase, String(params.eventRow.id), {
         booking_id: params.booking.id,
         payment_attempt_id: params.attempt.id,
@@ -459,11 +467,14 @@ async function ignoreSupersededPaymentFailure(params: {
         currency: params.currency,
         verification_status: "verified",
         processing_status: "ignored",
-        sheet_sync_status: "not_required",
-        email_sync_status: "not_required",
-        email_payload: null,
-        email_recipient: null,
-        email_idempotency_key: null,
+        sheet_sync_status: sheetWasSynced ? "synced" : "not_required",
+        sheet_synced_at: sheetWasSynced ? currentEvent.data.sheet_synced_at : null,
+        email_sync_status: emailWasSent ? "sent" : "not_required",
+        email_payload: emailWasSent ? currentEvent.data.email_payload : null,
+        email_recipient: emailWasSent ? currentEvent.data.email_recipient : null,
+        email_idempotency_key: emailWasSent ? currentEvent.data.email_idempotency_key : null,
+        email_provider_id: emailWasSent ? currentEvent.data.email_provider_id : null,
+        email_sent_at: emailWasSent ? currentEvent.data.email_sent_at : null,
         email_error: null,
         reconciliation_result: "ignored_superseded_payment_failure",
         notes: "Delayed failure belongs to a payment superseded by retry",
@@ -472,12 +483,12 @@ async function ignoreSupersededPaymentFailure(params: {
     })
 }
 
-async function suppressSupersededPaymentRecovery(supabase: any, eventRow: Record<string, any>): Promise<boolean> {
+async function findSupersededPaymentAttempt(supabase: any, eventRow: Record<string, any>) {
     if (
         String(eventRow.event_type || "").trim().toLowerCase() !== "payment.failed" ||
         !eventRow.payment_attempt_id ||
         !eventRow.provider_payment_id
-    ) return false
+    ) return null
 
     const attemptLookup = await supabase
         .from("payment_attempts")
@@ -486,11 +497,16 @@ async function suppressSupersededPaymentRecovery(supabase: any, eventRow: Record
         .maybeSingle()
     if (attemptLookup.error) throw attemptLookup.error
     const attempt = attemptLookup.data
-    if (!attempt || !isSupersededPaymentFailure({
+    return attempt && isSupersededPaymentFailure({
         eventName: eventRow.event_type,
         paymentId: eventRow.provider_payment_id,
         attempt,
-    })) return false
+    }) ? attempt : null
+}
+
+async function suppressSupersededPaymentRecovery(supabase: any, eventRow: Record<string, any>): Promise<boolean> {
+    const attempt = await findSupersededPaymentAttempt(supabase, eventRow)
+    if (!attempt) return false
 
     const booking = await loadBooking(
         supabase,
@@ -611,22 +627,13 @@ async function sendPaymentEmailProjection(params: {
     )
     if (failureEvent && eventRow.payment_attempt_id && eventRow.provider_payment_id) {
         try {
-            const latestAttempt = await params.supabase
-                .from("payment_attempts")
-                .select("*")
-                .eq("id", eventRow.payment_attempt_id)
-                .maybeSingle()
-            if (latestAttempt.error) throw latestAttempt.error
-            if (latestAttempt.data && isSupersededPaymentFailure({
-                eventName: eventRow.event_type,
-                paymentId: eventRow.provider_payment_id,
-                attempt: latestAttempt.data,
-            })) {
+            const attempt = await findSupersededPaymentAttempt(params.supabase, eventRow)
+            if (attempt) {
                 await ignoreSupersededPaymentFailure({
                     supabase: params.supabase,
                     eventRow,
                     booking: params.booking,
-                    attempt: latestAttempt.data,
+                    attempt,
                     orderId: firstNonEmpty(eventRow.provider_order_id),
                     paymentId: firstNonEmpty(eventRow.provider_payment_id),
                     amountMinor: Number(eventRow.amount_minor || 0),
@@ -744,6 +751,9 @@ async function sendPaymentEmailProjection(params: {
                         })
                         customerDelivered = true
                     } else {
+                        if (failureEvent && await suppressSupersededPaymentRecovery(params.supabase, eventRow)) {
+                            return true
+                        }
                         const result = await sendResendEmail(payload)
                         const classified = classifyEmailDeliveryResult(result, true)
                         await updatePaymentEvent(params.supabase, eventRow.id, {
@@ -829,6 +839,22 @@ async function sendPaymentEmailProjection(params: {
     if (paymentStatus === "paid" || paymentStatus === "failed") {
         statusUrl = await bookingStatusUrl(params.booking, paymentStatus)
         if (paymentStatus === "failed") retryUrl = statusUrl
+    }
+    if (failureEvent) {
+        const supersededAttempt = await findSupersededPaymentAttempt(params.supabase, eventRow)
+        if (supersededAttempt) {
+            await ignoreSupersededPaymentFailure({
+                supabase: params.supabase,
+                eventRow,
+                booking: params.booking,
+                attempt: supersededAttempt,
+                orderId: firstNonEmpty(eventRow.provider_order_id),
+                paymentId: firstNonEmpty(eventRow.provider_payment_id),
+                amountMinor: Number(eventRow.amount_minor || 0),
+                currency: firstNonEmpty(eventRow.currency, "INR"),
+            })
+            return true
+        }
     }
     const internalStatus = await deliverInternalBookingNotification({
         supabase: params.supabase,
