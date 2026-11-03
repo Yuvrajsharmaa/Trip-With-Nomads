@@ -1,9 +1,11 @@
 import {
+    BOOKING_STATUS_TOKEN_TTL_SECONDS,
     issueBookingStatusToken,
     verifyBookingStatusToken,
 } from "../_shared/booking_status_token.ts"
 import {
     fetchRazorpayOrderById,
+    fetchRazorpayPaymentsForOrder,
     type RazorpayCredentials,
 } from "../_shared/razorpay.ts"
 
@@ -90,22 +92,39 @@ export async function resolveCallbackStatusToken(params: {
 
     const controller = new AbortController()
     const timeout = setTimeout(() => controller.abort(), 5000)
-    let order: Record<string, any>
+    let payment: Record<string, any> | undefined
     try {
-        order = await fetchRazorpayOrderById(
+        const request: typeof fetch = (input, init) =>
+            (params.request ?? fetch)(input, {
+                ...init,
+                signal: controller.signal,
+            })
+        const order = await fetchRazorpayOrderById(
             orderId,
             params.credentials,
-            (input, init) =>
-                (params.request ?? fetch)(input, {
-                    ...init,
-                    signal: controller.signal,
-                }),
+            request,
+        )
+        if (
+            String(order.notes?.booking_id || "").trim().toLowerCase() !==
+                bookingId
+        ) return ""
+        const payments = await fetchRazorpayPaymentsForOrder(
+            orderId,
+            params.credentials,
+            request,
+        )
+        payment = payments.find((candidate) =>
+            candidate.id === paymentId && candidate.order_id === orderId
         )
     } finally {
         clearTimeout(timeout)
     }
+    const paymentCreatedAt = Number(payment?.created_at)
+    const paymentAgeSeconds = Math.floor(Date.now() / 1000) - paymentCreatedAt
     if (
-        String(order.notes?.booking_id || "").trim().toLowerCase() !== bookingId
+        !Number.isSafeInteger(paymentCreatedAt) || paymentCreatedAt <= 0 ||
+        paymentAgeSeconds < 0 ||
+        paymentAgeSeconds > BOOKING_STATUS_TOKEN_TTL_SECONDS
     ) return ""
 
     const secret = String(
