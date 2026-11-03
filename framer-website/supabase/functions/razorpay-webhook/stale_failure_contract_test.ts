@@ -6,6 +6,11 @@ Deno.test("Razorpay webhook ignores failed payments superseded by a retry", asyn
     assertStringIncludes(source, "isSupersededPaymentFailure")
     assertStringIncludes(source, '"ignored_superseded_payment_failure"')
     assertStringIncludes(source, 'processing_status: "ignored"')
+    const ignoredClaim = source.slice(
+        source.indexOf('if (processing === "ignored")'),
+        source.indexOf('if (processing === "applied")'),
+    )
+    assertStringIncludes(ignoredClaim, 'emailStatus !== "sent"')
     const reconciliation = source.slice(
         source.indexOf("async function reconcilePayment"),
         source.indexOf("function bookingSheetId"),

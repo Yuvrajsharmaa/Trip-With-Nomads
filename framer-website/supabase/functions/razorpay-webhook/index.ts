@@ -390,7 +390,8 @@ async function claimPaymentEvent(supabase: any, row: any): Promise<"process" | "
         // Close older ignored rows that were reserved before email projection
         // was made explicitly terminal. Unsupported/rejected events never
         // send customer email and must not remain pending forever.
-        if (String(row?.email_sync_status || "").toLowerCase() !== "not_required") {
+        const emailStatus = String(row?.email_sync_status || "").toLowerCase()
+        if (emailStatus !== "not_required" && emailStatus !== "sent") {
             await updatePaymentEvent(supabase, row.id, {
                 email_sync_status: "not_required",
                 email_error: null,
