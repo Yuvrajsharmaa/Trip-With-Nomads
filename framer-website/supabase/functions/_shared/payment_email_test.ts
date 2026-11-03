@@ -235,6 +235,8 @@ Deno.test("builds a failed email with the signed retry destination", () => {
   assertStringIncludes(email.html, "Try payment again");
   assertStringIncludes(email.html, "status_token=abc");
   assertStringIncludes(email.text, "Try payment again: " + retryUrl);
+  assertEquals(email.html.includes("Bank details"), false);
+  assertEquals(email.text.includes("Account number:"), false);
 });
 
 Deno.test("uses the configured site URL for environment-safe email links", () => {

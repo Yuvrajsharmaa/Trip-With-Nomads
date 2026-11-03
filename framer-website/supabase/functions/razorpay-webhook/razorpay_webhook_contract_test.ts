@@ -36,6 +36,7 @@ Deno.test("Razorpay webhook verifies raw payloads and persists generic payment e
     assertStringIncludes(source, "sendResendEmail")
     assertStringIncludes(source, "sendPaymentEmailProjection")
     assertStringIncludes(source, "shouldSuppressFailurePaymentEmailForCurrentBooking")
+    assertStringIncludes(source, "shouldSuppressStalePartialPaymentEmailForCurrentBooking")
     assertStringIncludes(source, "BOOKING_CALLBACK_SHEET_ID")
     const eventSnapshot = source.indexOf("email_previous_state: emailPreviousState")
     const reconcile = source.indexOf("const reconciliation = await reconcilePayment")
@@ -60,6 +61,14 @@ Deno.test("Razorpay webhook verifies raw payloads and persists generic payment e
     const emailSend = source.indexOf("await sendResendEmail(payload)", failureEmailDispatchGuard)
     if (failureEmailDispatchGuard < 0 || emailSend < failureEmailDispatchGuard) {
         throw new Error("Failure email dispatch must recheck the current booking payment state")
+    }
+    const stalePartialEmailGuard = source.indexOf(
+        "await shouldSuppressStalePartialPaymentEmailForCurrentBooking(",
+        source.indexOf("let payload = parseStoredPaymentEmailPayload(currentEvent.email_payload)"),
+    )
+    const storedEmailSend = source.indexOf("await sendResendEmail(payload)", stalePartialEmailGuard)
+    if (stalePartialEmailGuard < 0 || storedEmailSend < stalePartialEmailGuard) {
+        throw new Error("A stored advance email must recheck current settlement before retrying")
     }
     if (sheetFailureReturn >= 0 && sheetFailureReturn < paymentEmailProjection) {
         throw new Error("Sheet projection failure must not skip customer payment email delivery")

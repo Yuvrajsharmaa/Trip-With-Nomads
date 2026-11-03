@@ -39,6 +39,7 @@ export type PaymentEmailContent = {
   html: string;
   text: string;
   idempotencyKey: string;
+  settlementStatus: string;
   headers?: Record<string, string>;
 };
 
@@ -686,5 +687,6 @@ export function buildPaymentEmail(
     text: textBody,
     idempotencyKey: "payment-" + paymentStatus + "-" + settlement + "-" +
       bookingId + "-" + (transactionId || "unknown"),
+    settlementStatus: settlement,
   };
 }
