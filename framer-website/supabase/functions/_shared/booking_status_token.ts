@@ -1,9 +1,10 @@
-const BOOKING_STATUS_TOKEN_TTL_SECONDS = 60 * 60 * 24 * 7 // 7 days
+export const BOOKING_STATUS_TOKEN_TTL_SECONDS = 60 * 60 * 24 * 7 // 7 days
 
 function isUuid(value: string): boolean {
-    return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
-        String(value || "").trim()
-    )
+    return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
+        .test(
+            String(value || "").trim(),
+        )
 }
 
 function timingSafeEqual(a: string, b: string): boolean {
@@ -18,25 +19,33 @@ function timingSafeEqual(a: string, b: string): boolean {
 function bytesToBase64Url(bytes: Uint8Array): string {
     let binary = ""
     for (const byte of bytes) binary += String.fromCharCode(byte)
-    return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "")
+    return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(
+        /=+$/g,
+        "",
+    )
 }
 
-async function signTokenPayload(payload: string, secret: string): Promise<string> {
+async function signTokenPayload(
+    payload: string,
+    secret: string,
+): Promise<string> {
     const digest = await crypto.subtle.digest(
         "SHA-256",
-        new TextEncoder().encode(`${payload}.${secret}`)
+        new TextEncoder().encode(`${payload}.${secret}`),
     )
     return bytesToBase64Url(new Uint8Array(digest))
 }
 
 export function resolveBookingStatusSecret(preferredFallback?: string): string {
-    const envSecret = String(Deno.env.get("BOOKING_STATUS_TOKEN_SECRET") || "").trim()
+    const envSecret = String(Deno.env.get("BOOKING_STATUS_TOKEN_SECRET") || "")
+        .trim()
     if (envSecret) return envSecret
     return String(preferredFallback || "").trim()
 }
 
 export function listBookingStatusSecrets(
-    getSecret: (name: string) => string | undefined = (name) => Deno.env.get(name),
+    getSecret: (name: string) => string | undefined = (name) =>
+        Deno.env.get(name),
 ): string[] {
     const candidates = [
         getSecret("BOOKING_STATUS_TOKEN_SECRET"),
@@ -60,12 +69,14 @@ export function listBookingStatusSecrets(
 export async function issueBookingStatusToken(
     bookingId: string,
     secret: string,
-    ttlSeconds = BOOKING_STATUS_TOKEN_TTL_SECONDS
+    ttlSeconds = BOOKING_STATUS_TOKEN_TTL_SECONDS,
 ): Promise<{ token: string; expiresAt: string; expiresUnix: number }> {
     const normalizedId = String(bookingId || "").trim().toLowerCase()
     const normalizedSecret = String(secret || "").trim()
 
-    if (!isUuid(normalizedId)) throw new Error("Invalid booking id for status token")
+    if (!isUuid(normalizedId)) {
+        throw new Error("Invalid booking id for status token")
+    }
     if (!normalizedSecret) throw new Error("Missing status token secret")
 
     const now = Math.floor(Date.now() / 1000)
@@ -82,19 +93,23 @@ export async function issueBookingStatusToken(
 export async function verifyBookingStatusToken(
     token: string,
     bookingId: string,
-    secret: string
+    secret: string,
 ): Promise<boolean> {
     const normalizedToken = String(token || "").trim()
     const normalizedId = String(bookingId || "").trim().toLowerCase()
     const normalizedSecret = String(secret || "").trim()
-    if (!normalizedToken || !normalizedSecret || !isUuid(normalizedId)) return false
+    if (!normalizedToken || !normalizedSecret || !isUuid(normalizedId)) {
+        return false
+    }
 
     const parts = normalizedToken.split(".")
     if (parts.length !== 3 || parts[0] !== "v1") return false
 
     const expiresUnix = Number(parts[1])
     const signature = String(parts[2] || "").trim()
-    if (!Number.isFinite(expiresUnix) || expiresUnix <= 0 || !signature) return false
+    if (!Number.isFinite(expiresUnix) || expiresUnix <= 0 || !signature) {
+        return false
+    }
 
     const now = Math.floor(Date.now() / 1000)
     if (expiresUnix < now) return false
