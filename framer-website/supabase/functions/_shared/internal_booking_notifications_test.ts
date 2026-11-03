@@ -180,6 +180,74 @@ Deno.test("stored notification retry sends and records only non-customer recipie
   }
 })
 
+Deno.test("a failed-payment outbox retry is terminalized when its booking has since been paid", async () => {
+  const row: Record<string, unknown> = {
+    id: "notification-row",
+    booking_id: "booking-123",
+    event_type: "payment_failed",
+    status: "failed",
+    attempts: 1,
+    recipients: ["support@tripwithnomads.com"],
+    email_payload: payload,
+  }
+  const supabase = {
+    from(table: string) {
+      let patch: Record<string, unknown> = {}
+      if (table === "bookings") {
+        const query = {
+          select() {
+            return query
+          },
+          eq() {
+            return query
+          },
+          async maybeSingle() {
+            return { data: { payment_status: "paid" }, error: null }
+          },
+        }
+        return query
+      }
+      const query = {
+        select() {
+          return query
+        },
+        update(values: Record<string, unknown>) {
+          patch = values
+          return query
+        },
+        eq() {
+          return query
+        },
+        in() {
+          return query
+        },
+        async single() {
+          Object.assign(row, patch)
+          return { data: row, error: null }
+        },
+        then(resolve: (value: unknown) => unknown) {
+          Object.assign(row, patch)
+          return Promise.resolve({ data: [row], error: null }).then(resolve)
+        },
+      }
+      if (table === "booking_notification_events") return query
+      throw new Error(`Unexpected table: ${table}`)
+    },
+  }
+
+  const status = await deliverInternalBookingNotification({
+    supabase,
+    eventKey: "payment_failed:booking-123:attempt-1",
+    eventType: "payment_failed",
+    booking: { id: "booking-123", email: "guest@example.com" },
+  })
+
+  assertEquals(status, "not_required")
+  assertEquals(row.status, "not_required")
+  assertEquals(row.recipients, [])
+  assertEquals(row.email_payload, null)
+})
+
 Deno.test("internal notification retries pending and failed ledger rows", () => {
   assert(internalNotificationNeedsRetry({ status: "pending" }))
   assert(internalNotificationNeedsRetry({ status: "failed" }))
