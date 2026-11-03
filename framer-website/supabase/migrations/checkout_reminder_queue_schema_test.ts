@@ -5,7 +5,7 @@ import {
 
 Deno.test("checkout reminder migration is private, bounded, retryable, and suppresses a successful booking", async () => {
   const migration = await Deno.readTextFile(
-    new URL("./20261102015920_checkout_reminder_queue.sql", import.meta.url),
+    new URL("./20261102070707_checkout_reminder_queue.sql", import.meta.url),
   );
   const worker = await Deno.readTextFile(
     new URL("../functions/checkout-reminders/index.ts", import.meta.url),

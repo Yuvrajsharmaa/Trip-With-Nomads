@@ -8,7 +8,7 @@ const source = await Deno.readTextFile(
 );
 const migration = await Deno.readTextFile(
   new URL(
-    "../supabase/migrations/20261102015920_checkout_reminder_queue.sql",
+    "../supabase/migrations/20261102070707_checkout_reminder_queue.sql",
     import.meta.url,
   ),
 );

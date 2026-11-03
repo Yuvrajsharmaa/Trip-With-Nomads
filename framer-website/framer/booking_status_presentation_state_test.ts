@@ -5,6 +5,7 @@ import {
 import {
   bookingStatusDetailsReady,
   bookingStatusView,
+  shouldShowPendingPaymentRetry,
   verifiedStatusDestination,
 } from "./booking_status_presentation_state.ts";
 import * as statusPresentation from "./booking_status_presentation_state.ts";
@@ -16,6 +17,7 @@ Deno.test("status page hides booking content until a terminal server result", ()
   assertEquals(bookingStatusView("error"), "unavailable");
   assertEquals(bookingStatusView("ready", "unknown"), "unavailable");
   assertEquals(bookingStatusView("ready", "paid"), "success");
+  assertEquals(bookingStatusView("ready", "succeeded"), "success");
   assertEquals(bookingStatusView("ready", "failed"), "failed");
 });
 
@@ -23,6 +25,7 @@ Deno.test("verified outcomes stay hidden until booking details are ready", () =>
   assertEquals(bookingStatusView("ready", "paid", false), "checking");
   assertEquals(bookingStatusView("ready", "failed", false), "checking");
   assertEquals(bookingStatusView("ready", "paid", true), "success");
+  assertEquals(bookingStatusView("ready", "succeeded", true), "success");
   assertEquals(bookingStatusView("ready", "failed", true), "failed");
 });
 
@@ -77,6 +80,7 @@ Deno.test("terminal results stay on the current loader until required details ar
 
 Deno.test("only verified terminal statuses select a success or failure route", () => {
   assertEquals(verifiedStatusDestination("paid"), "/payment-success");
+  assertEquals(verifiedStatusDestination("succeeded"), "/payment-success");
   assertEquals(verifiedStatusDestination("failed"), "/payment-failed");
   assertEquals(verifiedStatusDestination("pending"), null);
   assertEquals(verifiedStatusDestination("unknown"), null);
@@ -90,6 +94,16 @@ Deno.test("booking content appears only after a terminal status is ready", () =>
   assertEquals(shouldShow(true, "unavailable"), false);
   assertEquals(shouldShow(true, "success"), true);
   assertEquals(shouldShow(true, "failed"), true);
+});
+
+Deno.test("pending status exposes retry only when the server marks the attempt retryable", () => {
+  assertEquals(shouldShowPendingPaymentRetry(true, "pending", true), true);
+  assertEquals(shouldShowPendingPaymentRetry(false, "pending", true), false);
+  assertEquals(shouldShowPendingPaymentRetry(true, "checking", true), false);
+  assertEquals(shouldShowPendingPaymentRetry(true, "unavailable", true), false);
+  assertEquals(shouldShowPendingPaymentRetry(true, "success", true), false);
+  assertEquals(shouldShowPendingPaymentRetry(true, "failed", true), false);
+  assertEquals(shouldShowPendingPaymentRetry(true, "pending", false), false);
 });
 
 Deno.test("payment confirmation copy distinguishes waiting from unavailable status", () => {

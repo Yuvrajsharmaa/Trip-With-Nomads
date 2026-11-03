@@ -7,19 +7,44 @@ import {
     type RazorpayCredentials,
     type RazorpayOrderParams,
 } from "./razorpay.ts"
+import { isStalePaymentAttempt } from "./payment_idempotency.ts"
 
 export class PaymentOrderInProgressError extends Error {
     code = "PAYMENT_ORDER_IN_PROGRESS"
 }
 
-export async function isRazorpayOrderConfirmedUnpaid(params: {
+export async function markPaymentAttemptOrderCreating(
+    supabase: any,
+    attempt: Record<string, any>,
+    now = new Date(),
+): Promise<Record<string, any>> {
+    const update = await supabase
+        .from("payment_attempts")
+        .update({
+            status: "creating",
+            expires_at: new Date(now.getTime() + 2 * 60 * 1000).toISOString(),
+            updated_at: now.toISOString(),
+        })
+        .eq("id", attempt.id)
+        .eq("status", "pending")
+        .is("provider_order_id", null)
+        .select("*")
+        .maybeSingle()
+    if (update.error) throw update.error
+    if (!update.data) {
+        throw new PaymentOrderInProgressError("Payment order is already being prepared. Try again shortly.")
+    }
+    return update.data
+}
+
+export async function getRazorpayFailedPaymentIdsForRetry(params: {
     attempt: Record<string, any>
     bookingId: string
     amount: number
     currency: string
     credentials: RazorpayCredentials
     request?: typeof fetch
-}): Promise<boolean> {
+}): Promise<string[] | null> {
     const attemptId = String(params.attempt?.id || "")
     const orderId = String(params.attempt?.provider_order_id || "")
     const currency = String(params.currency || "INR").toUpperCase()
@@ -28,7 +53,7 @@ export async function isRazorpayOrderConfirmedUnpaid(params: {
         !orderId ||
         Number(params.attempt?.amount_minor) !== Math.round(params.amount * 100) ||
         String(params.attempt?.currency || "").toUpperCase() !== currency
-    ) return false
+    ) return null
 
     const order = await fetchRazorpayOrderById(orderId, params.credentials, params.request)
     if (!canReuseRazorpayOrderForRetry(order, {
@@ -36,17 +61,20 @@ export async function isRazorpayOrderConfirmedUnpaid(params: {
         currency,
         receipt: "twn_" + attemptId.replace(/-/g, "").slice(0, 32),
         notes: { booking_id: params.bookingId, attempt_id: attemptId },
-    })) return false
-    if (String(order.status).toLowerCase() === "created") return true
+    })) return null
+    if (String(order.status).toLowerCase() === "created") return []
 
     const payments = await fetchRazorpayPaymentsForOrder(orderId, params.credentials, params.request)
-    return payments.length === Number(order.attempts) &&
+    const allPaymentsFailed = payments.length === Number(order.attempts) &&
         payments.length > 0 &&
         payments.every((payment) =>
             Boolean(payment?.id) &&
             payment.order_id === orderId &&
             String(payment.status || "").toLowerCase() === "failed"
         )
+    return allPaymentsFailed
+        ? [...new Set(payments.map((payment) => String(payment.id).trim()))]
+        : null
 }
 
 type EnsurePaymentAttemptOrderParams = RazorpayOrderParams & {
@@ -71,11 +99,19 @@ export async function reactivatePayablePaymentAttempt(params: {
 }): Promise<Record<string, any> | null> {
     const attemptId = String(params.attempt?.id || "")
     const orderId = String(params.attempt?.provider_order_id || "")
-    if (!attemptId || !orderId || !await isRazorpayOrderConfirmedUnpaid(params)) return null
+    if (!attemptId || !orderId) return null
+    const failedPaymentIds = await getRazorpayFailedPaymentIdsForRetry(params)
+    if (failedPaymentIds === null) return null
 
     const now = params.now || new Date()
     const updatePayload: Record<string, unknown> = {
         status: "pending",
+        superseded_payment_ids: [...new Set([
+            ...(Array.isArray(params.attempt.superseded_payment_ids)
+                ? params.attempt.superseded_payment_ids
+                : []),
+            ...failedPaymentIds,
+        ].map((value) => String(value || "").trim()).filter(Boolean))],
         failed_at: null,
         error_code: null,
         error_message: null,
@@ -90,6 +126,11 @@ export async function reactivatePayablePaymentAttempt(params: {
         .eq("id", attemptId)
         .eq("provider_order_id", orderId)
         .in("status", ["creating", "pending", "failed", "expired"])
+    if (Object.prototype.hasOwnProperty.call(params.attempt, "updated_at")) {
+        updateQuery = params.attempt.updated_at == null
+            ? updateQuery.is("updated_at", null)
+            : updateQuery.eq("updated_at", params.attempt.updated_at)
+    }
     if (params.idempotencyKey) {
         const previousKey = String(params.attempt?.idempotency_key || "")
         updateQuery = previousKey
@@ -157,18 +198,28 @@ async function persistOrder(
     supabase: any,
     attempt: Record<string, any>,
     orderId: string,
+    preserveTerminalStatus = false,
 ): Promise<Record<string, any>> {
-    const update = await supabase
+    const terminalStatus = String(attempt.status || "").toLowerCase()
+    const preserveStatus = preserveTerminalStatus && ["failed", "expired"].includes(terminalStatus)
+    const updatePayload: Record<string, unknown> = {
+        provider: "razorpay",
+        provider_order_id: orderId,
+        updated_at: new Date().toISOString(),
+    }
+    if (!preserveStatus) {
+        updatePayload.status = "pending"
+        updatePayload.expires_at = new Date(Date.now() + 30 * 60 * 1000).toISOString()
+    }
+    let updateQuery = supabase
         .from("payment_attempts")
-        .update({
-            provider: "razorpay",
-            provider_order_id: orderId,
-            status: "pending",
-            updated_at: new Date().toISOString(),
-        })
+        .update(updatePayload)
         .eq("id", attempt.id)
-        .in("status", ["creating", "pending"])
         .is("provider_order_id", null)
+    updateQuery = preserveStatus
+        ? updateQuery.eq("status", terminalStatus)
+        : updateQuery.in("status", ["creating", "pending"])
+    const update = await updateQuery
         .select("*")
         .maybeSingle()
 
@@ -211,11 +262,15 @@ export async function ensurePaymentAttemptOrder(
     const credentials = params.credentials
     const request = params.request || fetch
 
-    const attemptIsBeingCreated =
-        String(params.attempt.status || "").toLowerCase() === "creating"
-    const creationExpiresAt = Date.parse(String(params.attempt.expires_at || ""))
-    const creationHasExpired = attemptIsBeingCreated &&
-        Number.isFinite(creationExpiresAt) && creationExpiresAt <= Date.now()
+    const attemptStatus = String(params.attempt.status || "").toLowerCase()
+    const creationHasExpired = isStalePaymentAttempt({
+        status: attemptStatus,
+        expiresAt: params.attempt.expires_at,
+        providerOrderId: params.attempt.provider_order_id,
+        createdAt: params.attempt.created_at,
+        updatedAt: params.attempt.updated_at,
+    })
+    const terminalWithoutOrder = ["failed", "expired"].includes(attemptStatus)
     if (!params.mayCreate) {
         const recovered = await findRazorpayOrderByReceipt(
             providerParams,
@@ -223,17 +278,23 @@ export async function ensurePaymentAttemptOrder(
             request,
         )
         if (!recovered) {
-            if (creationHasExpired) {
-                const claimed = await params.supabase
+            if (creationHasExpired || terminalWithoutOrder) {
+                let claimQuery = params.supabase
                     .from("payment_attempts")
                     .update({
-                        expires_at: new Date(Date.now() + 30 * 60 * 1000).toISOString(),
+                        status: "creating",
+                        expires_at: new Date(Date.now() + 2 * 60 * 1000).toISOString(),
                         updated_at: new Date().toISOString(),
                     })
                     .eq("id", params.attempt.id)
-                    .eq("status", "creating")
-                    .eq("expires_at", params.attempt.expires_at)
+                    .eq("status", attemptStatus)
                     .is("provider_order_id", null)
+
+                if (creationHasExpired) {
+                    claimQuery = claimQuery.eq("expires_at", params.attempt.expires_at)
+                }
+
+                const claimed = await claimQuery
                     .select("*")
                     .maybeSingle()
                 if (claimed.error) throw claimed.error
@@ -268,6 +329,7 @@ export async function ensurePaymentAttemptOrder(
                 params.supabase,
                 params.attempt,
                 String(recovered.id),
+                true,
             )
             return { order: recovered, attempt: savedAttempt }
         }

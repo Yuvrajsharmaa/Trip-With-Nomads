@@ -25,11 +25,73 @@ Deno.test("Razorpay webhook verifies raw payloads and persists generic payment e
     assertStringIncludes(source, "paymentOrderId")
     assertStringIncludes(source, "does not belong to the webhook order")
     assertStringIncludes(source, "more than one payment ID for the same order")
+    assertStringIncludes(source, "paymentAttemptMatchesBookingOrder")
+    assertStringIncludes(source, "bookingStatusesAfterSuccessfulPayment")
+    assertStringIncludes(source, '.from("booking_details")')
+    assertStringIncludes(source, 'update({ booking_status: successfulPaymentStatuses.crmStatus })')
+    assertStringIncludes(source, 'rpc("reconcile_website_payment_failure"')
+    assertStringIncludes(source, "shouldSuppressFailurePaymentEmail")
     assertStringIncludes(source, 'processing === "processing"')
     assertStringIncludes(source, "buildPaymentEmail")
     assertStringIncludes(source, "sendResendEmail")
     assertStringIncludes(source, "sendPaymentEmailProjection")
+    assertStringIncludes(source, "shouldSuppressFailurePaymentEmailForCurrentBooking")
+    assertStringIncludes(source, "shouldSuppressStalePartialPaymentEmailForCurrentBooking")
     assertStringIncludes(source, "BOOKING_CALLBACK_SHEET_ID")
+    const eventSnapshot = source.indexOf("email_previous_state: emailPreviousState")
+    const reconcile = source.indexOf("const reconciliation = await reconcilePayment")
+    if (eventSnapshot < 0 || reconcile < 0 || eventSnapshot > reconcile) {
+        throw new Error("Webhook email state must be persisted before payment state is reconciled")
+    }
+    if (source.slice(reconcile).includes("email_previous_state: previousPaymentState(booking)")) {
+        throw new Error("Webhook replay must retain the payment email snapshot captured before reconciliation")
+    }
+    const sheetFailureReturn = source.indexOf(
+        'return jsonResponse({ error: "Payment applied; Sheet projection failed" }, 500)',
+        reconcile,
+    )
+    const paymentEmailProjection = source.indexOf(
+        "const emailDelivered = await sendPaymentEmailProjection(",
+        reconcile,
+    )
+    const failureEmailDispatchGuard = source.indexOf(
+        "failureNowPaid = await shouldSuppressFailurePaymentEmailForCurrentBooking(",
+        source.indexOf("async function sendPaymentEmailProjection"),
+    )
+    const emailSend = source.indexOf("await sendResendEmail(payload)", failureEmailDispatchGuard)
+    if (failureEmailDispatchGuard < 0 || emailSend < failureEmailDispatchGuard) {
+        throw new Error("Failure email dispatch must recheck the current booking payment state")
+    }
+    const stalePartialEmailGuard = source.indexOf(
+        "await shouldSuppressStalePartialPaymentEmailForCurrentBooking(",
+        source.indexOf("let payload = parseStoredPaymentEmailPayload(currentEvent.email_payload)"),
+    )
+    const storedEmailSend = source.indexOf("await sendResendEmail(payload)", stalePartialEmailGuard)
+    if (stalePartialEmailGuard < 0 || storedEmailSend < stalePartialEmailGuard) {
+        throw new Error("A stored advance email must recheck current settlement before retrying")
+    }
+    const staleGuardEnd = source.indexOf("if (!payload && !stalePartialEmailSuppressed)", stalePartialEmailGuard)
+    const staleGuard = source.slice(stalePartialEmailGuard, staleGuardEnd)
+    if (staleGuardEnd < 0 || staleGuard.includes("return")) {
+        throw new Error("Suppressing a stale customer email must continue to internal notification delivery")
+    }
+    const internalDelivery = source.indexOf("const internalStatus = await deliverInternalBookingNotification(", staleGuardEnd)
+    if (internalDelivery < staleGuardEnd) {
+        throw new Error("Internal notifications must run after stale customer email suppression")
+    }
+    if (sheetFailureReturn >= 0 && sheetFailureReturn < paymentEmailProjection) {
+        throw new Error("Sheet projection failure must not skip customer payment email delivery")
+    }
+    const sheetRetryStart = source.indexOf('if (claim === "sheet")')
+    const emailRetryStart = source.indexOf('if (claim === "email")', sheetRetryStart)
+    const sheetRetry = source.slice(sheetRetryStart, emailRetryStart)
+    const retrySheetFailureReturn = sheetRetry.indexOf(
+        'return jsonResponse({ error: "Payment applied; Sheet projection failed" }, 500)',
+    )
+    const retryEmailProjection = sheetRetry.indexOf("const emailDelivered = await sendPaymentEmailProjection(")
+    if (retrySheetFailureReturn >= 0 && retrySheetFailureReturn < retryEmailProjection) {
+        throw new Error("Sheet retry failure must not skip the pending customer payment email")
+    }
     if (source.includes('Deno.env.get("GOOGLE_SHEET_ID_TRIPS")')) {
         throw new Error("razorpay-webhook must never use the trip-lead workbook as a booking Sheet fallback")
     }

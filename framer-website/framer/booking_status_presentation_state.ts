@@ -43,6 +43,14 @@ export function shouldShowBookingStatusContent(
   return started && (view === "success" || view === "failed");
 }
 
+export function shouldShowPendingPaymentRetry(
+  started: boolean,
+  view: BookingStatusView,
+  retryAvailable: boolean,
+): boolean {
+  return started && view === "pending" && retryAvailable;
+}
+
 export function bookingStatusCopy(state: BookingStatusCopyState) {
   if (state === "pending") {
     return {
@@ -81,10 +89,11 @@ export function bookingStatusView(
   if (loadState === "loading" || loadState === "pending") {
     return "checking";
   }
-  if (paymentStatus === "pending") return "pending";
-  if (paymentStatus === "paid" || paymentStatus === "failed") {
+  const status = String(paymentStatus || "").trim().toLowerCase();
+  if (status === "pending") return "pending";
+  if (status === "paid" || status === "succeeded" || status === "failed") {
     if (!detailsReady) return "checking";
-    return paymentStatus === "paid" ? "success" : "failed";
+    return status === "failed" ? "failed" : "success";
   }
   return "unavailable";
 }
@@ -92,7 +101,8 @@ export function bookingStatusView(
 export function verifiedStatusDestination(
   paymentStatus?: string,
 ): string | null {
-  if (paymentStatus === "paid") return "/payment-success";
-  if (paymentStatus === "failed") return "/payment-failed";
+  const status = String(paymentStatus || "").trim().toLowerCase();
+  if (status === "paid" || status === "succeeded") return "/payment-success";
+  if (status === "failed") return "/payment-failed";
   return null;
 }
