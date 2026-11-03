@@ -7,6 +7,7 @@ import {
     type WebsiteFinanceIssuer,
 } from "./booking-tax.ts"
 import { getCheckoutEntryState } from "./checkout_entry_state.ts"
+import { buildRazorpayPaymentSuccessUrl } from "./razorpay_payment_success_return.ts"
 
 const CHECKOUT_TIMEZONE = "Asia/Kolkata"
 const CHECKOUT_DATA_REQUEST_TIMEOUT_MS = 8000
@@ -371,6 +372,9 @@ async function openRazorpayCheckout(
     if (!razorpay?.order_id || !razorpay?.key_id) {
         throw new Error("Payment gateway payload missing")
     }
+    if (!data?.booking_id || !data?.status_token) {
+        throw new Error("Payment status verification is unavailable. Please refresh checkout before paying.")
+    }
     await loadRazorpayScript()
     const Razorpay = (window as any).Razorpay
     if (typeof Razorpay !== "function") {
@@ -390,9 +394,21 @@ async function openRazorpayCheckout(
             contact: contact.phone,
         },
         notes: razorpay.notes || {},
-        callback_url: razorpay.callback_url ||
-            `${CURRENT_RUNTIME.siteBaseUrl}/payment-success`,
-        redirect: true,
+        redirect: false,
+        handler: () => {
+            const statusUrl = buildRazorpayPaymentSuccessUrl(
+                CURRENT_RUNTIME.siteBaseUrl,
+                String(data.booking_id),
+                String(data.status_token),
+            )
+            if (!statusUrl) {
+                showInlineError(
+                    "We couldn’t confirm this payment yet. Check payment status before trying again.",
+                )
+                return
+            }
+            window.location.assign(statusUrl)
+        },
         modal: {
             ondismiss: () => {
                 // Dismissal is not a payment result. The stable request ID remains in session storage.

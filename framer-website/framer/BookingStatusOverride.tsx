@@ -9,6 +9,7 @@ import {
     shouldShowPendingPaymentRetry,
     verifiedStatusDestination,
 } from "./booking_status_presentation_state.ts"
+import { buildRazorpayPaymentSuccessUrl } from "./razorpay_payment_success_return.ts"
 
 const { useEffect, useRef, useState } = React
 
@@ -184,10 +185,14 @@ async function loadRazorpayScript(): Promise<void> {
 async function openRetryRazorpay(
     payload: any,
     data: BookingData,
-    onDismiss: () => void
+    onDismiss: () => void,
+    onReturnError: (message: string) => void,
 ): Promise<void> {
     const razorpay = payload?.razorpay
     if (!razorpay?.order_id || !razorpay?.key_id) throw new Error("Invalid Razorpay response")
+    if (String(payload?.booking_id || "") !== String(data.id) || !payload?.status_token) {
+        throw new Error("Payment status verification is unavailable. Refresh booking status before retrying.")
+    }
     await loadRazorpayScript()
     const Razorpay = (window as any).Razorpay
     if (typeof Razorpay !== "function") throw new Error("Payment gateway is unavailable")
@@ -205,8 +210,20 @@ async function openRetryRazorpay(
             contact: String(data.phone || ""),
         },
         notes: razorpay.notes || {},
-        callback_url: razorpay.callback_url || `${runtime.siteBaseUrl}/payment-success`,
-        redirect: true,
+        redirect: false,
+        handler: () => {
+            const statusUrl = buildRazorpayPaymentSuccessUrl(
+                runtime.siteBaseUrl,
+                String(data.id),
+                String(payload.status_token),
+            )
+            if (!statusUrl) {
+                onDismiss()
+                onReturnError("We couldn’t confirm this payment yet. Check payment status before trying again.")
+                return
+            }
+            window.location.assign(statusUrl)
+        },
         modal: { ondismiss: onDismiss },
     })
     instance.on?.("payment.failed", onDismiss)
@@ -1266,7 +1283,7 @@ function PaymentRetryAction({
                 await openRetryRazorpay(payload, data, () => {
                     retryLockRef.current = false
                     setIsRetrying(false)
-                })
+                }, setRetryError)
                 return
             }
             const payu = payload?.payu

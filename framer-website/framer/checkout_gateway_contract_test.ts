@@ -56,6 +56,33 @@ Deno.test("checkout and payment retry call only named Supabase functions", async
   assertEquals(status.includes("fetch(retryApiUrl(), {"), true);
 });
 
+Deno.test("Razorpay success handlers return to the matching signed booking status", async () => {
+  const checkout = await read("CheckoutPageOverrides.tsx");
+  const status = await read("BookingStatusOverride.tsx");
+  const checkoutGateway = checkout.slice(
+    checkout.indexOf("async function openRazorpayCheckout"),
+    checkout.indexOf("type Traveller"),
+  );
+  const retryGateway = status.slice(
+    status.indexOf("async function openRetryRazorpay"),
+    status.indexOf("// ─── TYPES"),
+  );
+
+  for (const gateway of [checkoutGateway, retryGateway]) {
+    includes(gateway, "redirect: false");
+    includes(gateway, "handler: ()");
+    includes(gateway, "buildRazorpayPaymentSuccessUrl(");
+    includes(gateway, "window.location.assign(statusUrl)");
+    assertEquals(gateway.includes("callback_url:"), false);
+  }
+  includes(checkoutGateway, "!data?.booking_id || !data?.status_token");
+  includes(
+    retryGateway,
+    'String(payload?.booking_id || "") !== String(data.id)',
+  );
+  includes(retryGateway, "!payload?.status_token");
+});
+
 Deno.test("public checkout functions reject methods other than POST", async () => {
   const createBooking = await Deno.readTextFile(
     new URL("../supabase/functions/create-booking/index.ts", import.meta.url),
