@@ -6,6 +6,7 @@ import {
     bookingStatusCopy,
     bookingStatusView,
     shouldShowBookingStatusContent,
+    shouldShowPendingPaymentRetry,
     verifiedStatusDestination,
 } from "./booking_status_presentation_state.ts"
 
@@ -686,6 +687,18 @@ export function withBookingStatus(Component): ComponentType {
                             {copy.description}
                         </p>
                     </div>
+                    {shouldShowPendingPaymentRetry(
+                        started,
+                        view,
+                        data?.payment_retry_available === true,
+                    ) && data && (
+                        <div style={{ marginTop: 8, maxWidth: 420 }}>
+                            <p style={{ color: foreground, fontSize: 14, lineHeight: 1.5, margin: 0 }}>
+                                This payment attempt has timed out. If your bank shows a debit, contact us before trying again.
+                            </p>
+                            <PaymentRetryAction data={data} pendingStatus />
+                        </div>
+                    )}
                     {(view === "pending" || view === "unavailable") && (
                         <button
                             type="button"
@@ -1206,158 +1219,165 @@ export function withStatusIcon(Component): ComponentType {
     }
 }
 
+function PaymentRetryAction({
+    data,
+    pendingStatus = false,
+}: {
+    data: BookingData
+    pendingStatus?: boolean
+}) {
+    const [isRetrying, setIsRetrying] = useState(false)
+    const [retryError, setRetryError] = useState("")
+    const retryLockRef = useRef(false)
+
+    const handleRetry = async () => {
+        if (isRetrying || retryLockRef.current) return
+        retryLockRef.current = true
+        setIsRetrying(true)
+        setRetryError("")
+        const attemptKey =
+            (data as any).active_payment_attempt_id ||
+            (data as any).payment_attempt_number ||
+            (data as any).payment_attempt ||
+            "latest"
+
+        try {
+            let retryRequestId = getRetryRequestId(data.id, attemptKey)
+            const retryRequest = (requestId: string) => fetch(retryApiUrl(), {
+                method: "POST",
+                headers: retryApiHeaders(),
+                body: JSON.stringify({
+                    booking_id: data.id,
+                    email: String(data.email || "").trim(),
+                    retry_request_id: requestId,
+                }),
+            })
+            let res = await retryRequest(retryRequestId)
+            let payload = await res.json().catch(() => null)
+            if (!res.ok && payload?.code === "PAYMENT_ATTEMPT_FINISHED") {
+                clearRetryRequestId(data.id, attemptKey)
+                retryRequestId = getRetryRequestId(data.id, attemptKey)
+                res = await retryRequest(retryRequestId)
+                payload = await res.json().catch(() => null)
+            }
+            if (!res.ok) throw new Error(`Retry failed (${res.status})`)
+
+            if (payload?.gateway === "razorpay" && payload?.razorpay?.order_id) {
+                await openRetryRazorpay(payload, data, () => {
+                    retryLockRef.current = false
+                    setIsRetrying(false)
+                })
+                return
+            }
+            const payu = payload?.payu
+            if (!payu?.action) throw new Error("Invalid PayU response")
+
+            const form = document.createElement("form")
+            form.method = "POST"
+            form.action = String(payu.action)
+            form.style.display = "none"
+
+            for (const [key, value] of Object.entries(payu)) {
+                if (key === "action") continue
+                const input = document.createElement("input")
+                input.type = "hidden"
+                input.name = key
+                input.value = String(value ?? "")
+                form.appendChild(input)
+            }
+
+            document.body.appendChild(form)
+            form.submit()
+        } catch (err) {
+            console.error("[RetryPayment] Error:", err)
+            retryLockRef.current = false
+            setIsRetrying(false)
+            setRetryError("We couldn’t start the retry. Check payment status before trying again, especially if you were charged.")
+        }
+    }
+
+    const isLightSurface = pendingStatus && typeof window !== "undefined" &&
+        window.location.pathname.includes("/payment-success")
+
+    return (
+        <>
+            <button
+                type="button"
+                aria-busy={isRetrying}
+                disabled={isRetrying}
+                onClick={handleRetry}
+                style={{
+                    background: isRetrying
+                        ? "linear-gradient(135deg, #94a3b8, #64748b)"
+                        : "linear-gradient(135deg, #1b91c9, #0085c1)",
+                    border: 0,
+                    borderRadius: 12,
+                    color: "#fff",
+                    cursor: isRetrying ? "wait" : "pointer",
+                    display: "inline-block",
+                    fontFamily: "inherit",
+                    fontSize: 16,
+                    fontWeight: 600,
+                    marginTop: 16,
+                    opacity: isRetrying ? 0.7 : 1,
+                    padding: "14px 32px",
+                    textAlign: "center",
+                    transition: "opacity 0.2s",
+                }}
+            >
+                {isRetrying ? "Retrying…" : "Try Again"}
+            </button>
+            {retryError && (
+                <div
+                    role="alert"
+                    style={{
+                        color: isLightSurface ? "#991b1b" : "#fecaca",
+                        fontSize: 14,
+                        marginTop: 12,
+                    }}
+                >
+                    {retryError}
+                </div>
+            )}
+        </>
+    )
+}
+
 // --- Retry button: visible after failure or an expired order-creation attempt ---
 export function withRetryButton(Component): ComponentType {
     return (props: any) => {
         const [data, state] = useBooking()
-        const [isRetrying, setIsRetrying] = useState(false)
-        const [retryError, setRetryError] = useState("")
-        const retryLockRef = useRef(false)
 
         if (state === "error") {
             return (
-                <div
+                <button
+                    type="button"
                     onClick={() => window.location.reload()}
-                    role="button"
-                    tabIndex={0}
-                    onKeyDown={(event) => {
-                        if (event.key === "Enter" || event.key === " ") window.location.reload()
-                    }}
                     style={{
+                        background: "linear-gradient(135deg, #1b91c9, #0085c1)",
+                        border: 0,
+                        borderRadius: 12,
+                        color: "#fff",
                         cursor: "pointer",
                         display: "inline-block",
-                        padding: "14px 32px",
-                        borderRadius: "12px",
-                        background: "linear-gradient(135deg, #1b91c9, #0085c1)",
-                        color: "#fff",
-                        fontSize: "16px",
+                        fontFamily: "inherit",
+                        fontSize: 16,
                         fontWeight: 600,
-                        textAlign: "center" as const,
-                        marginTop: "16px",
+                        marginTop: 16,
+                        padding: "14px 32px",
+                        textAlign: "center",
                     }}
                 >
                     Retry status
-                </div>
+                </button>
             )
         }
 
-        if (state !== "ready" || !data) {
+        if (state !== "ready" || !data || data.payment_retry_available !== true) {
             return <Component {...props} style={{ ...props.style, display: "none" }} />
         }
 
-        if (data.payment_retry_available !== true) {
-            return <Component {...props} style={{ ...props.style, display: "none" }} />
-        }
-
-        const handleRetry = async () => {
-            if (isRetrying || retryLockRef.current) return
-            retryLockRef.current = true
-            setIsRetrying(true)
-            setRetryError("")
-            const attemptKey =
-                (data as any).active_payment_attempt_id ||
-                (data as any).payment_attempt_number ||
-                (data as any).payment_attempt ||
-                "latest"
-
-            try {
-                let retryRequestId = getRetryRequestId(data.id, attemptKey)
-                const retryRequest = (requestId: string) => fetch(retryApiUrl(), {
-                    method: "POST",
-                    headers: retryApiHeaders(),
-                    body: JSON.stringify({
-                        booking_id: data.id,
-                        email: String(data.email || "").trim(),
-                        retry_request_id: requestId,
-                    }),
-                })
-                let res = await retryRequest(retryRequestId)
-                let payload = await res.json().catch(() => null)
-                if (!res.ok && payload?.code === "PAYMENT_ATTEMPT_FINISHED") {
-                    clearRetryRequestId(data.id, attemptKey)
-                    retryRequestId = getRetryRequestId(data.id, attemptKey)
-                    res = await retryRequest(retryRequestId)
-                    payload = await res.json().catch(() => null)
-                }
-                if (!res.ok) throw new Error(`Retry failed (${res.status})`)
-
-                if (payload?.gateway === "razorpay" && payload?.razorpay?.order_id) {
-                    await openRetryRazorpay(payload, data, () => {
-                        retryLockRef.current = false
-                        setIsRetrying(false)
-                    })
-                    return
-                }
-                const payu = payload?.payu
-                if (!payu?.action) throw new Error("Invalid PayU response")
-
-                const form = document.createElement("form")
-                form.method = "POST"
-                form.action = String(payu.action)
-                form.style.display = "none"
-
-                for (const [key, value] of Object.entries(payu)) {
-                    if (key === "action") continue
-                    const input = document.createElement("input")
-                    input.type = "hidden"
-                    input.name = key
-                    input.value = String(value ?? "")
-                    form.appendChild(input)
-                }
-
-                document.body.appendChild(form)
-                form.submit()
-                return
-            } catch (err) {
-                console.error("[RetryPayment] Error:", err)
-                retryLockRef.current = false
-                setIsRetrying(false)
-                setRetryError("We couldn’t start the retry. Check payment status before trying again, especially if you were charged.")
-            } finally {
-                // Keep the retry locked while the gateway modal is open or the browser is redirecting.
-            }
-        }
-
-        return (
-            <>
-                <div
-                    onClick={handleRetry}
-                    style={{
-                        cursor: isRetrying ? "wait" : "pointer",
-                        display: "inline-block",
-                        padding: "14px 32px",
-                        background: isRetrying
-                            ? "linear-gradient(135deg, #94a3b8, #64748b)"
-                            : "linear-gradient(135deg, #1b91c9, #0085c1)",
-                        color: "#fff",
-                        borderRadius: "12px",
-                        fontSize: "16px",
-                        fontWeight: 600,
-                        textAlign: "center" as const,
-                        marginTop: "16px",
-                        transition: "all 0.2s",
-                        opacity: isRetrying ? 0.7 : 1,
-                        pointerEvents: isRetrying ? "none" : "auto",
-                    }}
-                    onMouseEnter={(e) => {
-                        if (!isRetrying) (e.target as HTMLElement).style.opacity = "0.85"
-                    }}
-                    onMouseLeave={(e) => {
-                        if (!isRetrying) (e.target as HTMLElement).style.opacity = "1"
-                    }}
-                >
-                    {isRetrying ? "Retrying…" : "Try Again"}
-                </div>
-                {retryError && (
-                    <div
-                        role="alert"
-                        style={{ color: "#fecaca", fontSize: "14px", marginTop: "12px" }}
-                    >
-                        {retryError}
-                    </div>
-                )}
-            </>
-        )
+        return <PaymentRetryAction data={data} />
     }
 }
 
