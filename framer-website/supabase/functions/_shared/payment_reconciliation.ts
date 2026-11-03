@@ -85,3 +85,16 @@ export function paymentAttemptMatchesBookingOrder(params: {
         ? attemptOrderId === eventOrderId
         : String(params.bookingOrderId || "").trim() === eventOrderId
 }
+
+export function isSupersededPaymentFailure(params: {
+    eventName: unknown
+    paymentId: unknown
+    attempt: Record<string, unknown>
+}): boolean {
+    const paymentId = String(params.paymentId || "").trim()
+    if (String(params.eventName || "").trim().toLowerCase() !== "payment.failed" || !paymentId) return false
+    return (Array.isArray(params.attempt.superseded_payment_ids) &&
+        params.attempt.superseded_payment_ids.includes(paymentId)) ||
+        (String(params.attempt.status || "").toLowerCase() === "pending" &&
+            String(params.attempt.provider_payment_id || "").trim() === paymentId)
+}
