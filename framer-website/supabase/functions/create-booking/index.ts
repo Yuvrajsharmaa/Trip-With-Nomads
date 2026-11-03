@@ -1312,13 +1312,30 @@ serve(async (req) => {
         let paymentAttempt = Array.isArray(latestAttemptLookup.data) ? latestAttemptLookup.data[0] : null
         const bookingIsPaid = ["paid", "succeeded"].includes(String(data.payment_status || "").trim().toLowerCase())
         const currentBookingPaymentAmountMinor = expectedBookingPaymentAmountMinor(data)
+        const bookingStatusSecret = resolveBookingStatusSecret(firstNonEmpty(
+            Deno.env.get("PAYMENT_STATUS_SECRET"),
+            Deno.env.get("RAZORPAY_LIVE_KEY_SECRET"),
+            Deno.env.get("RAZORPAY_TEST_KEY_SECRET"),
+            Deno.env.get("RAZORPAY_KEY_SECRET"),
+        ))
+        const bookingStatusToken = bookingStatusSecret
+            ? await issueBookingStatusToken(data.id, bookingStatusSecret)
+            : null
         if (bookingIsPaid && !paymentAttempt) {
+            if (!bookingStatusToken) {
+                return responseJson({
+                    error: "Payment status verification is unavailable. Contact support before trying again.",
+                    code: "BOOKING_STATUS_UNAVAILABLE",
+                }, 503)
+            }
             return responseJson({
                 booking_id: data.id,
                 checkout_request_id: checkoutRequestId,
                 replayed,
                 already_paid: true,
                 payment_status: "paid",
+                status_token: bookingStatusToken.token,
+                status_token_expires_at: bookingStatusToken.expiresAt,
             })
         }
         if (!bookingIsPaid && currentBookingPaymentAmountMinor === null) {
@@ -1486,16 +1503,6 @@ serve(async (req) => {
                 { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } },
             )
         }
-        const bookingStatusSecret = resolveBookingStatusSecret(firstNonEmpty(
-            Deno.env.get("PAYMENT_STATUS_SECRET"),
-            Deno.env.get("RAZORPAY_LIVE_KEY_SECRET"),
-            Deno.env.get("RAZORPAY_TEST_KEY_SECRET"),
-            Deno.env.get("RAZORPAY_KEY_SECRET"),
-        ))
-        const bookingStatusToken = bookingStatusSecret
-            ? await issueBookingStatusToken(data.id, bookingStatusSecret)
-            : null
-
         const responsePayload: Record<string, any> = {
             booking_id: data.id,
             checkout_request_id: checkoutRequestId,
