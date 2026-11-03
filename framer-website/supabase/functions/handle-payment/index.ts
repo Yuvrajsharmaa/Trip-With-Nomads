@@ -1,9 +1,11 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts"
 import {
-    issueBookingStatusToken,
+    listBookingStatusSecrets,
     resolveBookingStatusSecret,
 } from "../_shared/booking_status_token.ts"
-
+import { razorpayCredentials } from "../_shared/razorpay.ts"
+import { resolveCallbackStatusToken } from "./callback_status_token.ts"
+import { buildPaymentStatusRedirectUrl } from "./redirect_url.ts"
 const corsHeaders = {
     "Access-Control-Allow-Origin": "*",
     "Access-Control-Allow-Headers": "content-type",
@@ -17,12 +19,6 @@ function firstNonEmpty(...values: unknown[]): string {
         if (next) return next
     }
     return ""
-}
-
-function isUuid(value: unknown): boolean {
-    return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
-        String(value || "").trim(),
-    )
 }
 
 function jsonResponse(payload: Record<string, unknown>, status = 200): Response {
@@ -83,6 +79,22 @@ serve(async (req) => {
         const input = await readRedirectInput(req)
         const bookingId = firstNonEmpty(input.booking_id, input.udf1)
         const suppliedToken = firstNonEmpty(input.status_token)
+        const credentials = razorpayCredentials()
+        let statusToken = suppliedToken
+        try {
+            statusToken = await resolveCallbackStatusToken({
+                bookingId,
+                suppliedToken,
+                statusSecrets: listBookingStatusSecrets(),
+                statusSecret: resolveBookingStatusSecret(credentials.keySecret),
+                credentials,
+                razorpayOrderId: firstNonEmpty(input.razorpay_order_id),
+                razorpayPaymentId: firstNonEmpty(input.razorpay_payment_id),
+                razorpaySignature: firstNonEmpty(input.razorpay_signature),
+            })
+        } catch {
+            console.warn("[handle-payment] verified callback token refresh unavailable")
+        }
 
         // The callback is intentionally not a payment decision point. It only
         // carries the browser to the status UI; the signed webhook owns all
@@ -95,31 +107,8 @@ serve(async (req) => {
         const statusPath = isPaymentFailureCallback(input)
             ? "/payment-failed"
             : firstNonEmpty(Deno.env.get("PAYMENT_STATUS_PATH"), "/payment-success")
-        const baseOrigin = /^https?:\/\//i.test(siteBase) ? siteBase : `https://${siteBase}`
-        const redirectUrl = new URL(statusPath.startsWith("/") ? statusPath : `/${statusPath}`, `${baseOrigin}/`)
-
-        if (isUuid(bookingId)) {
-            redirectUrl.searchParams.set("booking_id", bookingId)
-            if (suppliedToken) {
-                redirectUrl.searchParams.set("status_token", suppliedToken)
-            } else {
-                const fallbackSecret = firstNonEmpty(
-                    Deno.env.get("PAYU_LIVE_SALT"),
-                    Deno.env.get("PAYU_TEST_SALT"),
-                    Deno.env.get("PAYU_SALT"),
-                    Deno.env.get("RAZORPAY_LIVE_KEY_SECRET"),
-                    Deno.env.get("RAZORPAY_TEST_KEY_SECRET"),
-                    Deno.env.get("RAZORPAY_KEY_SECRET"),
-                )
-                const statusSecret = resolveBookingStatusSecret(fallbackSecret)
-                if (statusSecret) {
-                    const token = await issueBookingStatusToken(bookingId, statusSecret)
-                    redirectUrl.searchParams.set("status_token", token.token)
-                }
-            }
-        }
-
-        return Response.redirect(redirectUrl.toString(), 303)
+        const redirectUrl = buildPaymentStatusRedirectUrl(siteBase, statusPath, bookingId, statusToken)
+        return Response.redirect(redirectUrl, 303)
     } catch (error: any) {
         console.error("[handle-payment] redirect adapter failed", error)
         return jsonResponse({ error: error?.message || "Could not redirect to payment status" }, 500)
