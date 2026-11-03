@@ -16,6 +16,7 @@ Deno.test("status page hides booking content until a terminal server result", ()
   assertEquals(bookingStatusView("error"), "unavailable");
   assertEquals(bookingStatusView("ready", "unknown"), "unavailable");
   assertEquals(bookingStatusView("ready", "paid"), "success");
+  assertEquals(bookingStatusView("ready", "succeeded"), "success");
   assertEquals(bookingStatusView("ready", "failed"), "failed");
 });
 
@@ -23,6 +24,7 @@ Deno.test("verified outcomes stay hidden until booking details are ready", () =>
   assertEquals(bookingStatusView("ready", "paid", false), "checking");
   assertEquals(bookingStatusView("ready", "failed", false), "checking");
   assertEquals(bookingStatusView("ready", "paid", true), "success");
+  assertEquals(bookingStatusView("ready", "succeeded", true), "success");
   assertEquals(bookingStatusView("ready", "failed", true), "failed");
 });
 
@@ -77,6 +79,7 @@ Deno.test("terminal results stay on the current loader until required details ar
 
 Deno.test("only verified terminal statuses select a success or failure route", () => {
   assertEquals(verifiedStatusDestination("paid"), "/payment-success");
+  assertEquals(verifiedStatusDestination("succeeded"), "/payment-success");
   assertEquals(verifiedStatusDestination("failed"), "/payment-failed");
   assertEquals(verifiedStatusDestination("pending"), null);
   assertEquals(verifiedStatusDestination("unknown"), null);

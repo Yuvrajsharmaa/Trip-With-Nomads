@@ -21,6 +21,11 @@ CRM. Shared behavior requires a paired branch/PR/checklist in both repositories.
 - Do not commit Supabase CLI generated metadata in `framer-website/supabase/.temp/`.
 - Do not commit local runtime artifacts like `framer-website/.wrangler/` or `framer-website/.tmp/`.
 
+## Email testing safety
+
+- For all email tests in this repository, the only permitted recipient is `yuvrajsharma6367@gmail.com`. Never send test emails to random, fabricated, customer, or any other address.
+- Prefer mocks or captured messages with delivery disabled. Before running any test that can deliver email, enforce and verify that every resolved recipient is the approved address. If that cannot be guaranteed, do not send.
+
 ## Before merging
 
 - `git status` must be clean.
