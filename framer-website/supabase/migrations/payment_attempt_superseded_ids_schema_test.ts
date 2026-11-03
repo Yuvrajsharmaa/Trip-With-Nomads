@@ -2,7 +2,7 @@ import { assertEquals, assertStringIncludes } from "https://deno.land/std@0.224.
 
 Deno.test("retry replay migration adds a backward-compatible superseded payment ID list", async () => {
     const source = await Deno.readTextFile(
-        new URL("./20261103100000_payment_attempt_superseded_payment_ids.sql", import.meta.url),
+        new URL("./20261103122359_payment_attempt_superseded_payment_ids.sql", import.meta.url),
     )
 
     assertStringIncludes(source, "alter table public.payment_attempts")
