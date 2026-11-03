@@ -694,6 +694,7 @@ async function sendPaymentEmailProjection(params: {
 
         try {
             let payload = parseStoredPaymentEmailPayload(currentEvent.email_payload)
+            let stalePartialEmailSuppressed = false
             if (payload && await shouldSuppressStalePartialPaymentEmailForCurrentBooking({
                 supabase: params.supabase,
                 booking: params.booking,
@@ -704,9 +705,10 @@ async function sendPaymentEmailProjection(params: {
                     email_payload: null,
                     email_error: null,
                 })
-                return true
+                payload = null
+                stalePartialEmailSuppressed = true
             }
-            if (!payload) {
+            if (!payload && !stalePartialEmailSuppressed) {
                 const previousState = currentEvent.email_previous_state && typeof currentEvent.email_previous_state === "object"
                     ? currentEvent.email_previous_state
                     : {}

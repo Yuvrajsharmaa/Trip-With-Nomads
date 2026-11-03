@@ -70,6 +70,15 @@ Deno.test("Razorpay webhook verifies raw payloads and persists generic payment e
     if (stalePartialEmailGuard < 0 || storedEmailSend < stalePartialEmailGuard) {
         throw new Error("A stored advance email must recheck current settlement before retrying")
     }
+    const staleGuardEnd = source.indexOf("if (!payload && !stalePartialEmailSuppressed)", stalePartialEmailGuard)
+    const staleGuard = source.slice(stalePartialEmailGuard, staleGuardEnd)
+    if (staleGuardEnd < 0 || staleGuard.includes("return")) {
+        throw new Error("Suppressing a stale customer email must continue to internal notification delivery")
+    }
+    const internalDelivery = source.indexOf("const internalStatus = await deliverInternalBookingNotification(", staleGuardEnd)
+    if (internalDelivery < staleGuardEnd) {
+        throw new Error("Internal notifications must run after stale customer email suppression")
+    }
     if (sheetFailureReturn >= 0 && sheetFailureReturn < paymentEmailProjection) {
         throw new Error("Sheet projection failure must not skip customer payment email delivery")
     }
