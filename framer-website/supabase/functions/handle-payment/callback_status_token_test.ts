@@ -164,3 +164,27 @@ Deno.test("does not fetch or issue a token for a malformed checkout signature", 
     assertEquals(token, "")
     assertEquals(calls, 0)
 })
+
+Deno.test("aborts a Razorpay order lookup that exceeds the callback timeout", async () => {
+    const signature = await checkoutSignature()
+    let signal: AbortSignal | undefined
+    let rejected = false
+    try {
+        await resolveCallbackStatusToken({
+            ...callbackParams({ razorpaySignature: signature }),
+            request: (_input, init) =>
+                new Promise((_resolve, reject) => {
+                    signal = init?.signal ?? undefined
+                    signal?.addEventListener("abort", () =>
+                        reject(signal?.reason), {
+                        once: true,
+                    })
+                }),
+        })
+    } catch {
+        rejected = true
+    }
+
+    assertEquals(rejected, true)
+    assertEquals(signal?.aborted, true)
+})

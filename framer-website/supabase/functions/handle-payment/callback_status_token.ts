@@ -88,11 +88,22 @@ export async function resolveCallbackStatusToken(params: {
         return ""
     }
 
-    const order = await fetchRazorpayOrderById(
-        orderId,
-        params.credentials,
-        params.request,
-    )
+    const controller = new AbortController()
+    const timeout = setTimeout(() => controller.abort(), 5000)
+    let order: Record<string, any>
+    try {
+        order = await fetchRazorpayOrderById(
+            orderId,
+            params.credentials,
+            (input, init) =>
+                (params.request ?? fetch)(input, {
+                    ...init,
+                    signal: controller.signal,
+                }),
+        )
+    } finally {
+        clearTimeout(timeout)
+    }
     if (
         String(order.notes?.booking_id || "").trim().toLowerCase() !== bookingId
     ) return ""
