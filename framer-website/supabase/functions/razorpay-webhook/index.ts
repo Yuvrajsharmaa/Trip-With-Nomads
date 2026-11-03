@@ -609,6 +609,40 @@ async function sendPaymentEmailProjection(params: {
         eventRow.event_type,
         params.booking.payment_status,
     )
+    if (failureEvent && eventRow.payment_attempt_id && eventRow.provider_payment_id) {
+        try {
+            const latestAttempt = await params.supabase
+                .from("payment_attempts")
+                .select("*")
+                .eq("id", eventRow.payment_attempt_id)
+                .maybeSingle()
+            if (latestAttempt.error) throw latestAttempt.error
+            if (latestAttempt.data && isSupersededPaymentFailure({
+                eventName: eventRow.event_type,
+                paymentId: eventRow.provider_payment_id,
+                attempt: latestAttempt.data,
+            })) {
+                await ignoreSupersededPaymentFailure({
+                    supabase: params.supabase,
+                    eventRow,
+                    booking: params.booking,
+                    attempt: latestAttempt.data,
+                    orderId: firstNonEmpty(eventRow.provider_order_id),
+                    paymentId: firstNonEmpty(eventRow.provider_payment_id),
+                    amountMinor: Number(eventRow.amount_minor || 0),
+                    currency: firstNonEmpty(eventRow.currency, "INR"),
+                })
+                return true
+            }
+        } catch (error) {
+            console.error("[razorpay-webhook] current attempt could not be verified before failure email", {
+                bookingId: params.booking.id,
+                eventId: eventRow.provider_event_id,
+                error: safeEmailProjectionError(error),
+            })
+            return false
+        }
+    }
     if (failureEvent && !failureNowPaid) {
         try {
             failureNowPaid = await shouldSuppressFailurePaymentEmailForCurrentBooking({
@@ -1317,8 +1351,38 @@ serve(async (req) => {
                 if (attemptLookup.error) throw attemptLookup.error
                 attempt = attemptLookup.data
             }
+            if (attempt && isSupersededPaymentFailure({
+                eventName: eventRow.event_type,
+                paymentId: eventRow.provider_payment_id,
+                attempt,
+            })) {
+                await ignoreSupersededPaymentFailure({
+                    supabase,
+                    eventRow,
+                    booking,
+                    attempt,
+                    orderId: String(eventRow.provider_order_id || ""),
+                    paymentId: String(eventRow.provider_payment_id || ""),
+                    amountMinor: Number(eventRow.amount_minor || 0),
+                    currency: String(eventRow.currency || "INR"),
+                })
+                return jsonResponse({
+                    ok: true,
+                    duplicate: true,
+                    ignored: true,
+                    reason: "superseded_payment_failure",
+                })
+            }
             let sheetProjectionFailed = false
             try {
+                if (await suppressSupersededPaymentRecovery(supabase, eventRow)) {
+                    return jsonResponse({
+                        ok: true,
+                        duplicate: true,
+                        ignored: true,
+                        reason: "superseded_payment_failure",
+                    })
+                }
                 await syncPaymentSheets({
                     supabase,
                     booking,
