@@ -20,8 +20,8 @@ function clean(value: unknown, max = 160): string {
   return String(value ?? "").replace(/[\r\n\0]/g, " ").trim().slice(0, max);
 }
 
-function escapeHtml(value: unknown): string {
-  return clean(value).replace(/&/g, "&amp;").replace(/</g, "&lt;")
+function escapeHtml(value: unknown, max = 160): string {
+  return clean(value, max).replace(/&/g, "&amp;").replace(/</g, "&lt;")
     .replace(/>/g, "&gt;").replace(/\"/g, "&quot;").replace(/'/g, "&#39;");
 }
 
@@ -149,7 +149,7 @@ export function buildAbandonedCheckoutEmail(params: {
   const logoUrl =
     "https://framerusercontent.com/images/FR1lBzx4w9xp2fecFXEMUGGul4.png?width=364&height=229";
   const safeLogo = escapeHtml(logoUrl);
-  const safeResume = escapeHtml(resume.toString());
+  const safeResume = escapeHtml(resume.toString(), 512);
   const safeUnsubscribe = escapeHtml(unsubscribe.toString());
   const text = [
     `Hi ${name},`,

@@ -52,7 +52,8 @@ All values recorded here must be staging-only. Never record API keys, service-ac
 | --- | --- |
 | Supabase project | `ieuwiinbvbdvjrdqqzlb` |
 | Framer staging host | `https://maroon-aside-814100.framer.app` |
-| Checkout gateway | `https://twn-checkout-gateway-staging.tripwithnomads-crm.workers.dev` |
+| Last recorded checkout gateway | Legacy Cloudflare Worker in the inspected staging source; deployed version and retirement remain unverified (TRI-73 / TRI-75) |
+| TRI-75 target caller contract | Named Supabase Edge Functions only; current feature branch is not yet published to Framer staging |
 | Active payment provider | Razorpay Test Mode |
 | Razorpay mode | Test Mode only |
 | Webhook function | `https://ieuwiinbvbdvjrdqqzlb.supabase.co/functions/v1/razorpay-webhook` |

@@ -1,3 +1,5 @@
+import { isPaidStatus } from "./payment_reconciliation.ts"
+
 export type StoredPaymentEmailPayload = {
   to: string
   subject: string
@@ -51,6 +53,32 @@ export function serializePaymentEmailPayload(payload: StoredPaymentEmailPayload)
 export function emailProjectionNeedsRetry(row: Record<string, unknown> | null | undefined): boolean {
   const status = String(row?.email_sync_status || "").trim().toLowerCase()
   return status === "pending" || status === "failed"
+}
+
+export function shouldSuppressFailurePaymentEmail(
+  eventName: unknown,
+  paymentStatus: unknown,
+): boolean {
+  return String(eventName || "").trim().toLowerCase() === "payment.failed" &&
+    isPaidStatus(paymentStatus)
+}
+
+export async function shouldSuppressFailurePaymentEmailForCurrentBooking(params: {
+  supabase: any
+  eventName: unknown
+  booking: Record<string, unknown>
+}): Promise<boolean> {
+  if (String(params.eventName || "").trim().toLowerCase() !== "payment.failed") return false
+
+  const current = await params.supabase
+    .from("bookings")
+    .select("payment_status")
+    .eq("id", params.booking.id)
+    .maybeSingle()
+  if (current.error) throw current.error
+  if (!current.data?.payment_status) throw new Error("Current booking payment status could not be verified")
+
+  return shouldSuppressFailurePaymentEmail(params.eventName, current.data.payment_status)
 }
 
 export function classifyEmailDeliveryResult(

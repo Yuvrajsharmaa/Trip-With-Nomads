@@ -1,6 +1,9 @@
 export type RetryState = {
     status?: unknown
     expiresAt?: string | null
+    providerOrderId?: unknown
+    createdAt?: string | null
+    updatedAt?: string | null
 }
 
 export type PaymentAttemptInsertParams = {
@@ -75,10 +78,82 @@ export function isStalePaymentAttempt(
 ): boolean {
     const status = String(state?.status || "").trim().toLowerCase()
     if (status !== "pending" && status !== "creating") return false
-    const expiresAt = String(state?.expiresAt || "").trim()
-    if (!expiresAt) return false
-    const expiry = new Date(expiresAt)
-    return !Number.isNaN(expiry.getTime()) && expiry.getTime() <= now.getTime()
+    const hasProviderOrder = Boolean(String(state?.providerOrderId || "").trim())
+    const creationStartedAt = state?.updatedAt || state?.createdAt
+    const orderIsMissing = !hasProviderOrder
+    const expirySource = orderIsMissing
+        ? creationStartedAt || state?.expiresAt
+        : state?.expiresAt
+    const expiry = new Date(String(expirySource || ""))
+    if (Number.isNaN(expiry.getTime())) return false
+    const deadline = orderIsMissing && creationStartedAt
+        ? expiry.getTime() + 2 * 60 * 1000
+        : expiry.getTime()
+    return deadline <= now.getTime()
+}
+
+export function isBookingPaymentRetryEligible(booking: {
+    payment_status?: unknown
+    paid_amount?: unknown
+    status?: unknown
+}): boolean {
+    const paymentStatus = String(booking?.payment_status || "").trim().toLowerCase()
+    const bookingStatus = String(booking?.status || "").trim().toLowerCase()
+    const paidAmount = booking?.paid_amount == null ? 0 : Number(booking.paid_amount)
+
+    return !["paid", "succeeded"].includes(paymentStatus) &&
+        !["cancelled", "canceled"].includes(bookingStatus) &&
+        Number.isFinite(paidAmount) && paidAmount === 0
+}
+
+export function canOfferPaymentRetry(
+    booking: { active_payment_attempt_id?: unknown; payment_status?: unknown; paid_amount?: unknown; status?: unknown },
+    attempt: { id?: unknown; status?: unknown; provider_order_id?: unknown; expires_at?: string | null; created_at?: string | null; updated_at?: string | null } | null,
+    now = new Date(),
+): boolean {
+    if (!isBookingPaymentRetryEligible(booking)) return false
+
+    const paymentStatus = String(booking.payment_status || "").trim().toLowerCase()
+    if (!(["pending", "failed"].includes(paymentStatus))) return false
+    const activeAttemptId = String(booking.active_payment_attempt_id || "").trim().toLowerCase()
+    if (paymentStatus === "failed" && !activeAttemptId) return true
+    if (!activeAttemptId || String(attempt?.id || "").trim().toLowerCase() !== activeAttemptId) return false
+
+    const attemptStatus = String(attempt?.status || "").trim().toLowerCase()
+    return ["failed", "expired"].includes(attemptStatus) || isStalePaymentAttempt({
+        status: attemptStatus,
+        expiresAt: attempt?.expires_at,
+        providerOrderId: attempt?.provider_order_id,
+        createdAt: attempt?.created_at,
+        updatedAt: attempt?.updated_at,
+    }, now)
+}
+
+export function canReplayPaymentAttempt(
+    attempt: { id?: unknown; status?: unknown; expires_at?: string | null; provider_order_id?: unknown; created_at?: string | null; updated_at?: string | null },
+    booking: { active_payment_attempt_id?: unknown; payment_status?: unknown; paid_amount?: unknown; status?: unknown },
+    now = new Date(),
+): boolean {
+    const attemptId = String(attempt?.id || "").trim().toLowerCase()
+    const activeAttemptId = String(booking?.active_payment_attempt_id || "").trim().toLowerCase()
+    const status = String(attempt?.status || "").trim().toLowerCase()
+    return Boolean(
+        attemptId &&
+        attemptId === activeAttemptId &&
+        (status === "creating" || status === "pending") &&
+        isBookingPaymentRetryEligible(booking) &&
+        !isStalePaymentAttempt({
+            status,
+            expiresAt: attempt?.expires_at,
+            providerOrderId: attempt?.provider_order_id,
+            createdAt: attempt?.created_at,
+            updatedAt: attempt?.updated_at,
+        }, now),
+    )
+}
+
+export function hasPaymentAttemptProviderOrder(attempt: { provider_order_id?: unknown }): boolean {
+    return Boolean(String(attempt?.provider_order_id || "").trim())
 }
 
 export function nextPaymentAttemptNumber(attempts: Array<{ attempt_no?: unknown }>): number {
@@ -93,6 +168,29 @@ export function amountToMinorUnits(value: unknown): number {
     const amount = Number(value)
     if (!Number.isFinite(amount) || amount < 0) return 0
     return Math.round((amount + Number.EPSILON) * 100)
+}
+
+export function expectedBookingPaymentAmountMinor(booking: {
+    payment_mode?: unknown
+    total_amount?: unknown
+    payable_now_amount?: unknown
+}): number | null {
+    const totalAmount = Number(booking?.total_amount)
+    if (!Number.isFinite(totalAmount) || totalAmount <= 0) return null
+    const mode = String(booking?.payment_mode || "").trim().toLowerCase()
+    let amount = totalAmount
+    if (mode === "partial_25") {
+        if (booking?.payable_now_amount == null) {
+            amount = totalAmount * 0.25
+        } else {
+            const payableNow = Number(booking.payable_now_amount)
+            if (!Number.isFinite(payableNow) || payableNow < 0) return null
+            amount = payableNow > 0 ? payableNow : totalAmount * 0.25
+        }
+    }
+    const minor = amountToMinorUnits(amount)
+    const totalMinor = amountToMinorUnits(totalAmount)
+    return Number.isSafeInteger(minor) && minor > 0 && minor <= totalMinor ? minor : null
 }
 
 export function buildPaymentAttemptInsert(params: PaymentAttemptInsertParams): Record<string, unknown> {

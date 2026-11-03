@@ -5,6 +5,7 @@ import {
 import {
     ensurePaymentAttemptOrder,
     isRazorpayOrderConfirmedUnpaid,
+    markPaymentAttemptOrderCreating,
     recoverPaymentAttemptForRetry,
     reactivatePayablePaymentAttempt,
 } from "./payment_attempt_order.ts"
@@ -115,6 +116,18 @@ const shared = {
     notes: { booking_id: "booking-1", attempt_id: "attempt-1" },
     credentials: { keyId: "rzp_test_public", keySecret: "unit-test-only" },
 }
+
+Deno.test("a fresh reservation receives a short order-creation lease", async () => {
+    const pending = { ...attempt("pending"), expires_at: new Date(Date.now() + 30 * 60 * 1000).toISOString() }
+    const supabase = database(pending)
+    const before = Date.now()
+
+    const creating = await markPaymentAttemptOrderCreating(supabase, pending)
+
+    const lease = Date.parse(String(creating.expires_at))
+    assertEquals(creating.status, "creating")
+    assertEquals(lease >= before + 119_000 && lease <= before + 120_000, true)
+})
 
 Deno.test("the successful insert owner creates and persists one canonical order", async () => {
     const supabase = database(attempt())
@@ -439,6 +452,63 @@ Deno.test("a legacy pending attempt without an order is reconciled, never recrea
         "still being reconciled",
     )
     assertEquals(methods, ["GET"])
+})
+
+Deno.test("a stale pending attempt without an order is recovered by receipt before a replacement is created", async () => {
+    const stale = {
+        ...attempt("pending"),
+        expires_at: new Date(Date.now() + 30 * 60 * 1000).toISOString(),
+        updated_at: new Date(Date.now() - 3 * 60 * 1000).toISOString(),
+    }
+    const supabase = database(stale)
+    const { request, methods } = requestWithOrder(null)
+
+    const result = await ensurePaymentAttemptOrder({
+        supabase,
+        attempt: stale,
+        mayCreate: false,
+        ...shared,
+        request,
+    })
+
+    assertEquals(result.order.id, canonicalOrder.id)
+    assertEquals(result.attempt.status, "pending")
+    assertEquals(result.attempt.provider_order_id, canonicalOrder.id)
+    assertEquals(Date.parse(String(result.attempt.expires_at)) > Date.now() + 29 * 60 * 1000, true)
+    assertEquals(methods, ["GET", "POST"])
+})
+
+Deno.test("an expired attempt without an order can be reused after receipt reconciliation", async () => {
+    const expired = { ...attempt("expired"), expires_at: new Date(Date.now() - 60_000).toISOString() }
+    const supabase = database(expired)
+    const methods: string[] = []
+    const request: typeof fetch = async (input, init) => {
+        const method = String((init as any)?.method || "GET").toUpperCase()
+        methods.push(method)
+        const url = new URL(String(input))
+        const data = method === "POST"
+            ? canonicalOrder
+            : url.pathname.endsWith("/orders/order_canonical")
+                ? { ...canonicalOrder, status: "created", attempts: 0, amount_paid: 0, amount_due: 120000 }
+                : { items: [] }
+        return new Response(JSON.stringify(data), { status: 200 })
+    }
+
+    const result = await recoverPaymentAttemptForRetry({
+        supabase,
+        attempt: expired,
+        bookingId: "booking-1",
+        amount: 1200,
+        currency: "INR",
+        credentials: shared.credentials,
+        idempotencyKey: "fresh-retry-id",
+        request,
+    })
+
+    assertEquals(result?.status, "pending")
+    assertEquals(result?.provider_order_id, canonicalOrder.id)
+    assertEquals(result?.idempotency_key, "fresh-retry-id")
+    assertEquals(methods, ["GET", "POST", "GET"])
 })
 
 Deno.test("retry reactivates the same failed attempt and reuses its unpaid provider order", async () => {

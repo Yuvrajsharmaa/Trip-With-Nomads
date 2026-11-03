@@ -6,9 +6,11 @@ Deno.test("retry-payment requires a retry key and persists payment attempts", as
     assertStringIncludes(source, "retry_request_id")
     assertStringIncludes(source, "normalizeIdempotencyKey")
     assertStringIncludes(source, "canStartPaymentRetry")
+    assertStringIncludes(source, "canReplayPaymentAttempt")
+    assertStringIncludes(source, "isBookingPaymentRetryEligible")
     assertStringIncludes(source, "isStalePaymentAttempt")
-    assertStringIncludes(source, 'status: "creating"')
-    assertStringIncludes(source, "mayCreateOrder = Boolean(attemptInsert.data)")
+    assertStringIncludes(source, 'status: "pending"')
+    assertStringIncludes(source, "mayCreateOrder = !replayed")
     const paymentCredentialCheck = source.indexOf(
         "retryPaymentCredentials = retryPaymentCredentials || razorpayCredentials()",
     )
@@ -20,10 +22,14 @@ Deno.test("retry-payment requires a retry key and persists payment attempts", as
     }
     assertStringIncludes(source, "isCompatiblePaymentAttemptReplay")
     assertStringIncludes(source, "ensurePaymentAttemptOrder")
-    assertStringIncludes(source, "isRazorpayOrderConfirmedUnpaid")
     assertStringIncludes(source, "reactivatePayablePaymentAttempt")
     assertStringIncludes(source, "reusableAttempt = await recoverPaymentAttemptForRetry({")
     assertStringIncludes(source, "latestState = reusableAttempt")
+    const replayOrderRecovery = source.indexOf("const recovered = await recoverPaymentAttemptForRetry({")
+    const replayAttemptGuard = source.indexOf("canReplayPaymentAttempt(replayAttempt, booking")
+    if (replayOrderRecovery < 0 || replayAttemptGuard < 0 || replayOrderRecovery > replayAttemptGuard) {
+        throw new Error("retry-payment must recover a missing provider order before rejecting a stale replay")
+    }
     assertStringIncludes(source, "let replayed = Boolean(reusableAttempt)")
     assertStringIncludes(source, "PAYMENT_RECONCILIATION_PENDING")
     assertStringIncludes(source, '.or("payment_status.is.null,payment_status.neq.paid")')
@@ -31,18 +37,53 @@ Deno.test("retry-payment requires a retry key and persists payment attempts", as
         source,
         "idempotencyKey: retryRequestId,",
     )
-    const failedOrderReconciliation = source.indexOf("isRazorpayOrderConfirmedUnpaid({")
-    const attemptInsertCall = source.indexOf("const attemptInsert = await supabase")
-    if (failedOrderReconciliation < 0 || attemptInsertCall < 0 || failedOrderReconciliation > attemptInsertCall) {
-        throw new Error("retry-payment must confirm a failed provider order is unpaid before creating a fresh attempt")
+    const attemptReservationCall = source.indexOf('schema("crm").rpc("reserve_website_booking_payment_attempt"')
+    const failedOrderRetryStart = source.indexOf('latestAttempt?.provider_order_id &&\n            ["failed", "expired"].includes(latestStatus)')
+    const failedOrderRetryEnd = source.indexOf("} else if (", failedOrderRetryStart)
+    const failedOrderRetry = source.slice(failedOrderRetryStart, failedOrderRetryEnd)
+    if (
+        failedOrderRetryStart < 0 ||
+        failedOrderRetryEnd < 0 ||
+        !failedOrderRetry.includes("reusableAttempt = await reactivatePayablePaymentAttempt({") ||
+        !failedOrderRetry.includes("idempotencyKey: retryRequestId") ||
+        !failedOrderRetry.includes("latestState = reusableAttempt")
+    ) {
+        throw new Error("A retry must reuse the confirmed-unpaid Razorpay order instead of opening a second chargeable order")
+    }
+    if (attemptReservationCall < failedOrderRetryStart) {
+        throw new Error("Retry order reactivation must happen before reserving any new payment attempt")
     }
     assertStringIncludes(source, 'code: "PAYMENT_ATTEMPT_FINISHED"')
+    const bookingEligibilityGuard = source.indexOf("if (!isBookingPaymentRetryEligible(booking))")
+    const firstAttemptRecovery = source.indexOf("recoverPaymentAttemptForRetry({")
+    if (bookingEligibilityGuard < 0 || firstAttemptRecovery < 0 || bookingEligibilityGuard > firstAttemptRecovery) {
+        throw new Error("retry-payment must reject cancelled or paid bookings before any payment-order recovery")
+    }
     assertStringIncludes(source, 'code: "PAYMENT_ORDER_IN_PROGRESS"')
     assertStringIncludes(source, "from(\"payment_attempts\")")
     assertStringIncludes(source, "attempt_no")
+    assertStringIncludes(source, 'schema("crm").rpc("reserve_website_booking_payment_attempt"')
+    assertStringIncludes(source, "PAYMENT_ATTEMPT_STARTING")
+    assertStringIncludes(source, "p_expected_booking_updated_at: booking.updated_at")
+    assertStringIncludes(source, 'p_status: "pending"')
+    assertStringIncludes(source, "expectedPaymentAmountMinor")
+    assertStringIncludes(source, "expectedBookingPaymentAmountMinor(booking)")
     assertStringIncludes(source, "IDEMPOTENCY_CONFLICT")
+    assertStringIncludes(source, 'sqlState === "23514"')
+    assertStringIncludes(source, '"PAYMENT_ATTEMPT_CONFLICT"')
+    assertStringIncludes(source, '}, conflict ? 409 : 500)')
     assertStringIncludes(source, "gateway: paymentProvider")
     assertStringIncludes(source, "paymentCallbackUrl")
+    const existingReplayGuard = source.indexOf("canReplayPaymentAttempt(replayAttempt, booking")
+    const existingOrderBuild = source.indexOf("const existingGateway = await buildRazorpayPayload")
+    if (existingReplayGuard < 0 || existingReplayGuard > existingOrderBuild) {
+        throw new Error("retry-payment must validate and reuse the same active attempt before rebuilding a gateway payload")
+    }
+    const reservationReplayGuard = source.indexOf("if (replayed && !String(paymentAttempt.provider_order_id")
+    const reservationGatewayBuild = source.indexOf("gateway = await buildRazorpayPayload")
+    if (reservationReplayGuard >= 0 || reservationGatewayBuild < 0) {
+        throw new Error("retry-payment must let the shared receipt-recovery helper resolve a replay without a saved provider order")
+    }
     assertStringIncludes(source, "PAYMENT_PROVIDER_UNSUPPORTED")
     if (source.includes("buildPayuPayload") || source.includes('paymentProvider === "payu"')) {
         throw new Error("retry-payment must not emit an unsupported PayU checkout")
