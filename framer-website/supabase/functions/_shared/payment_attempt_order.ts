@@ -198,19 +198,28 @@ async function persistOrder(
     supabase: any,
     attempt: Record<string, any>,
     orderId: string,
+    preserveTerminalStatus = false,
 ): Promise<Record<string, any>> {
-    const update = await supabase
+    const terminalStatus = String(attempt.status || "").toLowerCase()
+    const preserveStatus = preserveTerminalStatus && ["failed", "expired"].includes(terminalStatus)
+    const updatePayload: Record<string, unknown> = {
+        provider: "razorpay",
+        provider_order_id: orderId,
+        updated_at: new Date().toISOString(),
+    }
+    if (!preserveStatus) {
+        updatePayload.status = "pending"
+        updatePayload.expires_at = new Date(Date.now() + 30 * 60 * 1000).toISOString()
+    }
+    let updateQuery = supabase
         .from("payment_attempts")
-        .update({
-            provider: "razorpay",
-            provider_order_id: orderId,
-            status: "pending",
-            expires_at: new Date(Date.now() + 30 * 60 * 1000).toISOString(),
-            updated_at: new Date().toISOString(),
-        })
+        .update(updatePayload)
         .eq("id", attempt.id)
-        .in("status", ["creating", "pending"])
         .is("provider_order_id", null)
+    updateQuery = preserveStatus
+        ? updateQuery.eq("status", terminalStatus)
+        : updateQuery.in("status", ["creating", "pending"])
+    const update = await updateQuery
         .select("*")
         .maybeSingle()
 
@@ -320,6 +329,7 @@ export async function ensurePaymentAttemptOrder(
                 params.supabase,
                 params.attempt,
                 String(recovered.id),
+                true,
             )
             return { order: recovered, attempt: savedAttempt }
         }
