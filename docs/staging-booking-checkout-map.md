@@ -7,8 +7,8 @@ contains deployment evidence, not credentials or payment data.
 | --- | --- | --- |
 | Checkout | `https://maroon-aside-814100.framer.app/checkout` | HTTP 200 and deployed Framer bundle inspection |
 | Payment provider | Razorpay | Staging bundle contains the Razorpay checkout path |
-| Checkout API | `record-lead`, `create-booking`, and `retry-payment` on the staging Supabase project | Current source branch; not yet published to Framer staging |
-| Legacy checkout Worker | No longer referenced by current source; deployed retirement is unverified | TRI-75 release gate; this checkout cannot verify or retire its Cloudflare deployment |
+| Checkout API | `record-lead`, `create-booking`, and `retry-payment` on the staging Supabase project | Direct Edge Function calls are published to Framer staging and passed the recorded Razorpay Test Mode retry flow |
+| Legacy checkout Worker | Not called by current Framer checkout source | Cloudflare retirement remains unverified; it is outside this Supabase release |
 | Supabase project | `ieuwiinbvbdvjrdqqzlb.supabase.co` | Staging bundle inspection |
 | Browser callback | `handle-payment` redirect adapter | Source implementation; it does not mutate payment state or Sheets |
 | Payment authority | `razorpay-webhook` | Source implementation; signature, event, provider-state, amount, and currency checks precede reconciliation |
@@ -20,7 +20,7 @@ provider registration cannot be confirmed from this checkout. The read-only
 audit command in [sheets-audit-repair.md](sheets-audit-repair.md) accepts an
 exported fixture or an existing Sheet ID plus a short-lived read-only token.
 
-The source branch sends each operation to its named Supabase Edge Function; it
-does not route requests through a generic service-role Worker. This source
-change still needs Framer staging publication and Cloudflare Worker retirement
-verification before the legacy gateway can be considered removed end to end.
+The current Framer checkout sends each operation to its named Supabase Edge
+Function; it does not route requests through a generic service-role Worker.
+Production uses a separate Supabase project. This Staging map does not authorize
+pointing Production at Staging services.
