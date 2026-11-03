@@ -29,7 +29,7 @@ Deno.test("Razorpay webhook verifies raw payloads and persists generic payment e
     assertStringIncludes(source, "bookingStatusesAfterSuccessfulPayment")
     assertStringIncludes(source, '.from("booking_details")')
     assertStringIncludes(source, 'update({ booking_status: successfulPaymentStatuses.crmStatus })')
-    assertStringIncludes(source, 'attemptUpdateQuery = attemptUpdateQuery.neq("status", "paid")')
+    assertStringIncludes(source, 'rpc("reconcile_website_payment_failure"')
     assertStringIncludes(source, "shouldSuppressFailurePaymentEmail")
     assertStringIncludes(source, 'processing === "processing"')
     assertStringIncludes(source, "buildPaymentEmail")

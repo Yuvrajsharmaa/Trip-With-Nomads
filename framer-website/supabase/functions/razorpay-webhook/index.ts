@@ -449,6 +449,8 @@ async function ignoreSupersededPaymentFailure(params: {
     paymentId: string
     amountMinor: number
     currency: string
+    reconciliationResult?: string
+    notes?: string
 }) {
     const currentEvent = await params.supabase
         .from("payment_events")
@@ -476,8 +478,8 @@ async function ignoreSupersededPaymentFailure(params: {
         email_provider_id: emailWasSent ? currentEvent.data.email_provider_id : null,
         email_sent_at: emailWasSent ? currentEvent.data.email_sent_at : null,
         email_error: null,
-        reconciliation_result: "ignored_superseded_payment_failure",
-        notes: "Delayed failure belongs to a payment superseded by retry",
+        reconciliation_result: params.reconciliationResult || "ignored_superseded_payment_failure",
+        notes: params.notes || "Delayed failure belongs to a payment superseded by retry",
         processed_at: new Date().toISOString(),
         error_message: null,
     })
@@ -944,92 +946,67 @@ async function reconcilePayment(params: {
     amountMinor: number
     currency: string
 }): Promise<{ booking: any; reconciliationResult: string; notes: string }> {
-    const success = SUCCESS_EVENTS.has(params.eventName)
+    if (FAILURE_EVENTS.has(params.eventName)) {
+        const failure = await params.supabase.rpc("reconcile_website_payment_failure", {
+            p_booking_id: params.booking.id,
+            p_attempt_id: params.attempt.id,
+            p_event_id: params.eventId,
+            p_order_id: params.orderId,
+            p_payment_id: params.paymentId || null,
+        })
+        if (failure.error) throw failure.error
+        const result = failure.data
+        const updatedBooking = result?.booking
+        const reconciliationResult = String(result?.reconciliation_result || "")
+        if (!updatedBooking || !reconciliationResult) {
+            throw new Error("Atomic payment failure reconciliation returned an invalid result")
+        }
+        return {
+            booking: updatedBooking,
+            reconciliationResult,
+            notes: `Razorpay ${params.eventName} verified by server-side webhook (${reconciliationResult})`,
+        }
+    }
+    if (!SUCCESS_EVENTS.has(params.eventName)) throw new InvalidWebhookError("Unsupported payment event")
+
     const currentStatus = String(params.booking.payment_status || "pending").toLowerCase()
-    const attemptStatus = String(params.attempt.status || "pending").toLowerCase()
     const totalMinor = Math.round(Math.max(0, toNumber(params.booking.total_amount)) * 100)
     const currentPaidMinor = Math.round(Math.max(0, toNumber(params.booking.paid_amount)) * 100)
-    const paidMinor = success ? Math.max(currentPaidMinor, params.amountMinor) : currentPaidMinor
+    const paidMinor = Math.max(currentPaidMinor, params.amountMinor)
     let crmBookingDetails: any = null
-    if (success) {
-        const details = await params.supabase
-            .schema("crm")
-            .from("booking_details")
-            .select("booking_status")
-            .eq("booking_id", params.booking.id)
-            .maybeSingle()
-        if (details.error) throw details.error
-        crmBookingDetails = details.data
-    }
+    const details = await params.supabase
+        .schema("crm")
+        .from("booking_details")
+        .select("booking_status")
+        .eq("booking_id", params.booking.id)
+        .maybeSingle()
+    if (details.error) throw details.error
+    crmBookingDetails = details.data
 
     const attemptPatch: Record<string, unknown> = {
         provider_order_id: params.orderId || params.attempt.provider_order_id || null,
         provider_payment_id: params.paymentId || params.attempt.provider_payment_id || null,
+        status: "paid",
+        paid_at: new Date().toISOString(),
+        failed_at: null,
         updated_at: new Date().toISOString(),
     }
-    if (success && attemptStatus !== "paid") {
-        attemptPatch.status = "paid"
-        attemptPatch.paid_at = new Date().toISOString()
-        attemptPatch.failed_at = null
-    } else if (!success && attemptStatus !== "paid") {
-        attemptPatch.status = "failed"
-        attemptPatch.failed_at = new Date().toISOString()
-    }
-    let attemptUpdateQuery = params.supabase
+    const attemptUpdate = await params.supabase
         .from("payment_attempts")
         .update(attemptPatch)
         .eq("id", params.attempt.id)
-    if (!success) {
-        attemptUpdateQuery = attemptUpdateQuery.neq("status", "paid")
-        if (params.paymentId) {
-            attemptUpdateQuery = attemptUpdateQuery.not(
-                "superseded_payment_ids",
-                "cs",
-                `{${params.paymentId}}`,
-                ).or(`provider_payment_id.is.null,provider_payment_id.neq.${params.paymentId}`)
-        }
-    }
-    const attemptUpdate = await attemptUpdateQuery.select("id").maybeSingle()
+        .select("id")
+        .maybeSingle()
     if (attemptUpdate.error) throw attemptUpdate.error
-    if (!success && !attemptUpdate.data && params.paymentId) {
-        const currentAttempt = await params.supabase
-            .from("payment_attempts")
-            .select("status,provider_payment_id,superseded_payment_ids")
-            .eq("id", params.attempt.id)
-            .maybeSingle()
-        if (currentAttempt.error) throw currentAttempt.error
-        if (currentAttempt.data && isSupersededPaymentFailure({
-            eventName: params.eventName,
-            paymentId: params.paymentId,
-            attempt: currentAttempt.data,
-        })) {
-            return {
-                booking: params.booking,
-                reconciliationResult: "ignored_superseded_payment_failure",
-                notes: "Delayed failure belongs to a payment superseded by retry",
-            }
-        }
-    }
 
     const currentIsPaid = isPaidStatus(currentStatus)
     const activeAttemptId = firstNonEmpty(params.booking.active_payment_attempt_id)
-    const olderFailure = !success && activeAttemptId && activeAttemptId !== String(params.attempt.id)
-    let shouldUpdateBooking = false
-    if (success) shouldUpdateBooking = !currentIsPaid
-    else shouldUpdateBooking = !currentIsPaid && !olderFailure
-
-    let reconciliationResult = ""
-    if (success && currentIsPaid) {
-        reconciliationResult = activeAttemptId && activeAttemptId !== String(params.attempt.id)
+    const shouldUpdateBooking = !currentIsPaid
+    const reconciliationResult = currentIsPaid
+        ? activeAttemptId && activeAttemptId !== String(params.attempt.id)
             ? "late_success_after_paid"
             : "duplicate_success"
-    } else if (!success && currentIsPaid) {
-        reconciliationResult = "ignored_failure_after_paid"
-    } else if (olderFailure) {
-        reconciliationResult = "ignored_older_attempt_failure"
-    } else {
-        reconciliationResult = success ? "payment_applied" : "failure_applied"
-    }
+        : "payment_applied"
 
     let updatedBooking = params.booking
     const bookingPatch: Record<string, unknown> = {
@@ -1038,20 +1015,16 @@ async function reconcilePayment(params: {
     }
     if (shouldUpdateBooking) {
         const paidAmount = round2(Math.max(0, params.amountMinor / 100))
-        bookingPatch.payment_status = transitionPaymentStatus(currentStatus, success ? "success" : "failure")
-        bookingPatch.settlement_status = success
-            ? calculateSettlementStatus(params.booking.payment_mode, totalMinor, paidMinor)
-            : "failed"
+        bookingPatch.payment_status = transitionPaymentStatus(currentStatus, "success")
+        bookingPatch.settlement_status = calculateSettlementStatus(params.booking.payment_mode, totalMinor, paidMinor)
         bookingPatch.payment_provider = PROVIDER
         bookingPatch.payment_gateway_order_or_ref_id = params.orderId || null
         bookingPatch.payment_gateway_payment_id = params.paymentId || null
         bookingPatch.payment_gateway_txn_id = params.paymentId || params.orderId || null
         bookingPatch.active_payment_attempt_id = params.attempt.id
         bookingPatch.payment_attempt_number = params.attempt.attempt_no
-        if (success) {
-            bookingPatch.paid_amount = paidAmount
-            bookingPatch.due_amount = round2(Math.max(0, toNumber(params.booking.total_amount) - paidAmount))
-        }
+        bookingPatch.paid_amount = paidAmount
+        bookingPatch.due_amount = round2(Math.max(0, toNumber(params.booking.total_amount) - paidAmount))
 
         const updated = await params.supabase
             .from("bookings")
@@ -1078,61 +1051,57 @@ async function reconcilePayment(params: {
         updatedBooking = eventStamp.data || params.booking
     }
 
-    if (success) {
-        const reconciledPaidMinor = Math.max(
-            Math.round(Math.max(0, toNumber(updatedBooking.paid_amount)) * 100),
-            params.amountMinor,
-        )
-        const reconciledTotalMinor = Math.round(Math.max(0, toNumber(updatedBooking.total_amount)) * 100)
-        const successfulPaymentStatuses = bookingStatusesAfterSuccessfulPayment({
-            websiteStatus: updatedBooking.status,
-            crmStatus: crmBookingDetails?.booking_status,
-            paidAmountMinor: reconciledPaidMinor,
-            dueAmountMinor: Math.max(0, reconciledTotalMinor - reconciledPaidMinor),
-            payableNowAmountMinor: Math.round(Math.max(0, toNumber(updatedBooking.payable_now_amount)) * 100),
-            totalAmountMinor: reconciledTotalMinor,
-        })
+    const reconciledPaidMinor = Math.max(
+        Math.round(Math.max(0, toNumber(updatedBooking.paid_amount)) * 100),
+        params.amountMinor,
+    )
+    const reconciledTotalMinor = Math.round(Math.max(0, toNumber(updatedBooking.total_amount)) * 100)
+    const successfulPaymentStatuses = bookingStatusesAfterSuccessfulPayment({
+        websiteStatus: updatedBooking.status,
+        crmStatus: crmBookingDetails?.booking_status,
+        paidAmountMinor: reconciledPaidMinor,
+        dueAmountMinor: Math.max(0, reconciledTotalMinor - reconciledPaidMinor),
+        payableNowAmountMinor: Math.round(Math.max(0, toNumber(updatedBooking.payable_now_amount)) * 100),
+        totalAmountMinor: reconciledTotalMinor,
+    })
 
-        if (successfulPaymentStatuses.websiteStatus !== String(updatedBooking.status || "").toLowerCase()) {
-            const statusUpdate = await params.supabase
-                .from("bookings")
-                .update({ status: successfulPaymentStatuses.websiteStatus })
-                .eq("id", params.booking.id)
-                .in("payment_status", ["paid", "succeeded"])
-                .neq("status", "cancelled")
-                .neq("status", "completed")
-                .select("*")
-                .maybeSingle()
-            if (statusUpdate.error) throw statusUpdate.error
-            if (statusUpdate.data) updatedBooking = statusUpdate.data
-            else {
-                const latest = await params.supabase.from("bookings").select("*").eq("id", params.booking.id).single()
-                if (latest.error) throw latest.error
-                updatedBooking = latest.data
-            }
-        }
-
-        if (
-            crmBookingDetails &&
-            successfulPaymentStatuses.crmStatus !== crmBookingDetails.booking_status &&
-            successfulPaymentStatuses.crmStatus !== "payment_pending"
-        ) {
-            const allowedPreviousStatuses = successfulPaymentStatuses.crmStatus === "fully_paid"
-                ? ["draft", "payment_pending", "confirmed", "fully_paid"]
-                : ["draft", "payment_pending", "confirmed"]
-            const crmUpdate = await params.supabase
-                .schema("crm")
-                .from("booking_details")
-                .update({ booking_status: successfulPaymentStatuses.crmStatus })
-                .eq("booking_id", params.booking.id)
-                .in("booking_status", allowedPreviousStatuses)
-            if (crmUpdate.error) throw crmUpdate.error
+    if (successfulPaymentStatuses.websiteStatus !== String(updatedBooking.status || "").toLowerCase()) {
+        const statusUpdate = await params.supabase
+            .from("bookings")
+            .update({ status: successfulPaymentStatuses.websiteStatus })
+            .eq("id", params.booking.id)
+            .in("payment_status", ["paid", "succeeded"])
+            .neq("status", "cancelled")
+            .neq("status", "completed")
+            .select("*")
+            .maybeSingle()
+        if (statusUpdate.error) throw statusUpdate.error
+        if (statusUpdate.data) updatedBooking = statusUpdate.data
+        else {
+            const latest = await params.supabase.from("bookings").select("*").eq("id", params.booking.id).single()
+            if (latest.error) throw latest.error
+            updatedBooking = latest.data
         }
     }
 
-    const notes = success
-        ? `Razorpay ${params.eventName} verified by server-side webhook (${reconciliationResult})`
-        : `Razorpay ${params.eventName} verified by server-side webhook (${reconciliationResult})`
+    if (
+        crmBookingDetails &&
+        successfulPaymentStatuses.crmStatus !== crmBookingDetails.booking_status &&
+        successfulPaymentStatuses.crmStatus !== "payment_pending"
+    ) {
+        const allowedPreviousStatuses = successfulPaymentStatuses.crmStatus === "fully_paid"
+            ? ["draft", "payment_pending", "confirmed", "fully_paid"]
+            : ["draft", "payment_pending", "confirmed"]
+        const crmUpdate = await params.supabase
+            .schema("crm")
+            .from("booking_details")
+            .update({ booking_status: successfulPaymentStatuses.crmStatus })
+            .eq("booking_id", params.booking.id)
+            .in("booking_status", allowedPreviousStatuses)
+        if (crmUpdate.error) throw crmUpdate.error
+    }
+
+    const notes = `Razorpay ${params.eventName} verified by server-side webhook (${reconciliationResult})`
     return { booking: updatedBooking, reconciliationResult, notes }
 }
 
@@ -1575,7 +1544,7 @@ serve(async (req) => {
             amountMinor: gatewayState.amountMinor,
             currency: gatewayState.currency,
         })
-        if (reconciliation.reconciliationResult === "ignored_superseded_payment_failure") {
+        if (reconciliation.reconciliationResult.startsWith("ignored_")) {
             await ignoreSupersededPaymentFailure({
                 supabase,
                 eventRow,
@@ -1585,11 +1554,13 @@ serve(async (req) => {
                 paymentId: identifiers.paymentId,
                 amountMinor: gatewayState.amountMinor,
                 currency: gatewayState.currency,
+                reconciliationResult: reconciliation.reconciliationResult,
+                notes: reconciliation.notes,
             })
             return jsonResponse({
                 ok: true,
                 ignored: true,
-                reason: "superseded_payment_failure",
+                reason: reconciliation.reconciliationResult,
             })
         }
         const reconciliationNotes = [

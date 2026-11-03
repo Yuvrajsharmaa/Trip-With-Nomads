@@ -4,11 +4,19 @@ Deno.test("Razorpay webhook ignores failed payments superseded by a retry", asyn
     const source = await Deno.readTextFile(new URL("./index.ts", import.meta.url))
 
     assertStringIncludes(source, "isSupersededPaymentFailure")
-    assertStringIncludes(source, '"superseded_payment_ids"')
-    assertStringIncludes(source, '"status,provider_payment_id,superseded_payment_ids"')
     assertStringIncludes(source, '"ignored_superseded_payment_failure"')
     assertStringIncludes(source, 'processing_status: "ignored"')
-    assertStringIncludes(source, '.or(`provider_payment_id.is.null,provider_payment_id.neq.${params.paymentId}`)')
+    const reconciliation = source.slice(
+        source.indexOf("async function reconcilePayment"),
+        source.indexOf("function bookingSheetId"),
+    )
+    assertStringIncludes(reconciliation, 'rpc("reconcile_website_payment_failure"')
+    assertStringIncludes(reconciliation, "Atomic payment failure reconciliation returned an invalid result")
+    assertEquals(
+        reconciliation.indexOf('rpc("reconcile_website_payment_failure"') <
+            reconciliation.indexOf('.from("payment_attempts")'),
+        true,
+    )
 
     const earlyDuplicateGate = source.indexOf("await suppressSupersededPaymentRecovery(supabase, eventRow)")
     assertEquals(earlyDuplicateGate < source.indexOf('if (claim === "sheet")'), true)
