@@ -934,7 +934,7 @@ async function reconcilePayment(params: {
     if (!success && !attemptUpdate.data && params.paymentId) {
         const currentAttempt = await params.supabase
             .from("payment_attempts")
-            .select("superseded_payment_ids")
+            .select("status,provider_payment_id,superseded_payment_ids")
             .eq("id", params.attempt.id)
             .maybeSingle()
         if (currentAttempt.error) throw currentAttempt.error
