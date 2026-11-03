@@ -15,6 +15,7 @@ Deno.test("retry replay migration adds a backward-compatible superseded payment 
     assertEquals(bookingLock > attemptLock, true)
     assertStringIncludes(source.slice(attemptLock, bookingLock), "for update")
     assertStringIncludes(source.slice(bookingLock), "for update")
+    assertStringIncludes(source, "v_now := pg_catalog.clock_timestamp()")
     assertStringIncludes(source, "superseded_payment_ids")
     assertStringIncludes(source, "grant execute on function public.reconcile_website_payment_failure")
     assertStringIncludes(source, "to service_role")

@@ -18,7 +18,7 @@ as $$
 declare
     v_attempt public.payment_attempts%rowtype;
     v_booking public.bookings%rowtype;
-    v_now timestamptz := pg_catalog.now();
+    v_now timestamptz;
     v_result text;
     v_paid boolean;
     v_older_attempt boolean;
@@ -42,6 +42,7 @@ begin
     if not found then
         raise exception 'Booking was not found';
     end if;
+    v_now := pg_catalog.clock_timestamp();
 
     if nullif(pg_catalog.btrim(coalesce(p_payment_id, '')), '') is not null
        and (
