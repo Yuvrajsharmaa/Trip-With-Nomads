@@ -13,20 +13,46 @@ Deno.test("create-booking persists a checkout request and replays its attempt", 
     assertStringIncludes(source, "fingerprintBookingRequest")
     assertStringIncludes(source, 'if (currency !== "INR")')
     assertStringIncludes(source, 'from("payment_attempts")')
-    assertStringIncludes(source, 'status: "creating"')
-    assertStringIncludes(source, "mayCreatePaymentOrder = true")
+    assertStringIncludes(source, 'status: "pending"')
+    assertStringIncludes(source, "mayCreatePaymentOrder = !reservationReplayed")
     assertStringIncludes(source, "ensurePaymentAttemptOrder")
     const paymentCredentialCheck = source.indexOf(
         "const paymentCredentials = razorpayCredentials()",
     )
-    const paymentAttemptInsert = source.indexOf(
-        '.from("payment_attempts")\n                .insert(attemptPayload)',
+    const paymentAttemptReservation = source.indexOf(
+        'schema("crm").rpc("reserve_website_booking_payment_attempt"',
     )
-    if (paymentCredentialCheck < 0 || paymentAttemptInsert < 0 || paymentCredentialCheck > paymentAttemptInsert) {
-        throw new Error("create-booking must validate Razorpay credentials before creating a payment attempt")
+    if (paymentCredentialCheck < 0 || paymentAttemptReservation < 0 || paymentCredentialCheck > paymentAttemptReservation) {
+        throw new Error("create-booking must validate Razorpay credentials before reserving a payment attempt")
     }
     assertStringIncludes(source, "IDEMPOTENCY_CONFLICT")
     assertStringIncludes(source, "!replayed")
+    assertStringIncludes(source, "expectedBookingPaymentAmountMinor")
+    assertStringIncludes(source, "canReplayPaymentAttempt")
+    assertStringIncludes(source, "hasPaymentAttemptProviderOrder")
+    assertStringIncludes(source, "recoverPaymentAttemptForRetry")
+    assertStringIncludes(source, "replayed && !mayCreatePaymentOrder && paymentAttempt")
+    const replayOrderRecovery = source.indexOf("recoverPaymentAttemptForRetry({")
+    const replayAttemptGuard = source.indexOf("!canReplayPaymentAttempt(paymentAttempt, data)")
+    if (replayOrderRecovery < 0 || replayAttemptGuard < 0 || replayOrderRecovery > replayAttemptGuard) {
+        throw new Error("create-booking must recover a missing Razorpay order before rejecting an expired replay")
+    }
+    assertStringIncludes(source, 'schema("crm").rpc("reserve_website_booking_payment_attempt"')
+    assertStringIncludes(source, "p_expected_booking_updated_at: data.updated_at")
+    assertStringIncludes(source, 'p_status: "pending"')
+    const paidWithoutAttempt = source.indexOf("if (bookingIsPaid && !paymentAttempt)")
+    const reservationCall = source.indexOf('schema("crm").rpc("reserve_website_booking_payment_attempt"')
+    if (paidWithoutAttempt < 0 || paidWithoutAttempt > reservationCall) {
+        throw new Error("A paid booking replay without an attempt must refresh its request key before reserving another payment")
+    }
+    const paidWithoutAttemptBranch = source.slice(
+        paidWithoutAttempt,
+        source.indexOf("if (!bookingIsPaid && currentBookingPaymentAmountMinor === null)", paidWithoutAttempt),
+    )
+    assertStringIncludes(paidWithoutAttemptBranch, "status_token: bookingStatusToken.token")
+    assertStringIncludes(paidWithoutAttemptBranch, 'code: "BOOKING_STATUS_UNAVAILABLE"')
+    assertStringIncludes(source, 'code: "BOOKING_PRICE_CHANGED"')
+    assertStringIncludes(source, 'isStarting ? "PAYMENT_ATTEMPT_STARTING"')
     assertStringIncludes(source, "gateway: activeProvider")
     assertStringIncludes(source, "todayISTDateKey")
     assertStringIncludes(source, "computeBasePricing")
@@ -38,6 +64,10 @@ Deno.test("create-booking persists a checkout request and replays its attempt", 
     assertStringIncludes(source, "trip_catalog_id: crmTripCatalogId")
     assertStringIncludes(source, "billing_snapshot: billingSnapshot")
     assertStringIncludes(source, "commercial_snapshot: commercialSnapshot")
+    assertStringIncludes(source, 'if (catalogPricing.source === "operations_departures")')
+    assertStringIncludes(source, 'crmTripSource = catalogPricing.source === "legacy_public_prices"')
+    assertStringIncludes(source, '"website_legacy_pricing"')
+    assertStringIncludes(source, "trip_source: crmTripSource")
     assertStringIncludes(source, "couponCompatibilityPayload")
     assertStringIncludes(source, "Enter a name for every traveller")
     if (source.includes("Enter a name and gender for every traveller")) {
@@ -66,19 +96,26 @@ Deno.test("create-booking persists a checkout request and replays its attempt", 
         throw new Error("new website bookings must go through the CRM shared booking RPC")
     }
     assertStringIncludes(source, "already_paid")
-    const paidReplayBranchStart = source.indexOf(
-        'if (String(data.payment_status || "").trim().toLowerCase() === "paid")',
-    )
+    const paidReplayBranchStart = source.indexOf("if (bookingIsPaid) {")
     const paidReplayBranchEnd = source.indexOf(
         'if (activeProvider === "razorpay")',
         paidReplayBranchStart,
     )
     const paidReplayBranch = source.slice(paidReplayBranchStart, paidReplayBranchEnd)
+    assertStringIncludes(paidReplayBranch, 'payment_status: "paid"')
     const replayGuard = paidReplayBranch.indexOf("if (!replayed)")
     const notificationCall = paidReplayBranch.indexOf("await sendBookingCreatedNotification(")
     if (replayGuard < 0 || notificationCall < replayGuard) {
         throw new Error("Paid idempotent replays must not resend the booking-created notification")
     }
+    const activeAttemptGuard = source.indexOf("canReplayPaymentAttempt(paymentAttempt, data)")
+    const paidReplayBranchIndex = source.indexOf("if (bookingIsPaid) {")
+    if (activeAttemptGuard < 0 || paidReplayBranchIndex < 0 || activeAttemptGuard > paidReplayBranchIndex) {
+        throw new Error("Paid booking replays must be recognized before rejecting inactive attempts")
+    }
+    const couponWrite = source.slice(source.indexOf("const couponCompatibilityWrite"), source.indexOf("const latestAttemptLookup"))
+    assertStringIncludes(couponWrite, '.eq("updated_at", data.updated_at)')
+    assertStringIncludes(couponWrite, ".maybeSingle()")
     assertStringIncludes(source, "PAYMENT_PROVIDER_UNSUPPORTED")
     assertStringIncludes(source, "BOOKING_CALLBACK_SHEET_ID")
     if (source.includes('Deno.env.get("GOOGLE_SHEET_ID_TRIPS")')) {

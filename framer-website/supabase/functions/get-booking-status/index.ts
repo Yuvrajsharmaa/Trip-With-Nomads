@@ -4,6 +4,10 @@ import {
     listBookingStatusSecrets,
     verifyBookingStatusToken,
 } from "../_shared/booking_status_token.ts"
+import {
+    canOfferPaymentRetry,
+    isBookingPaymentRetryEligible,
+} from "../_shared/payment_idempotency.ts"
 
 const corsHeaders = {
     "Access-Control-Allow-Origin": "*",
@@ -91,7 +95,7 @@ serve(async (req) => {
         let { data: booking, error: bookingError } = await supabase
             .from("bookings")
             .select(
-                "id, booking_ref, trip_id, departure_date, transport, travellers, payment_breakdown, subtotal_amount, discount_amount, coupon_code, coupon_snapshot, tax_amount, total_amount, currency, payment_status, payment_mode, payable_now_amount, paid_amount, due_amount, settlement_status, balance_due_note, payment_provider, active_payment_attempt_id, payment_attempt_number, payment_gateway_order_or_ref_id, payment_gateway_payment_id, payment_gateway_txn_id, name, email, phone, created_at"
+                "id, booking_ref, trip_id, departure_date, transport, travellers, payment_breakdown, subtotal_amount, discount_amount, coupon_code, coupon_snapshot, tax_amount, total_amount, currency, status, payment_status, payment_mode, payable_now_amount, paid_amount, due_amount, settlement_status, balance_due_note, payment_provider, active_payment_attempt_id, payment_attempt_number, payment_gateway_order_or_ref_id, payment_gateway_payment_id, payment_gateway_txn_id, name, email, phone, created_at"
             )
             .eq("id", bookingId)
             .single()
@@ -101,7 +105,7 @@ serve(async (req) => {
             const fallback = await supabase
                 .from("bookings")
                 .select(
-                    "id, booking_ref, trip_id, departure_date, transport, travellers, payment_breakdown, subtotal_amount, discount_amount, coupon_code, coupon_snapshot, tax_amount, total_amount, currency, payment_status, payment_mode, payable_now_amount, paid_amount, due_amount, settlement_status, payment_provider, active_payment_attempt_id, payment_attempt_number, payment_gateway_order_or_ref_id, payment_gateway_payment_id, payment_gateway_txn_id, name, email, phone, created_at"
+                    "id, booking_ref, trip_id, departure_date, transport, travellers, payment_breakdown, subtotal_amount, discount_amount, coupon_code, coupon_snapshot, tax_amount, total_amount, currency, status, payment_status, payment_mode, payable_now_amount, paid_amount, due_amount, settlement_status, payment_provider, active_payment_attempt_id, payment_attempt_number, payment_gateway_order_or_ref_id, payment_gateway_payment_id, payment_gateway_txn_id, name, email, phone, created_at"
                 )
                 .eq("id", bookingId)
                 .single()
@@ -112,6 +116,17 @@ serve(async (req) => {
         if (bookingError || !booking) {
             return jsonResponse({ error: "Booking not found" }, 404)
         }
+
+        let activeAttempt = null
+        if (isBookingPaymentRetryEligible(booking) && booking.active_payment_attempt_id) {
+            const attemptResult = await supabase
+                .from("payment_attempts")
+                .select("id, status, provider_order_id, expires_at, created_at, updated_at")
+                .eq("id", booking.active_payment_attempt_id)
+                .maybeSingle()
+            if (!attemptResult.error) activeAttempt = attemptResult.data
+        }
+        const paymentRetryAvailable = canOfferPaymentRetry(booking, activeAttempt)
 
         let tripTitle = ""
         if (booking?.trip_id) {
@@ -147,6 +162,7 @@ serve(async (req) => {
                 ...booking,
                 trip_title: tripTitle || null,
                 finance_issuer: financeIssuer,
+                payment_retry_available: paymentRetryAvailable,
                 billing_snapshot: billingSnapshot,
                 balance_due_note: supportsBalanceDueNote
                     ? (booking as any)?.balance_due_note ?? null

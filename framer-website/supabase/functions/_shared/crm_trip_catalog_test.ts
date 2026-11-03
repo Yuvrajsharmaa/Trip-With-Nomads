@@ -1,5 +1,6 @@
 import { assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts"
 import {
+    buildLegacyWebsiteTripPricingRows,
     buildWebsiteTripPricingRows,
     buildWebsiteCommercialSnapshot,
     mapWebsiteTripCatalogRow,
@@ -173,6 +174,39 @@ Deno.test("pricing exposes only open future capacity with safe transport and sha
     assertEquals(rows[1].early_bird_ends_at, "2026-11-15T18:29:59.999Z")
 })
 
+Deno.test("started same-day Operations departures are hidden while later departures remain bookable", () => {
+    const base = {
+        publicTripId: "website-id",
+        today: "2026-11-03",
+        now: new Date("2026-11-03T13:00:00.000Z"),
+        catalogTrip: {
+            id: "crm-id",
+            website_trip_id: "website-id",
+            is_active: true,
+        },
+    }
+    const departure = (start_time: string) => [{
+        id: "departure-id",
+        departure_date: "2026-11-03",
+        start_time,
+        time_zone: "Asia/Kolkata",
+        status: "open",
+        capacity: 12,
+        reserved_count: 0,
+        unverified_booking_count: 0,
+        pricing_options: [{ sharing: "Double", transport: "SUV", price: 10000 }],
+    }]
+
+    assertEquals(buildWebsiteTripPricingRows({ ...base, departures: departure("18:00:00") }), [])
+    assertEquals(buildWebsiteTripPricingRows({ ...base, departures: departure("19:00:00") }).length, 1)
+    assertEquals(buildWebsiteTripPricingRows({
+        ...base,
+        today: "2026-11-04",
+        now: new Date("2026-11-04T04:00:00.000Z"),
+        departures: [{ ...departure("21:00:00")[0], time_zone: "America/Los_Angeles" }],
+    }).length, 1)
+})
+
 Deno.test("single sharing is priced from the selected CRM departure option", () => {
     const pricingRows = buildWebsiteTripPricingRows({
         publicTripId: "website-id",
@@ -312,4 +346,69 @@ Deno.test("website booking snapshot records Operations rates and early-bird disc
         sellingSubtotalMinor: 1_800_000,
         manualAdjustmentMinor: 0,
     })
+})
+
+Deno.test("legacy website prices remain bookable without invented departure capacity", () => {
+    const pricingRows = buildLegacyWebsiteTripPricingRows({
+        publicTripId: "website-id",
+        today: "2026-11-03",
+        catalogTrip: {
+            id: "crm-id",
+            website_trip_id: "website-id",
+            is_active: true,
+            is_custom: false,
+        },
+        rows: [{
+            id: "crm-id",
+            website_trip_id: "website-id",
+            is_active: true,
+            variant_name: "Double sharing",
+            sharing: null,
+            vehicle: "",
+            price: 12345.5,
+            start_date: "2026-12-20",
+            end_date: "2026-12-25",
+            early_bird_enabled: false,
+        }],
+    })
+
+    assertEquals(pricingRows.map((row) => ({
+        date: row.departure_date,
+        sharing: row.sharing,
+        transport: row.transport,
+        price: row.price,
+        capacity: row.capacity_managed,
+        source: row.pricing_source,
+    })), [{
+        date: "2026-12-20",
+        sharing: "Double",
+        transport: "",
+        price: 12345.5,
+        capacity: false,
+        source: "legacy_public_prices",
+    }])
+    assertEquals(validateWebsiteDepartureSelection(pricingRows, "2026-12-20", 4), {
+        valid: true,
+        departureId: null,
+    })
+})
+
+Deno.test("legacy website prices fail closed for expired dates and duplicate rate keys", () => {
+    const pricingRows = buildLegacyWebsiteTripPricingRows({
+        publicTripId: "website-id",
+        today: "2026-11-03",
+        catalogTrip: {
+            id: "crm-id",
+            website_trip_id: "website-id",
+            is_active: true,
+        },
+        rows: [
+            { sharing: "Double", vehicle: "SUV", price: 10000, start_date: "2026-10-20", end_date: "2026-12-25" },
+            { sharing: "Single", vehicle: "SUV", price: 12000, start_date: "2026-12-20", end_date: "2026-11-02" },
+            { sharing: "Double", vehicle: "SUV", price: 10000, start_date: "2026-12-20", end_date: "2026-12-25" },
+            { sharing: "Double", vehicle: "SUV", price: 11000, start_date: "2026-12-20", end_date: "2026-12-25" },
+        ],
+    })
+
+    assertEquals(pricingRows, [])
 })

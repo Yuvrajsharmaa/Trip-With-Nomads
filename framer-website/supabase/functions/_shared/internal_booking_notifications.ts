@@ -11,6 +11,7 @@ import {
   safeEmailProjectionError,
   type EmailDeliveryResult,
 } from "./payment_email_delivery.ts"
+import { isPaidStatus } from "./payment_reconciliation.ts"
 import { normalizeResendRecipients, sendResendEmail } from "./resend.ts"
 
 export type InternalBookingNotificationRequest = Omit<
@@ -165,6 +166,38 @@ async function reserveLedger(
   return existing.data
 }
 
+async function suppressStalePaymentFailureNotifications(params: {
+  supabase: any
+  bookingId: string
+}): Promise<boolean> {
+  const current = await params.supabase
+    .from("bookings")
+    .select("payment_status")
+    .eq("id", params.bookingId)
+    .maybeSingle()
+  if (current.error) throw current.error
+  if (!current.data || !isPaidStatus(current.data.payment_status)) return false
+
+  const pending = await params.supabase
+    .from("booking_notification_events")
+    .select("id")
+    .eq("booking_id", params.bookingId)
+    .eq("event_type", "payment_failed")
+    .in("status", ["pending", "failed"])
+  if (pending.error) throw pending.error
+
+  for (const row of pending.data || []) {
+    if (!row?.id) continue
+    await updateLedger(params.supabase, String(row.id), {
+      status: "not_required",
+      recipients: [],
+      email_payload: null,
+      error_message: null,
+    })
+  }
+  return true
+}
+
 function classifyInternalDelivery(
   result: EmailDeliveryResult,
 ): { status: InternalBookingNotificationStatus; error: string | null; providerId: string | null } {
@@ -178,6 +211,14 @@ export async function deliverInternalBookingNotification(
 
   let ledger: any = null
   try {
+    if (
+      params.eventType === "payment_failed" &&
+      await suppressStalePaymentFailureNotifications({
+        supabase: params.supabase,
+        bookingId: text(params.booking.id),
+      })
+    ) return "not_required"
+
     ledger = await reserveLedger({ ...params, recipients })
     const status = String(ledger?.status || "").trim().toLowerCase()
     if (status === "sent" || status === "not_required") return status

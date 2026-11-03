@@ -39,6 +39,7 @@ export type PaymentEmailContent = {
   html: string;
   text: string;
   idempotencyKey: string;
+  settlementStatus: string;
   headers?: Record<string, string>;
 };
 
@@ -71,6 +72,11 @@ const BRAND_NAVY = "#0b3550";
 const REGISTERED_OFFICE_MAP_URL = "https://maps.app.goo.gl/TS9umsDXBHxs6K2d6";
 const REGISTERED_OFFICE =
   "Near Old Capital Bus Stand Holi Gate, 2nd Floor, Shop No-07, Ballabgargh, Faridabad, Haryana, 121004";
+const BANK_ACCOUNT_NAME = "TRIP WITH NOMADS";
+const BANK_ACCOUNT_NUMBER = "8447333965";
+const BANK_IFSC = "KKBK0004369";
+const BANK_NAME = "KOTAK MAHINDRA BANK";
+const BANK_UPI_ID = "9318405401@kotak";
 
 function text(value: unknown): string {
   return String(value || "").trim();
@@ -452,6 +458,21 @@ export function buildPaymentEmail(
       ? ["Balance due: " + formatAmount(dueAmount)]
       : []),
     ...(isPaid && transactionId ? ["Payment reference: " + transactionId] : []),
+    ...(isPaid && isPartial && dueAmount > 0
+      ? [
+        "",
+        "Important payment information:",
+        "Pending amount: " + formatAmount(dueAmount),
+        "The pending amount must be cleared at least 14 days prior to your travel date.",
+        "Make any further payment only to the official Trip With Nomads bank account. Trip With Nomads is not responsible for payments made to personal accounts or third parties.",
+        "Bank details:",
+        "Account name: " + BANK_ACCOUNT_NAME,
+        "Account number: " + BANK_ACCOUNT_NUMBER,
+        "IFSC code: " + BANK_IFSC,
+        "Bank: " + BANK_NAME,
+        "UPI ID: " + BANK_UPI_ID,
+      ]
+      : []),
     "",
     actionLabel + ": " + actionUrl,
     "",
@@ -578,6 +599,25 @@ export function buildPaymentEmail(
     "                  </td></tr>",
     "                </table>",
     '                  </td></tr>',
+    ...(isPaid && isPartial && dueAmount > 0
+      ? [
+        '                  <tr><td style="padding:0 12px 16px;">',
+        '                    <div style="padding:12px;background:#f6fcff;">',
+        '                      <p style="margin:0 0 8px;color:' + BRAND_NAVY +
+        ';font-size:13px;font-weight:700;">Important payment information</p>',
+        '                      <p style="margin:0 0 8px;color:#355d73;font-size:12px;line-height:1.55;">Pending amount: ' +
+        escapeHtml(formatAmount(dueAmount)) +
+        '. Please clear it at least 14 days before your travel date.</p>',
+        '                      <p style="margin:0 0 8px;color:#355d73;font-size:12px;line-height:1.55;">Please make any further payment only to the official Trip With Nomads bank account. Trip With Nomads is not responsible for payments made to personal accounts or third parties.</p>',
+        '                      <p style="margin:0;color:#355d73;font-size:12px;line-height:1.65;"><strong>Bank details</strong><br>Account name: ' +
+        escapeHtml(BANK_ACCOUNT_NAME) + '<br>Account number: ' +
+        escapeHtml(BANK_ACCOUNT_NUMBER) + '<br>IFSC code: ' +
+        escapeHtml(BANK_IFSC) + '<br>Bank: ' + escapeHtml(BANK_NAME) +
+        '<br>UPI ID: ' + escapeHtml(BANK_UPI_ID) + '</p>',
+        "                    </div>",
+        "                  </td></tr>",
+      ]
+      : []),
     '                  <tr><td style="padding:24px 12px 8px;">',
     '                <div style="height:24px;line-height:24px;">&nbsp;</div>',
     '                <table role="presentation" cellpadding="0" cellspacing="0" border="0">',
@@ -647,5 +687,6 @@ export function buildPaymentEmail(
     text: textBody,
     idempotencyKey: "payment-" + paymentStatus + "-" + settlement + "-" +
       bookingId + "-" + (transactionId || "unknown"),
+    settlementStatus: settlement,
   };
 }

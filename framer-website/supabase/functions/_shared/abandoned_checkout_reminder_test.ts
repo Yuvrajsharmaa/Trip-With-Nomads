@@ -101,6 +101,26 @@ Deno.test("checkout resume URL contains only validated trip context and no custo
   );
 });
 
+Deno.test("reminder HTML preserves a maximum-length checkout slug", () => {
+  const slug = "a".repeat(120)
+  const resumeUrl = buildCheckoutResumeUrl({
+    siteUrl: "https://tripwithnomads.com",
+    tripId: "795434d8-16dd-47f9-8ad5-bc363821b743",
+    tripSlug: slug,
+  })
+  const email = buildAbandonedCheckoutEmail({
+    sequenceId: "795434d8-16dd-47f9-8ad5-bc363821b743",
+    reminderNumber: 1,
+    email: "guest@example.com",
+    tripName: "Vietnam",
+    resumeUrl,
+    unsubscribeUrl:
+      "https://project.supabase.co/functions/v1/checkout-reminders?token=795434d8-16dd-47f9-8ad5-bc363821b743",
+  })
+
+  assertStringIncludes(email.html, resumeUrl.replace(/&/g, "&amp;"))
+})
+
 Deno.test("reminder email uses warm copy, the brand logo, and one-click unsubscribe", () => {
   const email = buildAbandonedCheckoutEmail({
     sequenceId: "795434d8-16dd-47f9-8ad5-bc363821b743",

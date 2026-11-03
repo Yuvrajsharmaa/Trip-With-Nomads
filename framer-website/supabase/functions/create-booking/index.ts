@@ -7,13 +7,18 @@ import {
 } from "../_shared/booking_status_token.ts"
 import {
     buildPaymentAttemptInsert,
+    canReplayPaymentAttempt,
+    expectedBookingPaymentAmountMinor,
+    hasPaymentAttemptProviderOrder,
     fingerprintBookingRequest,
     isCompatibleIdempotentReplay,
     normalizeIdempotencyKey,
 } from "../_shared/payment_idempotency.ts"
 import {
     ensurePaymentAttemptOrder,
+    markPaymentAttemptOrderCreating,
     PaymentOrderInProgressError,
+    recoverPaymentAttemptForRetry,
 } from "../_shared/payment_attempt_order.ts"
 import {
     computeBasePricing,
@@ -43,6 +48,13 @@ const corsHeaders = {
     "Access-Control-Allow-Origin": "*",
     "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
     "Access-Control-Allow-Methods": "POST, OPTIONS",
+}
+
+function responseJson(payload: Record<string, unknown>, status = 200): Response {
+    return new Response(JSON.stringify(payload), {
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+        status,
+    })
 }
 
 type PaymentMode = "full" | "partial_25"
@@ -808,6 +820,7 @@ serve(async (req) => {
         let data: any = existingBooking
         let crmTripCatalogId = ""
         let crmTripNameSnapshot = ""
+        let crmTripSource = "operations"
         let billingIssuer: "TWN" | "NTC" | null = null
         let billingSnapshot: any = null
         let commercialSnapshot: any = null
@@ -895,6 +908,9 @@ serve(async (req) => {
             const pricingRows = catalogPricing.pricingRows
             crmTripCatalogId = catalogPricing.catalogTrip.id
             crmTripNameSnapshot = catalogPricing.catalogTrip.title
+            crmTripSource = catalogPricing.source === "legacy_public_prices"
+                ? "website_legacy_pricing"
+                : "operations"
             billingIssuer = resolveWebsiteFinanceIssuer(catalogPricing.catalogTrip)
             if (!billingIssuer) {
                 return new Response(
@@ -944,16 +960,18 @@ serve(async (req) => {
             if (basePricing.missingSharings.length > 0 || basePricing.lineItems.length !== canonicalTravellers.length) {
                 throw new Error("Pricing variant or traveller combination is unavailable")
             }
-            commercialSnapshot = buildWebsiteCommercialSnapshot({
-                departureDate,
-                lineItems: basePricing.lineItems,
-                pricingRows,
-            })
-            if (!commercialSnapshot) {
-                return new Response(
-                    JSON.stringify({ error: "The selected Operations prices changed. Refresh checkout and try again." }),
-                    { status: 409, headers: { ...corsHeaders, "Content-Type": "application/json" } },
-                )
+            if (catalogPricing.source === "operations_departures") {
+                commercialSnapshot = buildWebsiteCommercialSnapshot({
+                    departureDate,
+                    lineItems: basePricing.lineItems,
+                    pricingRows,
+                })
+                if (!commercialSnapshot) {
+                    return new Response(
+                        JSON.stringify({ error: "The selected Operations prices changed. Refresh checkout and try again." }),
+                        { status: 409, headers: { ...corsHeaders, "Content-Type": "application/json" } },
+                    )
+                }
             }
             resolvedTravellers = basePricing.lineItems.map((item) => {
                 const source = canonicalTravellers.find((traveller) => Number(traveller.id) === Number(item.traveller_id))
@@ -1148,6 +1166,7 @@ serve(async (req) => {
                     lead_id: null,
                     sales_owner_id: null,
                     trip_catalog_id: crmTripCatalogId,
+                    trip_source: crmTripSource,
                     trip_name_snapshot: crmTripNameSnapshot,
                     finance_issuer: billingIssuer,
                     billing_snapshot: billingSnapshot,
@@ -1241,17 +1260,32 @@ serve(async (req) => {
                 coupon_code: couponCodeToPersist,
                 coupon_snapshot: couponSnapshotToPersist,
             }
+            if (!data.updated_at) {
+                return responseJson({
+                    error: "The booking changed while checkout was open. Refresh checkout before trying again.",
+                    code: "BOOKING_PRICE_CHANGED",
+                }, 409)
+            }
             const couponCompatibilityWrite = await supabase
                 .from("bookings")
                 .update(couponCompatibilityPayload)
                 .eq("id", data.id)
+                .eq("updated_at", data.updated_at)
+                .select("*")
+                .maybeSingle()
             if (couponCompatibilityWrite.error) {
                 return new Response(
                     JSON.stringify({ error: couponCompatibilityWrite.error.message || "Could not save the applied coupon" }),
                     { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } },
                 )
             }
-            data = { ...data, ...couponCompatibilityPayload }
+            if (!couponCompatibilityWrite.data) {
+                return responseJson({
+                    error: "The booking changed while checkout was open. Refresh checkout before trying again.",
+                    code: "BOOKING_PRICE_CHANGED",
+                }, 409)
+            }
+            data = couponCompatibilityWrite.data
         }
 
         const latestAttemptLookup = await supabase
@@ -1276,6 +1310,49 @@ serve(async (req) => {
         }
 
         let paymentAttempt = Array.isArray(latestAttemptLookup.data) ? latestAttemptLookup.data[0] : null
+        const bookingIsPaid = ["paid", "succeeded"].includes(String(data.payment_status || "").trim().toLowerCase())
+        const currentBookingPaymentAmountMinor = expectedBookingPaymentAmountMinor(data)
+        const bookingStatusSecret = resolveBookingStatusSecret(firstNonEmpty(
+            Deno.env.get("PAYMENT_STATUS_SECRET"),
+            Deno.env.get("RAZORPAY_LIVE_KEY_SECRET"),
+            Deno.env.get("RAZORPAY_TEST_KEY_SECRET"),
+            Deno.env.get("RAZORPAY_KEY_SECRET"),
+        ))
+        const bookingStatusToken = bookingStatusSecret
+            ? await issueBookingStatusToken(data.id, bookingStatusSecret)
+            : null
+        if (bookingIsPaid && !paymentAttempt) {
+            if (!bookingStatusToken) {
+                return responseJson({
+                    error: "Payment status verification is unavailable. Contact support before trying again.",
+                    code: "BOOKING_STATUS_UNAVAILABLE",
+                }, 503)
+            }
+            return responseJson({
+                booking_id: data.id,
+                checkout_request_id: checkoutRequestId,
+                replayed,
+                already_paid: true,
+                payment_status: "paid",
+                status_token: bookingStatusToken.token,
+                status_token_expires_at: bookingStatusToken.expiresAt,
+            })
+        }
+        if (!bookingIsPaid && currentBookingPaymentAmountMinor === null) {
+            return responseJson({
+                error: "The booking payment amount could not be confirmed. Refresh checkout before trying again.",
+                code: "BOOKING_AMOUNT_UNAVAILABLE",
+            }, 409)
+        }
+        if (
+            !bookingIsPaid && paymentAttempt &&
+            Number(paymentAttempt.amount_minor) !== currentBookingPaymentAmountMinor
+        ) {
+            return responseJson({
+                error: "The booking price changed after this checkout started. Refresh checkout before trying again.",
+                code: "BOOKING_PRICE_CHANGED",
+            }, 409)
+        }
         let mayCreatePaymentOrder = false
         if (!paymentAttempt) {
             const attemptPayload = buildPaymentAttemptInsert({
@@ -1285,39 +1362,94 @@ serve(async (req) => {
                 provider: paymentProvider,
                 amount: payableNowAmount,
                 currency,
-                status: "creating",
+                status: "pending",
             })
             attemptPayload.expires_at = new Date(Date.now() + 30 * 60 * 1000).toISOString()
 
-            const attemptInsert = await supabase
-                .from("payment_attempts")
-                .insert(attemptPayload)
-                .select("*")
-                .single()
-            if (attemptInsert.error && !isUniqueViolation(attemptInsert.error)) {
+            if (
+                Number(attemptPayload.amount_minor) !== currentBookingPaymentAmountMinor ||
+                !data.updated_at
+            ) {
                 return new Response(
-                    JSON.stringify({ error: attemptInsert.error.message || "Could not create payment attempt" }),
-                    { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } },
+                    JSON.stringify({
+                        error: "The booking price changed after this checkout started. Refresh checkout before trying again.",
+                        code: "BOOKING_PRICE_CHANGED",
+                    }),
+                    { status: 409, headers: { ...corsHeaders, "Content-Type": "application/json" } },
                 )
             }
 
-            if (attemptInsert.data) {
-                paymentAttempt = attemptInsert.data
-                mayCreatePaymentOrder = true
-            } else {
-                const replayAttempt = await supabase
-                    .from("payment_attempts")
-                    .select("*")
-                    .eq("idempotency_key", checkoutRequestId)
-                    .maybeSingle()
-                if (replayAttempt.error || !replayAttempt.data) {
-                    return new Response(
-                        JSON.stringify({ error: replayAttempt.error?.message || "Could not resolve payment attempt" }),
-                        { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } },
-                    )
-                }
-                paymentAttempt = replayAttempt.data
+            const reservation = await supabase.schema("crm").rpc("reserve_website_booking_payment_attempt", {
+                p_booking_id: data.id,
+                p_idempotency_key: attemptPayload.idempotency_key,
+                p_expected_booking_updated_at: data.updated_at,
+                p_attempt_no: attemptPayload.attempt_no,
+                p_provider: attemptPayload.provider,
+                p_amount_minor: attemptPayload.amount_minor,
+                p_currency: attemptPayload.currency,
+                p_status: "pending",
+                p_expires_at: attemptPayload.expires_at,
+            })
+            const reservationRow = Array.isArray(reservation.data) ? reservation.data[0] : reservation.data
+            if (reservation.error || !reservationRow?.payment_attempt) {
+                const message = reservation.error?.message || "Could not reserve this payment attempt"
+                const sqlState = reservation.error?.code
+                const conflict = sqlState === "40001" || sqlState === "23505" || sqlState === "23514"
+                const code = sqlState === "40001"
+                    ? "BOOKING_PRICE_CHANGED"
+                    : sqlState === "23505"
+                        ? "IDEMPOTENCY_CONFLICT"
+                        : sqlState === "23514"
+                            ? "PAYMENT_ATTEMPT_CONFLICT"
+                            : "PAYMENT_ATTEMPT_RESERVATION_FAILED"
+                return responseJson({ error: message, code }, conflict ? 409 : 500)
             }
+            paymentAttempt = reservationRow.payment_attempt
+            const reservationReplayed = reservationRow.replayed === true
+            replayed = replayed || reservationReplayed
+            mayCreatePaymentOrder = !reservationReplayed
+        }
+
+        if (!bookingIsPaid && paymentAttempt && !hasPaymentAttemptProviderOrder(paymentAttempt)) {
+            if (mayCreatePaymentOrder) {
+                paymentAttempt = await markPaymentAttemptOrderCreating(supabase, paymentAttempt)
+            } else {
+                try {
+                    const recovered = await recoverPaymentAttemptForRetry({
+                        supabase,
+                        attempt: paymentAttempt,
+                        bookingId: String(data.id),
+                        amount: round2(toNumber(data.payable_now_amount || payableNowAmount)),
+                        currency: String(data.currency || currency).trim().toUpperCase(),
+                        credentials: paymentCredentials,
+                        idempotencyKey: checkoutRequestId,
+                    })
+                    if (!recovered) {
+                        return responseJson({
+                            error: "The previous payment needs status reconciliation before checkout can resume.",
+                            code: "PAYMENT_RECONCILIATION_PENDING",
+                        }, 409)
+                    }
+                    paymentAttempt = recovered
+                } catch (error) {
+                    const isStarting = error instanceof PaymentOrderInProgressError
+                    return responseJson({
+                        error: isStarting
+                            ? "This payment is already starting. Wait a moment, then refresh before trying again."
+                            : "The previous payment could not be verified. Check its status before trying again.",
+                        code: isStarting ? "PAYMENT_ATTEMPT_STARTING" : "PAYMENT_RECONCILIATION_PENDING",
+                    }, 409)
+                }
+            }
+        }
+        if (
+            !bookingIsPaid && replayed && !mayCreatePaymentOrder && paymentAttempt &&
+            !canReplayPaymentAttempt(paymentAttempt, data)
+        ) {
+            return responseJson({
+                error: "This payment request is no longer active. Refresh the booking status before trying again.",
+                code: "PAYMENT_ATTEMPT_CONFLICT",
+            }, 409)
         }
 
         notificationBooking = {
@@ -1371,16 +1503,6 @@ serve(async (req) => {
                 { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } },
             )
         }
-        const bookingStatusSecret = resolveBookingStatusSecret(firstNonEmpty(
-            Deno.env.get("PAYMENT_STATUS_SECRET"),
-            Deno.env.get("RAZORPAY_LIVE_KEY_SECRET"),
-            Deno.env.get("RAZORPAY_TEST_KEY_SECRET"),
-            Deno.env.get("RAZORPAY_KEY_SECRET"),
-        ))
-        const bookingStatusToken = bookingStatusSecret
-            ? await issueBookingStatusToken(data.id, bookingStatusSecret)
-            : null
-
         const responsePayload: Record<string, any> = {
             booking_id: data.id,
             checkout_request_id: checkoutRequestId,
@@ -1430,13 +1552,13 @@ serve(async (req) => {
             }
         }
 
-        if (String(data.payment_status || "").trim().toLowerCase() === "paid") {
+        if (bookingIsPaid) {
             if (!replayed) {
                 await sendBookingCreatedNotification(
                     firstNonEmpty(paymentAttempt.provider_order_id, data.payment_gateway_order_or_ref_id),
                 )
             }
-            return new Response(JSON.stringify({ ...responsePayload, already_paid: true }), {
+            return new Response(JSON.stringify({ ...responsePayload, already_paid: true, payment_status: "paid" }), {
                 status: 200,
                 headers: { ...corsHeaders, "Content-Type": "application/json" },
             })
