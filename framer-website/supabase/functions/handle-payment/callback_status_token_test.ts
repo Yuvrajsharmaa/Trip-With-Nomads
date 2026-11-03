@@ -56,10 +56,21 @@ Deno.test("refreshes a missing status token only for a signed Razorpay order lin
     let calls = 0
     const request: typeof fetch = async (input, init) => {
         calls += 1
-        assertEquals(
-            String(input),
-            `https://api.razorpay.com/v1/orders/${orderId}`,
-        )
+        const url = String(input)
+        if (url.endsWith(`/orders/${orderId}/payments`)) {
+            return new Response(
+                JSON.stringify({
+                    count: 1,
+                    items: [{
+                        id: paymentId,
+                        order_id: orderId,
+                        created_at: Math.floor(Date.now() / 1000),
+                    }],
+                }),
+                { status: 200 },
+            )
+        }
+        assertEquals(url, `https://api.razorpay.com/v1/orders/${orderId}`)
         return new Response(
             JSON.stringify({ id: orderId, notes: { booking_id: bookingId } }),
             { status: 200 },
@@ -76,16 +87,30 @@ Deno.test("refreshes a missing status token only for a signed Razorpay order lin
         await verifyBookingStatusToken(token, bookingId, statusSecret),
         true,
     )
-    assertEquals(calls, 1)
+    assertEquals(calls, 2)
 })
 
 Deno.test("replaces an expired or invalid supplied token only after Razorpay callback verification", async () => {
     const signature = await checkoutSignature()
-    const request: typeof fetch = async () =>
-        new Response(
+    const request: typeof fetch = async (input) => {
+        if (String(input).endsWith(`/orders/${orderId}/payments`)) {
+            return new Response(
+                JSON.stringify({
+                    count: 1,
+                    items: [{
+                        id: paymentId,
+                        order_id: orderId,
+                        created_at: Math.floor(Date.now() / 1000),
+                    }],
+                }),
+                { status: 200 },
+            )
+        }
+        return new Response(
             JSON.stringify({ id: orderId, notes: { booking_id: bookingId } }),
             { status: 200 },
         )
+    }
 
     const token = await resolveCallbackStatusToken({
         ...callbackParams({
@@ -151,6 +176,75 @@ Deno.test("does not issue a token when the signed Razorpay order belongs to anot
     assertEquals(token, "")
 })
 
+Deno.test("does not refresh a status token from an old signed payment callback", async () => {
+    const signature = await checkoutSignature()
+    const request: typeof fetch = async (input) => {
+        if (String(input).endsWith(`/orders/${orderId}/payments`)) {
+            return new Response(
+                JSON.stringify({
+                    count: 1,
+                    items: [{
+                        id: paymentId,
+                        order_id: orderId,
+                        created_at: 1,
+                    }],
+                }),
+                { status: 200 },
+            )
+        }
+        return new Response(
+            JSON.stringify({ id: orderId, notes: { booking_id: bookingId } }),
+            { status: 200 },
+        )
+    }
+
+    const token = await resolveCallbackStatusToken({
+        ...callbackParams({ razorpaySignature: signature }),
+        request,
+    })
+
+    assertEquals(token, "")
+})
+
+Deno.test("does not refresh when Razorpay's payment does not match the signed callback pair", async () => {
+    const signature = await checkoutSignature()
+    for (
+        const payment of [
+            {
+                id: "pay_different123",
+                order_id: orderId,
+                created_at: Math.floor(Date.now() / 1000),
+            },
+            {
+                id: paymentId,
+                order_id: "order_different123",
+                created_at: Math.floor(Date.now() / 1000),
+            },
+        ]
+    ) {
+        const request: typeof fetch = async (input) => {
+            if (String(input).endsWith(`/orders/${orderId}/payments`)) {
+                return new Response(
+                    JSON.stringify({ count: 1, items: [payment] }),
+                    { status: 200 },
+                )
+            }
+            return new Response(
+                JSON.stringify({
+                    id: orderId,
+                    notes: { booking_id: bookingId },
+                }),
+                { status: 200 },
+            )
+        }
+        const token = await resolveCallbackStatusToken({
+            ...callbackParams({ razorpaySignature: signature }),
+            request,
+        })
+        assertEquals(token, "")
+    }
+})
+
 Deno.test("does not fetch or issue a token for a malformed checkout signature", async () => {
     let calls = 0
     const token = await resolveCallbackStatusToken({
@@ -174,7 +268,9 @@ Deno.test("aborts a Razorpay order lookup that exceeds the callback timeout", as
             ...callbackParams({ razorpaySignature: signature }),
             request: (_input, init) =>
                 new Promise((_resolve, reject) => {
-                    signal = init?.signal ?? undefined
+                    signal = Reflect.get(init ?? {}, "signal") as
+                        | AbortSignal
+                        | undefined
                     signal?.addEventListener("abort", () =>
                         reject(signal?.reason), {
                         once: true,
