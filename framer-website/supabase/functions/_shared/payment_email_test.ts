@@ -143,6 +143,8 @@ Deno.test("builds a designed paid email with booking details", () => {
   assertEquals(email.text.includes("Selections:"), false);
   assertEquals(email.text.includes("- A <Guest> | Quad | Bike"), false);
   assertStringIncludes(email.text, "Payment reference: pay_123");
+  assertEquals(email.html.includes("Bank details"), false);
+  assertEquals(email.text.includes("Account number:"), false);
 });
 
 Deno.test("payment email omits empty traveller and trip-option filler", () => {
@@ -192,11 +194,13 @@ Deno.test("builds a partial-payment email with the balance due", () => {
   assertStringIncludes(email.html, "Balance due");
   assertStringIncludes(email.html, "We received your advance for Summer Spiti. ₹18,585.00 remains due.");
   assertStringIncludes(email.html, "Balance due for Summer Spiti: ₹18,585.00.");
-  assertEquals(email.html.includes("14 days"), false);
-  assertEquals(email.html.includes("Bank details"), false);
-  assertEquals(email.html.includes("8447333965"), false);
-  assertEquals(email.text.includes("14 days"), false);
-  assertEquals(email.text.includes("Account number:"), false);
+  assertStringIncludes(email.html, "14 days");
+  assertStringIncludes(email.html, "Bank details");
+  assertStringIncludes(email.html, "8447333965");
+  assertStringIncludes(email.html, "KKBK0004369");
+  assertStringIncludes(email.text, "14 days");
+  assertStringIncludes(email.text, "Account number: 8447333965");
+  assertStringIncludes(email.text, "IFSC code: KKBK0004369");
   assertStringIncludes(email.text, "Balance due: ₹18,585.00");
 });
 
