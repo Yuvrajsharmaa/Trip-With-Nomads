@@ -9,7 +9,7 @@ import {
     shouldShowPendingPaymentRetry,
     verifiedStatusDestination,
 } from "./booking_status_presentation_state.ts"
-import { buildRazorpayPaymentSuccessUrl } from "./razorpay_payment_success_return.ts"
+import { buildRazorpayPaymentStatusUrl } from "./razorpay_payment_success_return.ts"
 
 const { useEffect, useRef, useState } = React
 
@@ -212,10 +212,11 @@ async function openRetryRazorpay(
         notes: razorpay.notes || {},
         redirect: false,
         handler: () => {
-            const statusUrl = buildRazorpayPaymentSuccessUrl(
+            const statusUrl = buildRazorpayPaymentStatusUrl(
                 runtime.siteBaseUrl,
                 String(data.id),
                 String(payload.status_token),
+                "payment-success",
             )
             if (!statusUrl) {
                 onDismiss()

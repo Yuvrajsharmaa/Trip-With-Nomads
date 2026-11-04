@@ -1,7 +1,8 @@
-export function buildRazorpayPaymentSuccessUrl(
+export function buildRazorpayPaymentStatusUrl(
   siteBaseUrl: string,
   bookingId: string,
   statusToken: string,
+  path: "payment-success" | "payment-failed",
 ): string | null {
   const id = String(bookingId || "").trim();
   const token = String(statusToken || "").trim();
@@ -9,7 +10,7 @@ export function buildRazorpayPaymentSuccessUrl(
 
   const base = String(siteBaseUrl || "").trim().replace(/\/+$/, "");
   if (!base) return null;
-  const url = new URL("/payment-success", `${base}/`);
+  const url = new URL(`/${path}`, `${base}/`);
   url.searchParams.set("booking_id", id);
   url.searchParams.set("status_token", token);
   return url.toString();

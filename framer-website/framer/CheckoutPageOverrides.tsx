@@ -7,7 +7,7 @@ import {
     type WebsiteFinanceIssuer,
 } from "./booking-tax.ts"
 import { getCheckoutEntryState } from "./checkout_entry_state.ts"
-import { buildRazorpayPaymentSuccessUrl } from "./razorpay_payment_success_return.ts"
+import { buildRazorpayPaymentStatusUrl } from "./razorpay_payment_success_return.ts"
 
 const CHECKOUT_TIMEZONE = "Asia/Kolkata"
 const CHECKOUT_DATA_REQUEST_TIMEOUT_MS = 8000
@@ -396,10 +396,11 @@ async function openRazorpayCheckout(
         notes: razorpay.notes || {},
         redirect: false,
         handler: () => {
-            const statusUrl = buildRazorpayPaymentSuccessUrl(
+            const statusUrl = buildRazorpayPaymentStatusUrl(
                 CURRENT_RUNTIME.siteBaseUrl,
                 String(data.booking_id),
                 String(data.status_token),
+                "payment-success",
             )
             if (!statusUrl) {
                 showInlineError(
@@ -417,10 +418,19 @@ async function openRazorpayCheckout(
         },
     })
     instance.on?.("payment.failed", () => {
-        // The signed status page and webhook determine the result.
-        showInlineError(
-            "Payment was not completed. You can retry from the status page.",
+        const statusUrl = buildRazorpayPaymentStatusUrl(
+            CURRENT_RUNTIME.siteBaseUrl,
+            String(data.booking_id),
+            String(data.status_token),
+            "payment-failed",
         )
+        if (statusUrl) {
+            window.location.assign(statusUrl)
+        } else {
+            showInlineError(
+                "We couldn’t confirm this payment yet. Check payment status before trying again.",
+            )
+        }
     })
     instance.open()
 }

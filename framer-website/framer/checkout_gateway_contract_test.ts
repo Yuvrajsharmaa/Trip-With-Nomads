@@ -71,11 +71,17 @@ Deno.test("Razorpay success handlers return to the matching signed booking statu
   for (const gateway of [checkoutGateway, retryGateway]) {
     includes(gateway, "redirect: false");
     includes(gateway, "handler: ()");
-    includes(gateway, "buildRazorpayPaymentSuccessUrl(");
+    includes(gateway, "buildRazorpayPaymentStatusUrl(");
     includes(gateway, "window.location.assign(statusUrl)");
     assertEquals(gateway.includes("callback_url:"), false);
   }
   includes(checkoutGateway, "!data?.booking_id || !data?.status_token");
+  const failedHandler = checkoutGateway.slice(
+    checkoutGateway.indexOf('instance.on?.("payment.failed"'),
+  );
+  includes(failedHandler, '"payment-failed"');
+  includes(failedHandler, "window.location.assign(statusUrl)");
+  assertEquals(failedHandler.includes('"payment-success"'), false);
   includes(
     retryGateway,
     'String(payload?.booking_id || "") !== String(data.id)',
