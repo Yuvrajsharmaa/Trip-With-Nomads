@@ -53,3 +53,18 @@ CRM. Shared behavior requires a paired branch/PR/checklist in both repositories.
 - A **pull request (PR)** asks for checks and review before the feature enters `staging`. Open it when implementation and checks are ready; it does not itself merge the feature.
 - **Squash and merge** combines the reviewed PR into one commit on `staging`. After staging verification, a separate reviewed PR from `staging` to `main` is the production path.
 - **Close a PR** without merging only when the user asks to abandon it. Preserve the branch and worktree so the work remains recoverable.
+
+## graphify
+
+Install the local CLI with `uv tool install 'graphifyy[sql]'` when `graphify` is unavailable. The generated `graphify-out/` directory is local and ignored by Git.
+
+When the user invokes the installed Graphify skill (`$graphify` in Codex), use it before doing anything else.
+
+Rules:
+- Before codebase work, if `graphify-out/graph.json` is missing or stale, build a local code-only graph with `GRAPHIFY_BACKEND=none graphify extract . --code-only --max-workers 2`. Use focused `graphify query` calls to map relevant entry points and all likely touchpoints, including callers/callees, imports, schema/config dependencies, tests, and fixtures; trace relationships with `graphify path` or `graphify affected`, then confirm source references because static graphs may miss runtime or dynamic wiring.
+- When the graph exists, run `graphify query "<question>"` before your first grep, search, or source-file read for a codebase question, and put this rule in every subagent prompt that explores code. Read raw files only for lines the graph or an earlier read already located. Use `graphify path "<A>" "<B>"` for relationships and `graphify explain "<concept>"` for focused concepts. These return a scoped subgraph, usually much smaller than `GRAPH_REPORT.md` or raw grep output.
+- Dirty graphify-out/ files are expected after hooks or incremental updates; dirty graph files are not a reason to skip graphify. Only skip graphify if the task is about stale or incorrect graph output, or the user explicitly says not to use it.
+- If graphify-out/wiki/index.md exists, use it for broad navigation instead of raw source browsing.
+- Read `graphify-out/GRAPH_REPORT.md` only for broad architecture review or when query/path/explain do not surface enough context; generate it with `GRAPHIFY_BACKEND=none graphify cluster-only .` if needed.
+- After modifying code, run `GRAPHIFY_BACKEND=none graphify update .` to keep the local graph current.
+- Do not commit `graphify-out/` unless the user asks to share the generated graph.
